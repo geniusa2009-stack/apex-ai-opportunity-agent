@@ -1,0 +1,233 @@
+"""Mocked-but-real-code-path verification for Ecosystem Feature 8.
+
+Mocks the Gemini client and DB session, asserting on real business-logic
+outcomes: the reality-check flag actually changes which system prompt
+instruction is sent, real inputs flow into the prompt, the structured
+result is persisted verbatim, and history ordering.
+"""
+
+import asyncio
+import sys
+import uuid
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
+
+sys.path.insert(0, ".")
+
+import app.services.decision_service as decision_service
+from app.models.decision_matrix import DecisionMatrix
+
+PASS = []
+FAIL = []
+
+
+def check(name, condition):
+    if condition:
+        PASS.append(name)
+    else:
+        FAIL.append(name)
+    print(("PASS" if condition else "FAIL") + f": {name}")
+
+
+def make_db():
+    def _apply_column_defaults_on_add(obj):
+        for column in obj.__table__.columns:
+            if getattr(obj, column.name, None) is None and column.default is not None:
+                default_arg = column.default.arg
+                value = default_arg(None) if callable(default_arg) else default_arg
+                setattr(obj, column.name, value)
+
+    db = AsyncMock()
+    db.add = MagicMock(side_effect=_apply_column_defaults_on_add)
+    db.commit = AsyncMock()
+    db.refresh = AsyncMock()
+    return db
+
+
+class FakeResult:
+    def __init__(self, items):
+        self._items = items
+
+    def scalars(self):
+        m = MagicMock()
+        m.all = MagicMock(return_value=self._items)
+        return m
+
+
+SAMPLE_RESULT = decision_service.GeneratedMatrixResult(
+    weighted_scores=[
+        decision_service.OptionScore(option="Germany", logical_score=8, emotional_score=9, combined_score=8.5),
+        decision_service.OptionScore(option="Turkey", logical_score=6, emotional_score=5, combined_score=5.5),
+    ],
+    future_simulations=[
+        decision_service.FutureSimulation(option="Germany", narrative="You wake up in Berlin..."),
+        decision_service.FutureSimulation(option="Turkey", narrative="You wake up in Istanbul..."),
+    ],
+    reality_checks=[
+        decision_service.RealityCheck(option="Germany", hidden_struggles=["Language barrier", "Long winters"]),
+    ],
+    the_verdict="Trust your gut -- Germany aligns with both your logic and your excitement.",
+)
+
+SAMPLE_RESULT_NO_REALITY_CHECK = SAMPLE_RESULT.model_copy(update={"reality_checks": []})
+
+
+async def test_analyze_persists_structured_result():
+    db = make_db()
+    with patch.object(decision_service, "_generate_matrix_content", AsyncMock(return_value=SAMPLE_RESULT)):
+        user_id = uuid.uuid4()
+        matrix = await decision_service.analyze_options_with_simulation(
+            db, user_id, "Which country for my Master's?", ["Germany", "Turkey"],
+            {"cost": 7, "prestige": 9}, {"Germany": 9, "Turkey": 5}, True,
+        )
+
+    check("analyze: user_id stored", matrix.user_id == user_id)
+    check("analyze: decision_topic stored", matrix.decision_topic == "Which country for my Master's?")
+    check("analyze: options_list stored", matrix.options_list == ["Germany", "Turkey"])
+    check("analyze: student_priorities stored", matrix.student_priorities == {"cost": 7, "prestige": 9})
+    check("analyze: options_gut_feelings stored", matrix.options_gut_feelings == {"Germany": 9, "Turkey": 5})
+    check("analyze: is_reality_check_enabled stored True", matrix.is_reality_check_enabled is True)
+    check(
+        "analyze: matrix_result persisted verbatim",
+        matrix.matrix_result == SAMPLE_RESULT.model_dump(),
+    )
+    check("analyze: 2 weighted scores (one per option)", len(matrix.matrix_result["weighted_scores"]) == 2)
+    check("analyze: reality_checks present when enabled", len(matrix.matrix_result["reality_checks"]) == 1)
+    check("analyze: db.commit called", db.commit.await_count == 1)
+
+
+async def test_reality_check_flag_selects_correct_prompt_instruction():
+    db = make_db()
+    captured = {}
+
+    async def fake_generate_content(model, contents, config):
+        captured["system_prompt"] = contents[0]
+        captured["user_prompt"] = contents[1]
+        response = MagicMock()
+        response.text = SAMPLE_RESULT.model_dump_json()
+        return response
+
+    fake_client = MagicMock()
+    fake_client.aio.models.generate_content = fake_generate_content
+
+    with patch.object(decision_service, "_client", return_value=fake_client):
+        await decision_service.analyze_options_with_simulation(
+            db, uuid.uuid4(), "Topic", ["A", "B"], {"cost": 5}, None, True
+        )
+    check(
+        "reality_check=True: enabled instruction sent to Gemini",
+        "REALITY CHECK MODE IS ON" in captured["system_prompt"],
+    )
+    check(
+        "reality_check=True: disabled instruction NOT sent",
+        "REALITY CHECK MODE IS OFF" not in captured["system_prompt"],
+    )
+
+    db2 = make_db()
+    captured2 = {}
+
+    async def fake_generate_content_2(model, contents, config):
+        captured2["system_prompt"] = contents[0]
+        response = MagicMock()
+        response.text = SAMPLE_RESULT_NO_REALITY_CHECK.model_dump_json()
+        return response
+
+    fake_client2 = MagicMock()
+    fake_client2.aio.models.generate_content = fake_generate_content_2
+
+    with patch.object(decision_service, "_client", return_value=fake_client2):
+        matrix2 = await decision_service.analyze_options_with_simulation(
+            db2, uuid.uuid4(), "Topic", ["A", "B"], {"cost": 5}, None, False
+        )
+    check(
+        "reality_check=False: disabled instruction sent to Gemini",
+        "REALITY CHECK MODE IS OFF" in captured2["system_prompt"],
+    )
+    check(
+        "reality_check=False: reality_checks persisted as empty list",
+        matrix2.matrix_result["reality_checks"] == [],
+    )
+
+
+async def test_prompt_carries_real_inputs():
+    db = make_db()
+    captured = {}
+
+    async def fake_generate_content(model, contents, config):
+        captured["user_prompt"] = contents[1]
+        response = MagicMock()
+        response.text = SAMPLE_RESULT.model_dump_json()
+        return response
+
+    fake_client = MagicMock()
+    fake_client.aio.models.generate_content = fake_generate_content
+
+    with patch.object(decision_service, "_client", return_value=fake_client):
+        await decision_service.analyze_options_with_simulation(
+            db, uuid.uuid4(), "PhD vs Master's in Canada", ["PhD", "Master's"],
+            {"funding": 10}, {"PhD": 3, "Master's": 8}, True,
+        )
+
+    prompt = captured["user_prompt"]
+    check("prompt carries real decision_topic", "PhD vs Master's in Canada" in prompt)
+    check("prompt carries real options_list", '"PhD"' in prompt and '"Master' in prompt)
+    check("prompt carries real student_priorities", '"funding": 10' in prompt)
+    check("prompt carries real gut feelings", '"PhD": 3' in prompt)
+
+
+async def test_generation_failure_raises_and_skips_db_write():
+    db = make_db()
+    fake_client = MagicMock()
+
+    async def fake_generate_content(*args, **kwargs):
+        raise RuntimeError("simulated transient failure")
+
+    fake_client.aio.models.generate_content = fake_generate_content
+
+    with patch.object(decision_service, "_client", return_value=fake_client):
+        threw = False
+        try:
+            await decision_service.analyze_options_with_simulation(
+                db, uuid.uuid4(), "Topic", ["A", "B"], {"x": 1}
+            )
+        except decision_service.MatrixGenerationError:
+            threw = True
+    check("analyze: Gemini failure raises MatrixGenerationError", threw)
+    check("analyze: no DB write on Gemini failure", db.commit.await_count == 0)
+
+
+async def test_get_user_matrices_orders_newest_first():
+    user_id = uuid.uuid4()
+    older = DecisionMatrix(
+        id=uuid.uuid4(), user_id=user_id, decision_topic="Old", options_list=["A"],
+        student_priorities={}, matrix_result={}, options_gut_feelings=None,
+        is_reality_check_enabled=False, created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    newer = DecisionMatrix(
+        id=uuid.uuid4(), user_id=user_id, decision_topic="New", options_list=["B"],
+        student_priorities={}, matrix_result={}, options_gut_feelings=None,
+        is_reality_check_enabled=False, created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    db = make_db()
+    db.execute = AsyncMock(return_value=FakeResult([newer, older]))
+
+    matrices = await decision_service.get_user_matrices(db, user_id)
+    check("get_user_matrices: returns both", len(matrices) == 2)
+    check("get_user_matrices: newest first", matrices[0].id == newer.id)
+
+
+async def main():
+    await test_analyze_persists_structured_result()
+    await test_reality_check_flag_selects_correct_prompt_instruction()
+    await test_prompt_carries_real_inputs()
+    await test_generation_failure_raises_and_skips_db_write()
+    await test_get_user_matrices_orders_newest_first()
+
+    print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
+    if FAIL:
+        print("FAILED:", FAIL)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

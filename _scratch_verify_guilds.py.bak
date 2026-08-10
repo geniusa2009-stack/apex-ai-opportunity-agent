@@ -1,0 +1,298 @@
+"""Mocked-but-real-code-path verification for Ecosystem Feature 6.
+
+Mocks the Gemini client and DB session (AsyncMock/MagicMock), asserting on
+real business-logic outcomes: moderation rejection short-circuiting alias
+generation, anonymous alias assignment, comment token math (10 base / 25
+with the Precision Reviewer bonus / 10 for a non-constructive rewrite),
+quest generation grounding, and 404 handling.
+"""
+
+import asyncio
+import sys
+import uuid
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
+
+sys.path.insert(0, ".")
+
+import app.services.guild_service as guild_service
+from app.models.guilds import Guild, GuildComment, GuildPost, GuildQuest
+
+PASS = []
+FAIL = []
+
+
+def check(name, condition):
+    if condition:
+        PASS.append(name)
+    else:
+        FAIL.append(name)
+    print(("PASS" if condition else "FAIL") + f": {name}")
+
+
+def make_guild(**overrides):
+    defaults = dict(
+        id=uuid.uuid4(),
+        name="IELTS Guild",
+        topic="IELTS exam preparation",
+        created_by=uuid.uuid4(),
+        created_at=datetime.now(timezone.utc),
+    )
+    defaults.update(overrides)
+    return Guild(**defaults)
+
+
+def make_post(**overrides):
+    defaults = dict(
+        id=uuid.uuid4(),
+        guild_id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        content="My motivation letter draft...",
+        created_at=datetime.now(timezone.utc),
+        anonymous_alias=None,
+        is_anonymous=True,
+    )
+    defaults.update(overrides)
+    return GuildPost(**defaults)
+
+
+def make_db(get_result=None):
+    # Real SQLAlchemy applies every column's Python-side `default=...`
+    # (id, token_reward, is_active, etc.) during flush (which
+    # `db.commit()` triggers) -- since `commit` is mocked to a no-op
+    # here, that flush never happens. `db.add`'s side effect below
+    # simulates that piece of real behavior generically (via the mapped
+    # class's own column defaults) so a freshly-constructed ORM object
+    # looks the way it would in production by the time the service
+    # function returns it.
+    def _apply_column_defaults_on_add(obj):
+        for column in obj.__table__.columns:
+            if getattr(obj, column.name, None) is None and column.default is not None:
+                default_arg = column.default.arg
+                value = default_arg(None) if callable(default_arg) else default_arg
+                setattr(obj, column.name, value)
+
+    db = AsyncMock()
+    db.get = AsyncMock(return_value=get_result)
+    db.add = MagicMock(side_effect=_apply_column_defaults_on_add)
+    db.commit = AsyncMock()
+    db.refresh = AsyncMock()
+    return db
+
+
+class FakeResult:
+    def __init__(self, items):
+        self._items = items
+
+    def scalars(self):
+        m = MagicMock()
+        m.all = MagicMock(return_value=self._items)
+        return m
+
+
+async def test_create_post_anonymous_generates_alias():
+    guild = make_guild()
+    db = make_db(get_result=guild)
+    safe = guild_service._ModerationResult(is_safe=True, rejection_reason=None)
+    alias = guild_service._AnonymousAliasResult(anonymous_alias="The Astral Astronomer")
+
+    with patch.object(guild_service, "_moderate_content", AsyncMock(return_value=safe)), \
+         patch.object(guild_service, "_generate_anonymous_alias", AsyncMock(return_value=alias)):
+        post = await guild_service.create_post(
+            db, uuid.uuid4(), guild.id, "Here's my IELTS speaking outline.", is_anonymous=True
+        )
+
+    check("create_post: alias assigned when anonymous", post.anonymous_alias == "The Astral Astronomer")
+    check("create_post: is_anonymous True", post.is_anonymous is True)
+    check("create_post: db.commit called", db.commit.await_count == 1)
+
+
+async def test_create_post_non_anonymous_skips_alias():
+    guild = make_guild()
+    db = make_db(get_result=guild)
+    safe = guild_service._ModerationResult(is_safe=True, rejection_reason=None)
+
+    alias_mock = AsyncMock()
+    with patch.object(guild_service, "_moderate_content", AsyncMock(return_value=safe)), \
+         patch.object(guild_service, "_generate_anonymous_alias", alias_mock):
+        post = await guild_service.create_post(
+            db, uuid.uuid4(), guild.id, "Posting under my real name.", is_anonymous=False
+        )
+
+    check("create_post: no alias when not anonymous", post.anonymous_alias is None)
+    check("create_post: alias generator never called when not anonymous", alias_mock.await_count == 0)
+
+
+async def test_create_post_moderation_rejects_and_skips_alias():
+    guild = make_guild()
+    db = make_db(get_result=guild)
+    unsafe = guild_service._ModerationResult(is_safe=False, rejection_reason="Contains a phone number.")
+
+    alias_mock = AsyncMock()
+    with patch.object(guild_service, "_moderate_content", AsyncMock(return_value=unsafe)), \
+         patch.object(guild_service, "_generate_anonymous_alias", alias_mock):
+        threw = False
+        try:
+            await guild_service.create_post(db, uuid.uuid4(), guild.id, "Call me at 555-1234", is_anonymous=True)
+        except guild_service.ContentRejectedError as exc:
+            threw = True
+            check("create_post: rejection reason propagated", "phone number" in str(exc))
+    check("create_post: moderation rejection raises ContentRejectedError", threw)
+    check("create_post: alias generator never called after rejection", alias_mock.await_count == 0)
+    check("create_post: db.commit never called after rejection", db.commit.await_count == 0)
+
+
+async def test_create_post_guild_not_found():
+    db = make_db(get_result=None)
+    threw = False
+    try:
+        await guild_service.create_post(db, uuid.uuid4(), uuid.uuid4(), "content", is_anonymous=True)
+    except guild_service.GuildNotFoundError:
+        threw = True
+    check("create_post: raises GuildNotFoundError for missing guild", threw)
+
+
+async def test_comment_with_constructive_rewrite_awards_bonus():
+    post = make_post()
+    db = make_db(get_result=post)
+    safe = guild_service._ModerationResult(is_safe=True, rejection_reason=None)
+    evaluation = guild_service._RewriteEvaluationResult(
+        is_constructive=True, rewrite_feedback="Great -- much clearer active voice."
+    )
+    fake_account = MagicMock(tokens_balance=125)
+
+    with patch.object(guild_service, "_moderate_content", AsyncMock(return_value=safe)), \
+         patch.object(guild_service, "_evaluate_rewrite", AsyncMock(return_value=evaluation)), \
+         patch.object(guild_service.coach_service, "award_tokens", AsyncMock(return_value=fake_account)) as award_mock:
+        result = await guild_service.submit_comment_with_rewrite(
+            db, uuid.uuid4(), post.id, "Nice essay, one suggestion:",
+            target_text_snippet="I have went to many places.",
+            suggested_rewrite="I have been to many places.",
+        )
+
+    check("comment(constructive): tokens_earned == 25", result.tokens_earned == 25)
+    check("comment(constructive): is_constructive True", result.is_constructive is True)
+    check("comment(constructive): award_tokens called with 25", award_mock.await_args.args[2] == 25)
+    check("comment(constructive): tokens_balance from account", result.tokens_balance == 125)
+
+
+async def test_comment_with_non_constructive_rewrite_no_bonus():
+    post = make_post()
+    db = make_db(get_result=post)
+    safe = guild_service._ModerationResult(is_safe=True, rejection_reason=None)
+    evaluation = guild_service._RewriteEvaluationResult(
+        is_constructive=False, rewrite_feedback="This doesn't really change the meaning or fix the grammar."
+    )
+    fake_account = MagicMock(tokens_balance=110)
+
+    with patch.object(guild_service, "_moderate_content", AsyncMock(return_value=safe)), \
+         patch.object(guild_service, "_evaluate_rewrite", AsyncMock(return_value=evaluation)), \
+         patch.object(guild_service.coach_service, "award_tokens", AsyncMock(return_value=fake_account)) as award_mock:
+        result = await guild_service.submit_comment_with_rewrite(
+            db, uuid.uuid4(), post.id, "Suggestion:", "original text", "original text but reordered"
+        )
+
+    check("comment(non-constructive): tokens_earned == 10 (base only)", result.tokens_earned == 10)
+    check("comment(non-constructive): is_constructive False", result.is_constructive is False)
+    check("comment(non-constructive): award_tokens called with 10", award_mock.await_args.args[2] == 10)
+
+
+async def test_comment_without_rewrite_gets_base_tokens_only():
+    post = make_post()
+    db = make_db(get_result=post)
+    safe = guild_service._ModerationResult(is_safe=True, rejection_reason=None)
+    fake_account = MagicMock(tokens_balance=100)
+
+    eval_mock = AsyncMock()
+    with patch.object(guild_service, "_moderate_content", AsyncMock(return_value=safe)), \
+         patch.object(guild_service, "_evaluate_rewrite", eval_mock), \
+         patch.object(guild_service.coach_service, "award_tokens", AsyncMock(return_value=fake_account)) as award_mock:
+        result = await guild_service.submit_comment_with_rewrite(
+            db, uuid.uuid4(), post.id, "Nice work overall!", None, None
+        )
+
+    check("comment(no rewrite): tokens_earned == 10", result.tokens_earned == 10)
+    check("comment(no rewrite): is_constructive is None", result.is_constructive is None)
+    check("comment(no rewrite): rewrite evaluation never called", eval_mock.await_count == 0)
+    check("comment(no rewrite): award_tokens called with 10", award_mock.await_args.args[2] == 10)
+
+
+async def test_comment_post_not_found():
+    db = make_db(get_result=None)
+    threw = False
+    try:
+        await guild_service.submit_comment_with_rewrite(db, uuid.uuid4(), uuid.uuid4(), "content")
+    except guild_service.PostNotFoundError:
+        threw = True
+    check("submit_comment: raises PostNotFoundError for missing post", threw)
+
+
+async def test_generate_guild_quest_grounds_on_topic():
+    guild = make_guild(name="IELTS Guild", topic="IELTS exam preparation")
+    db = make_db(get_result=guild)
+    quest_content = guild_service._GuildQuestResult(
+        title="Speaking Sprint", description="Share and critique a speaking-practice audio outline with 2 peers."
+    )
+
+    captured = {}
+
+    async def fake_generate(guild_name, guild_topic):
+        captured["guild_name"] = guild_name
+        captured["guild_topic"] = guild_topic
+        return quest_content
+
+    with patch.object(guild_service, "_generate_quest_content", fake_generate):
+        quest = await guild_service.generate_guild_quest(db, guild.id)
+
+    check("generate_quest: grounded on guild name", captured["guild_name"] == "IELTS Guild")
+    check("generate_quest: grounded on guild topic", captured["guild_topic"] == "IELTS exam preparation")
+    check("generate_quest: title saved", quest.title == "Speaking Sprint")
+    check("generate_quest: token_reward defaults to model default (50)", quest.token_reward == 50)
+    check("generate_quest: is_active defaults True", quest.is_active is True)
+
+
+async def test_generate_guild_quest_guild_not_found():
+    db = make_db(get_result=None)
+    threw = False
+    try:
+        await guild_service.generate_guild_quest(db, uuid.uuid4())
+    except guild_service.GuildNotFoundError:
+        threw = True
+    check("generate_quest: raises GuildNotFoundError for missing guild", threw)
+
+
+async def test_get_active_quests_filters_and_checks_guild():
+    guild = make_guild()
+    active_quest = GuildQuest(
+        id=uuid.uuid4(), guild_id=guild.id, title="Active Q", description="desc",
+        token_reward=50, is_active=True, created_at=datetime.now(timezone.utc),
+    )
+    db = make_db(get_result=guild)
+    db.execute = AsyncMock(return_value=FakeResult([active_quest]))
+
+    quests = await guild_service.get_active_quests(db, guild.id)
+    check("get_active_quests: returns quests list", quests == [active_quest])
+    check("get_active_quests: checked guild existence via db.get", db.get.await_count == 1)
+
+
+async def main():
+    await test_create_post_anonymous_generates_alias()
+    await test_create_post_non_anonymous_skips_alias()
+    await test_create_post_moderation_rejects_and_skips_alias()
+    await test_create_post_guild_not_found()
+    await test_comment_with_constructive_rewrite_awards_bonus()
+    await test_comment_with_non_constructive_rewrite_no_bonus()
+    await test_comment_without_rewrite_gets_base_tokens_only()
+    await test_comment_post_not_found()
+    await test_generate_guild_quest_grounds_on_topic()
+    await test_generate_guild_quest_guild_not_found()
+    await test_get_active_quests_filters_and_checks_guild()
+
+    print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
+    if FAIL:
+        print("FAILED:", FAIL)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

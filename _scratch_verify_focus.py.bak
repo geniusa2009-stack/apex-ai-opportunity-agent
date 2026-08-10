@@ -1,0 +1,246 @@
+"""Mocked-but-real-code-path verification for Ecosystem Feature 5.
+
+Mocks the Gemini client and DB session (AsyncMock/MagicMock), asserting on
+real business-logic outcomes: session lifecycle transitions, quiz-answer
+token math (15 base, +10 bonus on pass, 15 only on fail), state guards
+(can't submit-quiz before end-block, can't double-abandon), and the
+`coach_service.award_tokens` integration point actually being called with
+the right amount.
+"""
+
+import asyncio
+import sys
+import uuid
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
+
+sys.path.insert(0, ".")
+
+import app.services.focus_service as focus_service
+from app.models.enums import FocusSessionStatus
+from app.models.focus_room import FocusSession
+
+PASS = []
+FAIL = []
+
+
+def check(name, condition):
+    if condition:
+        PASS.append(name)
+    else:
+        FAIL.append(name)
+    print(("PASS" if condition else "FAIL") + f": {name}")
+
+
+def make_session(**overrides):
+    defaults = dict(
+        id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        declared_goal="Finish Chapter 3 problem set",
+        subject="Organic Chemistry",
+        duration_minutes=25,
+        status=FocusSessionStatus.IN_PROGRESS.value,
+        started_at=datetime.now(timezone.utc),
+        ended_at=None,
+        tokens_earned=0,
+        study_summary=None,
+        quiz_question=None,
+        student_answer=None,
+        quiz_passed=None,
+        suggested_soundscape=None,
+    )
+    defaults.update(overrides)
+    return FocusSession(**defaults)
+
+
+class FakeResult:
+    def __init__(self, obj):
+        self._obj = obj
+
+    def scalar_one_or_none(self):
+        return self._obj
+
+
+def make_db(session_lookup=None):
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=FakeResult(session_lookup))
+    db.add = MagicMock()
+    db.commit = AsyncMock()
+    db.refresh = AsyncMock()
+    return db
+
+
+async def test_start_session():
+    db = make_db()
+    suggestions = focus_service._StartSessionSuggestions(
+        suggested_soundscape="Lo-Fi Focus Beats",
+        brain_break_activity="Quick riddle: what has rings but no fingers? (A tree!)",
+    )
+    with patch.object(
+        focus_service, "_suggest_soundscape_and_brain_break", AsyncMock(return_value=suggestions)
+    ):
+        user_id = uuid.uuid4()
+        session, brain_break = await focus_service.start_session(
+            db, user_id, "Finish Chapter 3", "Organic Chemistry", 25
+        )
+
+    check("start_session: status is in_progress", session.status == FocusSessionStatus.IN_PROGRESS.value)
+    check("start_session: soundscape persisted", session.suggested_soundscape == "Lo-Fi Focus Beats")
+    check("start_session: brain_break_activity returned but not a model field",
+          brain_break == suggestions.brain_break_activity and not hasattr(FocusSession, "brain_break_activity"))
+    check("start_session: db.commit called", db.commit.await_count == 1)
+    check("start_session: declared_goal/subject stored", session.declared_goal == "Finish Chapter 3" and session.subject == "Organic Chemistry")
+
+
+async def test_generate_active_recall_quiz():
+    existing = make_session()
+    db = make_db(session_lookup=existing)
+    quiz_result = focus_service._QuizQuestionResult(
+        quiz_question="What functional group does the molecule in your summary contain?"
+    )
+    with patch.object(focus_service, "_generate_quiz_question", AsyncMock(return_value=quiz_result)):
+        result = await focus_service.generate_active_recall_quiz(
+            db, existing.user_id, existing.id, "Ketones have a C=O group in the middle of the chain."
+        )
+
+    check("generate_quiz: study_summary saved", existing.study_summary == "Ketones have a C=O group in the middle of the chain.")
+    check("generate_quiz: quiz_question saved", existing.quiz_question == quiz_result.quiz_question)
+    check("generate_quiz: returns quiz result", result.quiz_question == quiz_result.quiz_question)
+    check("generate_quiz: db.commit called", db.commit.await_count == 1)
+
+
+async def test_generate_quiz_wrong_state_rejected():
+    completed = make_session(status=FocusSessionStatus.COMPLETED.value)
+    db = make_db(session_lookup=completed)
+    threw = False
+    try:
+        await focus_service.generate_active_recall_quiz(db, completed.user_id, completed.id, "summary text")
+    except focus_service.InvalidSessionStateError:
+        threw = True
+    check("generate_quiz: rejects non-in_progress session", threw)
+
+
+async def test_verify_quiz_answer_pass_awards_bonus():
+    existing = make_session(
+        study_summary="Ketones have a C=O in the middle of the chain.",
+        quiz_question="What group defines a ketone?",
+    )
+    db = make_db(session_lookup=existing)
+    evaluation = focus_service._QuizEvaluationResult(
+        quiz_passed=True, proctor_feedback="Amazing work identifying the carbonyl group!"
+    )
+    fake_account = MagicMock(tokens_balance=140)
+
+    with patch.object(focus_service, "_evaluate_quiz_answer", AsyncMock(return_value=evaluation)), \
+         patch.object(focus_service.coach_service, "award_tokens", AsyncMock(return_value=fake_account)) as award_mock:
+        result = await focus_service.verify_quiz_answer(
+            db, existing.user_id, existing.id, "A carbonyl group (C=O) in the middle of the carbon chain."
+        )
+
+    check("verify_quiz(pass): tokens_earned == 25", result.tokens_earned == 25)
+    check("verify_quiz(pass): quiz_passed True", result.quiz_passed is True)
+    check("verify_quiz(pass): session marked completed", existing.status == FocusSessionStatus.COMPLETED.value)
+    check("verify_quiz(pass): session.tokens_earned == 25", existing.tokens_earned == 25)
+    check("verify_quiz(pass): ended_at set", existing.ended_at is not None)
+    check("verify_quiz(pass): award_tokens called with 25", award_mock.await_args.args[2] == 25)
+    check("verify_quiz(pass): tokens_balance from account", result.tokens_balance == 140)
+
+
+async def test_verify_quiz_answer_fail_awards_base_only():
+    existing = make_session(
+        study_summary="Ketones have a C=O in the middle of the chain.",
+        quiz_question="What group defines a ketone?",
+    )
+    db = make_db(session_lookup=existing)
+    evaluation = focus_service._QuizEvaluationResult(
+        quiz_passed=False, proctor_feedback="Close! It's actually about the C=O position, but great focus today!"
+    )
+    fake_account = MagicMock(tokens_balance=115)
+
+    with patch.object(focus_service, "_evaluate_quiz_answer", AsyncMock(return_value=evaluation)), \
+         patch.object(focus_service.coach_service, "award_tokens", AsyncMock(return_value=fake_account)) as award_mock:
+        result = await focus_service.verify_quiz_answer(
+            db, existing.user_id, existing.id, "I'm not totally sure."
+        )
+
+    check("verify_quiz(fail): tokens_earned == 15 (base only, no bonus)", result.tokens_earned == 15)
+    check("verify_quiz(fail): quiz_passed False", result.quiz_passed is False)
+    check("verify_quiz(fail): session still marked completed", existing.status == FocusSessionStatus.COMPLETED.value)
+    check("verify_quiz(fail): award_tokens called with 15", award_mock.await_args.args[2] == 15)
+
+
+async def test_verify_quiz_without_quiz_question_rejected():
+    existing = make_session()  # no quiz_question/study_summary set
+    db = make_db(session_lookup=existing)
+    threw = False
+    try:
+        await focus_service.verify_quiz_answer(db, existing.user_id, existing.id, "some answer")
+    except focus_service.InvalidSessionStateError:
+        threw = True
+    check("verify_quiz: rejects session with no quiz_question yet", threw)
+
+
+async def test_abandon_session():
+    existing = make_session()
+    db = make_db(session_lookup=existing)
+    result = await focus_service.abandon_session(db, existing.user_id, existing.id)
+    check("abandon: status set to abandoned", result.status == FocusSessionStatus.ABANDONED.value)
+    check("abandon: ended_at set", result.ended_at is not None)
+    check("abandon: no tokens awarded (tokens_earned untouched)", result.tokens_earned == 0)
+
+
+async def test_abandon_already_completed_rejected():
+    completed = make_session(status=FocusSessionStatus.COMPLETED.value)
+    db = make_db(session_lookup=completed)
+    threw = False
+    try:
+        await focus_service.abandon_session(db, completed.user_id, completed.id)
+    except focus_service.InvalidSessionStateError:
+        threw = True
+    check("abandon: rejects already-completed session", threw)
+
+
+async def test_owned_session_not_found():
+    db = make_db(session_lookup=None)
+    threw = False
+    try:
+        await focus_service._get_owned_session(db, uuid.uuid4(), uuid.uuid4())
+    except focus_service.FocusSessionNotFoundError:
+        threw = True
+    check("_get_owned_session: raises FocusSessionNotFoundError when missing", threw)
+
+
+async def test_gemini_failure_paths():
+    db = make_db()
+    with patch.object(focus_service, "_client") as client_mock:
+        fake_response = MagicMock()
+        fake_response.text = ""
+        client_mock.return_value.aio.models.generate_content = AsyncMock(return_value=fake_response)
+        threw = False
+        try:
+            await focus_service._suggest_soundscape_and_brain_break("goal", "subject")
+        except focus_service.FocusSuggestionError:
+            threw = True
+        check("start_session Gemini call: empty response raises FocusSuggestionError", threw)
+
+
+async def main():
+    await test_start_session()
+    await test_generate_active_recall_quiz()
+    await test_generate_quiz_wrong_state_rejected()
+    await test_verify_quiz_answer_pass_awards_bonus()
+    await test_verify_quiz_answer_fail_awards_base_only()
+    await test_verify_quiz_without_quiz_question_rejected()
+    await test_abandon_session()
+    await test_abandon_already_completed_rejected()
+    await test_owned_session_not_found()
+    await test_gemini_failure_paths()
+
+    print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
+    if FAIL:
+        print("FAILED:", FAIL)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

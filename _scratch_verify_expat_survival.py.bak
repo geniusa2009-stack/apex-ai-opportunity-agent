@@ -1,0 +1,246 @@
+"""Mocked-but-real-code-path verification for Ecosystem Feature 10.
+
+Mocks the Gemini client and DB session, asserting on real business-logic
+outcomes: the full 3-turn session lifecycle, chat_history accumulation,
+sticky cultural_landmine_triggered flag, final-turn scoring/token math
+(both bonus-earned and bonus-denied paths), and state guards.
+"""
+
+import asyncio
+import sys
+import uuid
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
+
+sys.path.insert(0, ".")
+
+import app.services.expat_survival_service as expat_service
+from app.models.expat_survival import ExpatSurvival
+
+PASS = []
+FAIL = []
+
+
+def check(name, condition):
+    if condition:
+        PASS.append(name)
+    else:
+        FAIL.append(name)
+    print(("PASS" if condition else "FAIL") + f": {name}")
+
+
+def make_session(**overrides):
+    defaults = dict(
+        id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        target_city="Munich",
+        target_country="Germany",
+        is_completed=False,
+        final_survival_score=None,
+        tokens_earned=0,
+        created_at=datetime.now(timezone.utc),
+        current_step=1,
+        chat_history=[{"role": "ai", "text": "You step off the U-Bahn and realize you're lost..."}],
+        slang_dictionary=[
+            {"word": "Servus", "phonetic_arabic": "بِتنطق: زير-فوس", "usage_context": "Casual greeting."},
+            {"word": "Alter", "phonetic_arabic": "بِتنطق: أَلْتِر", "usage_context": "Like 'dude'."},
+            {"word": "Feierabend", "phonetic_arabic": "بِتنطق: فايِر-آبِنت", "usage_context": "End of workday."},
+        ],
+        cultural_landmine_triggered=False,
+    )
+    defaults.update(overrides)
+    return ExpatSurvival(**defaults)
+
+
+class FakeResult:
+    def __init__(self, obj):
+        self._obj = obj
+
+    def scalar_one_or_none(self):
+        return self._obj
+
+
+def make_db(session_lookup=None):
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=FakeResult(session_lookup))
+    db.add = MagicMock()
+    db.commit = AsyncMock()
+    db.refresh = AsyncMock()
+    return db
+
+
+async def test_start_rpg_session():
+    db = make_db()
+    result = expat_service.StartSessionResult(
+        slang_dictionary=[
+            expat_service.SlangEntry(word="Servus", phonetic_arabic="بِتنطق: زير-فوس", usage_context="Greeting"),
+            expat_service.SlangEntry(word="Alter", phonetic_arabic="بِتنطق: أَلْتِر", usage_context="Like dude"),
+            expat_service.SlangEntry(word="Feierabend", phonetic_arabic="بِتنطق: فايِر-آبِنت", usage_context="End of day"),
+        ],
+        opening_scenario="You step off the U-Bahn in Munich and realize you're completely lost...",
+    )
+    with patch.object(expat_service, "_generate_start_content", AsyncMock(return_value=result)):
+        user_id = uuid.uuid4()
+        session = await expat_service.start_rpg_session(db, user_id, "Munich", "Germany")
+
+    check("start: current_step == 1", session.current_step == 1)
+    check("start: chat_history has 1 AI turn", len(session.chat_history) == 1 and session.chat_history[0]["role"] == "ai")
+    check("start: slang_dictionary has 3 entries", len(session.slang_dictionary) == 3)
+    check("start: cultural_landmine_triggered False", session.cultural_landmine_triggered is False)
+    check("start: db.commit called", db.commit.await_count == 1)
+
+
+async def test_continue_non_final_turn_no_landmine():
+    session = make_session()
+    db = make_db(session_lookup=session)
+    turn = expat_service.ContinueTurnResult(
+        next_turn_narrative="You politely ask a passerby for directions using 'Servus'. They smile and help you.",
+        landmine_triggered_this_turn=False,
+        landmine_explanation=None,
+        final_survival_score=None,
+        used_slang_correctly=None,
+    )
+    award_mock = AsyncMock()
+    with patch.object(expat_service, "_generate_turn_content", AsyncMock(return_value=turn)), \
+         patch.object(expat_service.coach_service, "award_tokens", award_mock):
+        result = await expat_service.continue_rpg_session(db, session.user_id, session.id, "Servus! Can you help me?")
+
+    check("continue(turn2): current_step becomes 2", result.current_step == 2)
+    check("continue(turn2): not completed yet", result.is_completed is False)
+    check("continue(turn2): no landmine", result.landmine_triggered_this_turn is False)
+    check("continue(turn2): chat_history grew to 3 entries (ai, user, ai)", len(session.chat_history) == 3)
+    check("continue(turn2): tokens_earned is None (not final)", result.tokens_earned is None)
+    check("continue(turn2): award_tokens never called (not final)", award_mock.await_count == 0)
+    check("continue(turn2): session still in_progress", session.is_completed is False)
+    return session
+
+
+async def test_continue_final_turn_with_bonus():
+    session = make_session(current_step=2, chat_history=[
+        {"role": "ai", "text": "opening"}, {"role": "user", "text": "Servus!"}, {"role": "ai", "text": "turn2"},
+    ])
+    db = make_db(session_lookup=session)
+    turn = expat_service.ContinueTurnResult(
+        next_turn_narrative="You navigate the final challenge perfectly and make it home. Well done!",
+        landmine_triggered_this_turn=False,
+        landmine_explanation=None,
+        final_survival_score=92,
+        used_slang_correctly=True,
+    )
+    fake_account = MagicMock(tokens_balance=140)
+    award_mock = AsyncMock(return_value=fake_account)
+    with patch.object(expat_service, "_generate_turn_content", AsyncMock(return_value=turn)), \
+         patch.object(expat_service.coach_service, "award_tokens", award_mock):
+        result = await expat_service.continue_rpg_session(db, session.user_id, session.id, "Danke, Alter!")
+
+    check("continue(final, bonus): current_step == 3", result.current_step == 3)
+    check("continue(final, bonus): is_completed True", result.is_completed is True)
+    check("continue(final, bonus): final_survival_score == 92", result.final_survival_score == 92)
+    check("continue(final, bonus): tokens_earned == 25 (15 + 10 bonus)", result.tokens_earned == 25)
+    check("continue(final, bonus): award_tokens called with 25", award_mock.await_args.args[2] == 25)
+    check("continue(final, bonus): tokens_balance from account", result.tokens_balance == 140)
+    check("continue(final, bonus): session.tokens_earned persisted", session.tokens_earned == 25)
+
+
+async def test_continue_final_turn_landmine_denies_bonus():
+    session = make_session(
+        current_step=2,
+        cultural_landmine_triggered=True,  # triggered on an earlier turn -- sticky flag
+        chat_history=[{"role": "ai", "text": "opening"}, {"role": "user", "text": "oops"}, {"role": "ai", "text": "turn2, landmine hit"}],
+    )
+    db = make_db(session_lookup=session)
+    turn = expat_service.ContinueTurnResult(
+        next_turn_narrative="You wrap up the trip having learned a valuable lesson.",
+        landmine_triggered_this_turn=False,  # no NEW landmine this turn
+        landmine_explanation=None,
+        final_survival_score=60,
+        used_slang_correctly=True,  # used slang correctly, but still shouldn't get bonus
+    )
+    fake_account = MagicMock(tokens_balance=115)
+    award_mock = AsyncMock(return_value=fake_account)
+    with patch.object(expat_service, "_generate_turn_content", AsyncMock(return_value=turn)), \
+         patch.object(expat_service.coach_service, "award_tokens", award_mock):
+        result = await expat_service.continue_rpg_session(db, session.user_id, session.id, "final answer")
+
+    check(
+        "continue(final, prior landmine): tokens_earned == 15 (no bonus, landmine earlier in session)",
+        result.tokens_earned == 15,
+    )
+    check("continue(final, prior landmine): award_tokens called with 15", award_mock.await_args.args[2] == 15)
+    check(
+        "continue(final, prior landmine): cultural_landmine_triggered stays True",
+        session.cultural_landmine_triggered is True,
+    )
+
+
+async def test_continue_landmine_triggered_this_turn_sets_sticky_flag():
+    session = make_session()
+    db = make_db(session_lookup=session)
+    turn = expat_service.ContinueTurnResult(
+        next_turn_narrative="Oops -- that was a bit too direct for German small talk!",
+        landmine_triggered_this_turn=True,
+        landmine_explanation="Asking a stranger's salary directly is considered rude in Germany.",
+        final_survival_score=None,
+        used_slang_correctly=None,
+    )
+    with patch.object(expat_service, "_generate_turn_content", AsyncMock(return_value=turn)):
+        result = await expat_service.continue_rpg_session(db, session.user_id, session.id, "How much do you earn?")
+
+    check("continue(landmine hit): landmine_triggered_this_turn True in result", result.landmine_triggered_this_turn is True)
+    check("continue(landmine hit): explanation propagated", "salary" in result.landmine_explanation)
+    check("continue(landmine hit): session.cultural_landmine_triggered set True", session.cultural_landmine_triggered is True)
+
+
+async def test_continue_on_completed_session_rejected():
+    session = make_session(is_completed=True, current_step=3)
+    db = make_db(session_lookup=session)
+    threw = False
+    try:
+        await expat_service.continue_rpg_session(db, session.user_id, session.id, "still playing?")
+    except expat_service.InvalidSessionStateError:
+        threw = True
+    check("continue: rejects already-completed session", threw)
+
+
+async def test_continue_session_not_found():
+    db = make_db(session_lookup=None)
+    threw = False
+    try:
+        await expat_service.continue_rpg_session(db, uuid.uuid4(), uuid.uuid4(), "hi")
+    except expat_service.SessionNotFoundError:
+        threw = True
+    check("continue: raises SessionNotFoundError for missing/not-owned session", threw)
+
+
+async def test_start_gemini_failure_raises():
+    db = make_db()
+    with patch.object(
+        expat_service, "_generate_start_content", AsyncMock(side_effect=expat_service.SessionGenerationError("boom"))
+    ):
+        threw = False
+        try:
+            await expat_service.start_rpg_session(db, uuid.uuid4(), "Paris", "France")
+        except expat_service.SessionGenerationError:
+            threw = True
+    check("start: Gemini failure raises SessionGenerationError", threw)
+    check("start: no DB write on Gemini failure", db.commit.await_count == 0)
+
+
+async def main():
+    await test_start_rpg_session()
+    await test_continue_non_final_turn_no_landmine()
+    await test_continue_final_turn_with_bonus()
+    await test_continue_final_turn_landmine_denies_bonus()
+    await test_continue_landmine_triggered_this_turn_sets_sticky_flag()
+    await test_continue_on_completed_session_rejected()
+    await test_continue_session_not_found()
+    await test_start_gemini_failure_raises()
+
+    print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
+    if FAIL:
+        print("FAILED:", FAIL)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

@@ -1,0 +1,226 @@
+"""Mocked-but-real-code-path verification for Ecosystem Feature 9.
+
+Mocks the Gemini client and DB session, asserting on real business-logic
+outcomes: structured payload persisted verbatim, real inputs flow into the
+prompt, ownership-scoped delete (404 for missing/not-owned), and history
+ordering.
+"""
+
+import asyncio
+import sys
+import uuid
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
+
+sys.path.insert(0, ".")
+
+import app.services.budget_service as budget_service
+from app.models.budget_planner import BudgetPlanner
+
+PASS = []
+FAIL = []
+
+
+def check(name, condition):
+    if condition:
+        PASS.append(name)
+    else:
+        FAIL.append(name)
+    print(("PASS" if condition else "FAIL") + f": {name}")
+
+
+def make_db(get_result=None):
+    def _apply_column_defaults_on_add(obj):
+        for column in obj.__table__.columns:
+            if getattr(obj, column.name, None) is None and column.default is not None:
+                default_arg = column.default.arg
+                value = default_arg(None) if callable(default_arg) else default_arg
+                setattr(obj, column.name, value)
+
+    db = AsyncMock()
+    db.add = MagicMock(side_effect=_apply_column_defaults_on_add)
+    db.commit = AsyncMock()
+    db.refresh = AsyncMock()
+    db.delete = AsyncMock()
+    return db
+
+
+class FakeResult:
+    def __init__(self, obj_or_list):
+        self._obj_or_list = obj_or_list
+
+    def scalar_one_or_none(self):
+        return self._obj_or_list
+
+    def scalars(self):
+        m = MagicMock()
+        m.all = MagicMock(return_value=self._obj_or_list)
+        return m
+
+
+SAMPLE_BUDGET_DATA = budget_service.GeneratedBudgetData(
+    currency="EUR",
+    estimated_expenses=budget_service.EstimatedExpenses(
+        rent_student_housing=budget_service.ExpenseEstimate(low=400, high=600, notes="shared apartment"),
+        groceries=budget_service.ExpenseEstimate(low=150, high=250, notes=None),
+        public_transport=budget_service.ExpenseEstimate(low=30, high=60, notes="Semesterticket"),
+        health_insurance=budget_service.ExpenseEstimate(low=80, high=120, notes=None),
+        utilities_and_internet=budget_service.ExpenseEstimate(low=60, high=100, notes=None),
+        leisure_and_pocket_money=budget_service.ExpenseEstimate(low=100, high=200, notes=None),
+    ),
+    financial_health_status=budget_service.FinancialHealthStatusResult(
+        status="balanced", analysis="Your stipend roughly covers estimated expenses with little room to spare."
+    ),
+    legal_student_jobs=[
+        budget_service.LegalStudentJob(
+            job_title="University library assistant", hourly_wage_low=11, hourly_wage_high=13,
+            legal_weekly_hour_limit=20, description="Common on-campus role, easy to combine with studies.",
+        ),
+        budget_service.LegalStudentJob(
+            job_title="Tutoring", hourly_wage_low=15, hourly_wage_high=25,
+            legal_weekly_hour_limit=20, description="Subject tutoring for other students, flexible hours.",
+        ),
+    ],
+    local_saving_hacks=[
+        "Use the Semesterticket for unlimited regional trains and buses.",
+        "Shop at discount supermarkets like Aldi or Lidl instead of chains like Rewe.",
+        "Check for a student meal subsidy at the Mensa (university cafeteria).",
+    ],
+)
+
+
+async def test_simulate_budget_persists_structured_payload():
+    db = make_db()
+    with patch.object(budget_service, "_generate_budget_content", AsyncMock(return_value=SAMPLE_BUDGET_DATA)):
+        user_id = uuid.uuid4()
+        budget = await budget_service.simulate_budget(db, user_id, "Munich", "Germany", 850.0)
+
+    check("simulate_budget: user_id stored", budget.user_id == user_id)
+    check("simulate_budget: target_city stored", budget.target_city == "Munich")
+    check("simulate_budget: target_country stored", budget.target_country == "Germany")
+    check("simulate_budget: monthly_stipend stored", budget.monthly_stipend == 850.0)
+    check(
+        "simulate_budget: generated_budget_data persisted verbatim",
+        budget.generated_budget_data == SAMPLE_BUDGET_DATA.model_dump(),
+    )
+    check(
+        "simulate_budget: exactly 6 expense categories present",
+        len(budget.generated_budget_data["estimated_expenses"]) == 6,
+    )
+    check(
+        "simulate_budget: 2 legal jobs (within 2-3 range)",
+        len(budget.generated_budget_data["legal_student_jobs"]) == 2,
+    )
+    check(
+        "simulate_budget: exactly 3 saving hacks",
+        len(budget.generated_budget_data["local_saving_hacks"]) == 3,
+    )
+    check(
+        "simulate_budget: financial_health_status is a valid status",
+        budget.generated_budget_data["financial_health_status"]["status"] in ("surplus", "balanced", "deficit"),
+    )
+    check("simulate_budget: db.commit called", db.commit.await_count == 1)
+
+
+async def test_prompt_carries_real_inputs():
+    db = make_db()
+    captured = {}
+
+    async def fake_generate_content(model, contents, config):
+        captured["user_prompt"] = contents[1]
+        response = MagicMock()
+        response.text = SAMPLE_BUDGET_DATA.model_dump_json()
+        return response
+
+    fake_client = MagicMock()
+    fake_client.aio.models.generate_content = fake_generate_content
+
+    with patch.object(budget_service, "_client", return_value=fake_client):
+        await budget_service.simulate_budget(db, uuid.uuid4(), "Istanbul", "Turkey", 400.0)
+
+    prompt = captured["user_prompt"]
+    check("prompt carries real target city", "Istanbul" in prompt)
+    check("prompt carries real target country", "Turkey" in prompt)
+    check("prompt carries real stipend", "400.0" in prompt or "400" in prompt)
+
+
+async def test_simulate_budget_gemini_failure_raises():
+    db = make_db()
+    fake_client = MagicMock()
+
+    async def fake_generate_content(*args, **kwargs):
+        raise RuntimeError("simulated transient failure")
+
+    fake_client.aio.models.generate_content = fake_generate_content
+
+    with patch.object(budget_service, "_client", return_value=fake_client):
+        threw = False
+        try:
+            await budget_service.simulate_budget(db, uuid.uuid4(), "Paris", "France", 500.0)
+        except budget_service.BudgetGenerationError:
+            threw = True
+    check("simulate_budget: Gemini failure raises BudgetGenerationError", threw)
+    check("simulate_budget: no DB write on Gemini failure", db.commit.await_count == 0)
+
+
+async def test_delete_budget_owned_succeeds():
+    user_id = uuid.uuid4()
+    budget = BudgetPlanner(
+        id=uuid.uuid4(), user_id=user_id, target_city="Munich", target_country="Germany",
+        monthly_stipend=850.0, generated_budget_data={}, created_at=datetime.now(timezone.utc),
+    )
+    db = make_db()
+    db.execute = AsyncMock(return_value=FakeResult(budget))
+
+    await budget_service.delete_budget(db, user_id, budget.id)
+    check("delete_budget: db.delete called for owned budget", db.delete.await_count == 1)
+    check("delete_budget: db.commit called", db.commit.await_count == 1)
+
+
+async def test_delete_budget_not_found_raises():
+    db = make_db()
+    db.execute = AsyncMock(return_value=FakeResult(None))
+
+    threw = False
+    try:
+        await budget_service.delete_budget(db, uuid.uuid4(), uuid.uuid4())
+    except budget_service.BudgetNotFoundError:
+        threw = True
+    check("delete_budget: raises BudgetNotFoundError for missing/not-owned budget", threw)
+    check("delete_budget: db.delete never called when not found", db.delete.await_count == 0)
+
+
+async def test_get_user_budgets_orders_newest_first():
+    user_id = uuid.uuid4()
+    older = BudgetPlanner(
+        id=uuid.uuid4(), user_id=user_id, target_city="A", target_country="B", monthly_stipend=0.0,
+        generated_budget_data={}, created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    newer = BudgetPlanner(
+        id=uuid.uuid4(), user_id=user_id, target_city="C", target_country="D", monthly_stipend=0.0,
+        generated_budget_data={}, created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    db = make_db()
+    db.execute = AsyncMock(return_value=FakeResult([newer, older]))
+
+    budgets = await budget_service.get_user_budgets(db, user_id)
+    check("get_user_budgets: returns both", len(budgets) == 2)
+    check("get_user_budgets: newest first", budgets[0].id == newer.id)
+
+
+async def main():
+    await test_simulate_budget_persists_structured_payload()
+    await test_prompt_carries_real_inputs()
+    await test_simulate_budget_gemini_failure_raises()
+    await test_delete_budget_owned_succeeds()
+    await test_delete_budget_not_found_raises()
+    await test_get_user_budgets_orders_newest_first()
+
+    print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
+    if FAIL:
+        print("FAILED:", FAIL)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

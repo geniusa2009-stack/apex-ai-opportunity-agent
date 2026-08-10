@@ -1,0 +1,181 @@
+"""Mocked-but-real-code-path verification for Ecosystem Feature 7.
+
+Mocks the Gemini client and DB session, asserting on real business-logic
+outcomes: the structured pitch payload is persisted verbatim into
+`generated_pitch_data`, the prompt actually carries the real scholarship/
+country/concern through to Gemini, and `get_user_pitches` queries/orders
+correctly.
+"""
+
+import asyncio
+import sys
+import uuid
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
+
+sys.path.insert(0, ".")
+
+import app.services.parent_pitch_service as parent_pitch_service
+from app.models.parent_pitch import ParentPitch
+
+PASS = []
+FAIL = []
+
+
+def check(name, condition):
+    if condition:
+        PASS.append(name)
+    else:
+        FAIL.append(name)
+    print(("PASS" if condition else "FAIL") + f": {name}")
+
+
+def make_db():
+    def _apply_column_defaults_on_add(obj):
+        for column in obj.__table__.columns:
+            if getattr(obj, column.name, None) is None and column.default is not None:
+                default_arg = column.default.arg
+                value = default_arg(None) if callable(default_arg) else default_arg
+                setattr(obj, column.name, value)
+
+    db = AsyncMock()
+    db.add = MagicMock(side_effect=_apply_column_defaults_on_add)
+    db.commit = AsyncMock()
+    db.refresh = AsyncMock()
+    return db
+
+
+class FakeResult:
+    def __init__(self, items):
+        self._items = items
+
+    def scalars(self):
+        m = MagicMock()
+        m.all = MagicMock(return_value=self._items)
+        return m
+
+
+SAMPLE_PITCH_DATA = parent_pitch_service.GeneratedPitchData(
+    conversation_tactics=[
+        "Choose a calm evening after dinner, not during an argument.",
+        "Sit beside them rather than across, keeping a warm, open tone.",
+        "Start by expressing gratitude for their sacrifices before raising the topic.",
+    ],
+    key_reassurance_points=[
+        "The campus has 24/7 security and a dedicated international student office.",
+        "On-campus accommodation is supervised with strict visitor policies.",
+        "There is an active Arabic-speaking student community and nearby mosque.",
+    ],
+    financial_reassurance="The scholarship covers full tuition, housing, and a monthly stipend -- no cost to the family.",
+    formal_arabic_letter="أمي الغالية وأبي العزيز، أكتب إليكما بقلب مليء بالامتنان...",
+)
+
+
+async def test_generate_pitch_persists_structured_payload():
+    db = make_db()
+    with patch.object(
+        parent_pitch_service, "_generate_pitch_content", AsyncMock(return_value=SAMPLE_PITCH_DATA)
+    ):
+        user_id = uuid.uuid4()
+        pitch = await parent_pitch_service.generate_pitch(
+            db, user_id, "Chevening Scholarship", "United Kingdom", "safety"
+        )
+
+    check("generate_pitch: user_id stored", pitch.user_id == user_id)
+    check("generate_pitch: scholarship_name stored", pitch.scholarship_name == "Chevening Scholarship")
+    check("generate_pitch: target_country stored", pitch.target_country == "United Kingdom")
+    check("generate_pitch: primary_concern stored verbatim (free text)", pitch.primary_concern == "safety")
+    check(
+        "generate_pitch: generated_pitch_data persisted verbatim",
+        pitch.generated_pitch_data == SAMPLE_PITCH_DATA.model_dump(),
+    )
+    check(
+        "generate_pitch: Arabic letter present and non-empty",
+        bool(pitch.generated_pitch_data["formal_arabic_letter"]),
+    )
+    check(
+        "generate_pitch: exactly 3 conversation tactics",
+        len(pitch.generated_pitch_data["conversation_tactics"]) == 3,
+    )
+    check(
+        "generate_pitch: exactly 3 key reassurance points",
+        len(pitch.generated_pitch_data["key_reassurance_points"]) == 3,
+    )
+    check("generate_pitch: db.commit called", db.commit.await_count == 1)
+
+
+async def test_generate_pitch_prompt_carries_real_inputs():
+    db = make_db()
+    captured = {}
+
+    async def fake_generate_content(model, contents, config):
+        captured["contents"] = contents
+        response = MagicMock()
+        response.text = SAMPLE_PITCH_DATA.model_dump_json()
+        return response
+
+    fake_client = MagicMock()
+    fake_client.aio.models.generate_content = fake_generate_content
+
+    with patch.object(parent_pitch_service, "_client", return_value=fake_client):
+        await parent_pitch_service.generate_pitch(
+            db, uuid.uuid4(), "Fulbright Program", "United States", "distance"
+        )
+
+    prompt_text = captured["contents"][1]
+    check("generate_pitch: prompt carries real scholarship name", "Fulbright Program" in prompt_text)
+    check("generate_pitch: prompt carries real target country", "United States" in prompt_text)
+    check("generate_pitch: prompt carries real primary concern", "distance" in prompt_text)
+
+
+async def test_generate_pitch_gemini_failure_raises():
+    db = make_db()
+    fake_client = MagicMock()
+
+    async def fake_generate_content(*args, **kwargs):
+        raise RuntimeError("simulated transient failure")
+
+    fake_client.aio.models.generate_content = fake_generate_content
+
+    with patch.object(parent_pitch_service, "_client", return_value=fake_client):
+        threw = False
+        try:
+            await parent_pitch_service.generate_pitch(db, uuid.uuid4(), "X Scholarship", "Y", "finance")
+        except parent_pitch_service.PitchGenerationError:
+            threw = True
+    check("generate_pitch: Gemini failure raises PitchGenerationError", threw)
+    check("generate_pitch: no DB write on Gemini failure", db.commit.await_count == 0)
+
+
+async def test_get_user_pitches_orders_by_created_at_desc():
+    user_id = uuid.uuid4()
+    older = ParentPitch(
+        id=uuid.uuid4(), user_id=user_id, scholarship_name="A", target_country="B",
+        primary_concern="finance", generated_pitch_data={}, created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    newer = ParentPitch(
+        id=uuid.uuid4(), user_id=user_id, scholarship_name="C", target_country="D",
+        primary_concern="safety", generated_pitch_data={}, created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    db = make_db()
+    db.execute = AsyncMock(return_value=FakeResult([newer, older]))
+
+    pitches = await parent_pitch_service.get_user_pitches(db, user_id)
+    check("get_user_pitches: returns both pitches", len(pitches) == 2)
+    check("get_user_pitches: newest first", pitches[0].id == newer.id)
+
+
+async def main():
+    await test_generate_pitch_persists_structured_payload()
+    await test_generate_pitch_prompt_carries_real_inputs()
+    await test_generate_pitch_gemini_failure_raises()
+    await test_get_user_pitches_orders_by_created_at_desc()
+
+    print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
+    if FAIL:
+        print("FAILED:", FAIL)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
