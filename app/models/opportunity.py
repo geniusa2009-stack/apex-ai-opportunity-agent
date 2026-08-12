@@ -74,7 +74,27 @@ class Opportunity(Base, TimestampMixin):
     )
 
     type: Mapped[OpportunityType] = mapped_column(
-        SAEnum(OpportunityType, name="opportunity_type", native_enum=True),
+        # `values_callable` -- disclosed fix, found while wiring scholarships.html
+        # to this exact column (Step: scholarships.html <-> opportunities.py).
+        # Without it, SQLAlchemy's default Enum bind-processor sends the Python
+        # enum MEMBER NAME ("SCHOLARSHIP") to Postgres, not `.value`
+        # ("scholarship") -- but migration 0001 created the real
+        # `opportunity_type` Postgres enum type with the lowercase VALUES only
+        # (`sa.Enum("scholarship", "internship", "volunteer", "course", ...)`).
+        # Confirmed as a real crash, not a hypothesis: inserting a real
+        # `Opportunity(type=OpportunityType.SCHOLARSHIP, ...)` -- the exact
+        # pattern `app/services/aggregator_service.py`'s own
+        # `upsert_opportunity` uses -- raised
+        # `asyncpg.exceptions.InvalidTextRepresentationError: invalid input
+        # value for enum opportunity_type: "SCHOLARSHIP"` before this fix.
+        # This means the real opportunity-aggregation pipeline could never
+        # have successfully inserted a single row.
+        SAEnum(
+            OpportunityType,
+            name="opportunity_type",
+            native_enum=True,
+            values_callable=lambda enum_cls: [e.value for e in enum_cls],
+        ),
         nullable=False,
         index=True,
     )
@@ -111,7 +131,21 @@ class Opportunity(Base, TimestampMixin):
     # applicable, same "missing signal excludes nothing" posture already
     # established for `target_age_group.is_(None)`.
     target_academic_levels: Mapped[list[AcademicLevel] | None] = mapped_column(
-        ARRAY(SAEnum(AcademicLevel, name="academic_level", native_enum=True, create_type=False)),
+        # Same disclosed `values_callable` fix as `type` above, and for the
+        # identical reason (`AcademicLevel.PREP_1` has value `"prep_1"`, not
+        # `.name` `"PREP_1"`) -- currently untriggered in practice (every row
+        # has this column NULL until a future aggregator-prompt update
+        # populates it, per this column's own comment below), but would hit
+        # the exact same crash the moment anything ever wrote a real value.
+        ARRAY(
+            SAEnum(
+                AcademicLevel,
+                name="academic_level",
+                native_enum=True,
+                create_type=False,
+                values_callable=lambda enum_cls: [e.value for e in enum_cls],
+            )
+        ),
         nullable=True,
     )
 

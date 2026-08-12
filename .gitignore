@@ -16,3 +16,4 @@ postgres_data/
 .env.*.local
 .env.bak*
 .env.verify_tmp
+_delete_test.txt
