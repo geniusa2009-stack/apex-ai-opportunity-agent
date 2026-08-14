@@ -98,6 +98,31 @@ class GamificationProfile(Base):
     weekly_xp: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     league: Mapped[str] = mapped_column(String(20), default="bronze", nullable=False)
 
+    # --- Real Leaderboard System, Level 2 addition (migration 0034) ---
+    # `monthly_xp` -- a THIRD independent counter alongside `total_xp`
+    # (all-time, never resets) and `weekly_xp` (resets Monday 00:00 UTC).
+    # Same "separate counter per period" shape as `weekly_xp` above, not a
+    # derived/computed value -- `gamification_service.add_xp` increments
+    # all three together, and `reset_monthly_leaderboard` zeroes only this
+    # one on a monthly cron, mirroring `reset_weekly_leagues`'s own reset
+    # step exactly. Unlike `weekly_xp`, there is no monthly LEAGUE concept
+    # (no promotion/demotion) -- this backs a plain top-N + personal-rank
+    # monthly leaderboard only, per this feature's own explicit scope.
+    monthly_xp: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    # `display_alias` -- optional, self-set pseudonym shown on leaderboards
+    # INSTEAD of the real name/email fallback chain, when set. Lives here
+    # (not on `User`) because it's specifically a leaderboard-identity
+    # concern scoped to this gamification system, not a general profile
+    # field the rest of the app should see -- same "extend the model that
+    # actually owns this concept" boundary already used to keep
+    # `StudentAccountability` and `GamificationProfile` as two separate,
+    # independent tables (see this file's own module docstring). Nullable:
+    # most users will never set one, and `None` here means "show my real
+    # name," not an empty-string alias. See `gamification.py`'s
+    # `_display_name` for the exact resolution order this feeds into.
+    display_alias: Mapped[str | None] = mapped_column(String(60), nullable=True)
+
     def __repr__(self) -> str:
         return (
             f"<GamificationProfile user_id={self.user_id} total_xp={self.total_xp} "

@@ -133,3 +133,12 @@ boto3==1.43.50
 pytest==8.3.3
 pytest-asyncio==0.24.0
 ruff==0.7.4
+# DISCLOSED, NECESSARY ADDITION (found running the full suite during the
+# Real Leaderboard System task): every test file in tests/ that touches a
+# DB uses `create_async_engine("sqlite+aiosqlite:///:memory:", ...)`
+# (e.g. tests/test_gamification.py's own `db_session_factory` fixture),
+# but `aiosqlite` itself was never listed here -- the entire test suite
+# fails to even collect without it. Not a new dependency this task
+# introduced; a real, pre-existing gap between what the tests require and
+# what this file installs.
+aiosqlite==0.22.1

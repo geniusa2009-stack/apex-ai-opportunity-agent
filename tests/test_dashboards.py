@@ -54,7 +54,6 @@ from app.db.session import get_db
 from app.main import app
 from app.models.badges import Badge, GamificationProfile, UserBadge
 from app.models.enums import StudentVideoStatus
-from app.models.notification import Notification
 from app.models.student_videos import StudentVideo
 from app.models.user import User
 from app.services import chat_security, gamification_service, notification_service
@@ -161,6 +160,21 @@ CREATE TABLE opportunities (
 )
 """
 
+# Real Leaderboard System task, disclosed fix -- see the fixture's own
+# comment on why this moved from `Base.metadata.create_all` to raw SQL.
+_CREATE_NOTIFICATIONS_TABLE_SQL = """
+CREATE TABLE notifications (
+    id VARCHAR(36) PRIMARY KEY,
+    user_id VARCHAR(36) NOT NULL,
+    type VARCHAR(50) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    message TEXT NOT NULL,
+    is_read BOOLEAN NOT NULL DEFAULT 0,
+    payload TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
 
 @pytest_asyncio.fixture
 async def db_session_factory():
@@ -175,13 +189,25 @@ async def db_session_factory():
         await conn.execute(text(_CREATE_STUDENT_VIDEOS_TABLE_SQL))
         await conn.execute(text(_CREATE_SOURCES_TABLE_SQL))
         await conn.execute(text(_CREATE_OPPORTUNITIES_TABLE_SQL))
+        # DISCLOSED, NECESSARY FIX (found running the full suite during the
+        # Real Leaderboard System task -- unrelated to that task's own
+        # changes, a pre-existing regression from an EARLIER migration):
+        # this file's own module docstring above claims `notifications` is
+        # one of the tables where "none of the four [models] have a
+        # JSONB/ARRAY column, so the ORM's own real DDL compiles fine on
+        # SQLite unmodified" -- true when written, no longer true since
+        # migration 0033 added a real `JSONB` column, `Notification.
+        # payload` (Actionable Notifications), which SQLite's DDL compiler
+        # cannot render (`CompileError`). Same fix as `_CREATE_USERS_TABLE_
+        # SQL` already uses for `User.skills` (a Postgres `ARRAY`): a
+        # raw-SQL `CREATE TABLE`, `payload` as plain `TEXT`.
+        await conn.execute(text(_CREATE_NOTIFICATIONS_TABLE_SQL))
         await conn.run_sync(
             Base.metadata.create_all,
             tables=[
                 GamificationProfile.__table__,
                 Badge.__table__,
                 UserBadge.__table__,
-                Notification.__table__,
             ],
         )
 

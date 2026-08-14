@@ -1,15 +1,28 @@
 """Gamification: Daily Streaks, Badges, and Leaderboard.
 
-Three routes, this step's own literal set plus one disclosed addition
-(`POST /gamification/daily-login` -- see its own docstring below for
-why a concrete "logs in" trigger endpoint is necessary, not optional,
-given this codebase's Supabase-only auth model):
+Original three routes, this step's own literal set plus one disclosed
+addition (`POST /gamification/daily-login` -- see its own docstring below
+for why a concrete "logs in" trigger endpoint is necessary, not optional,
+given this codebase's Supabase-only auth model), PLUS the Weekly League
+System route, PLUS the Real Leaderboard System Level 2 routes (all-time
+personal rank, alias, monthly period):
 
-    GET  /gamification/my-stats     -- this user's XP, streak, badges
-    GET  /gamification/leaderboard  -- top 10 by total_xp descending
-    POST /gamification/daily-login  -- the "logs in" trigger this step's
-                                        own `process_daily_activity` spec
-                                        describes, made concrete
+    GET   /gamification/my-stats           -- this user's XP, streak, badges
+    GET   /gamification/leaderboard        -- top 10 by total_xp descending,
+                                               optionally filtered by
+                                               country/major/academic_level
+    GET   /gamification/leaderboard/me     -- this user's own all-time rank
+                                               even if outside the top 10
+    PATCH /gamification/alias              -- set/clear this user's
+                                               leaderboard display alias
+    POST  /gamification/daily-login        -- the "logs in" trigger this
+                                               step's own `process_daily_
+                                               activity` spec describes,
+                                               made concrete
+    GET   /gamification/leagues/leaderboard -- caller's own weekly league
+                                                standing + top members
+    GET   /gamification/months/leaderboard  -- caller's own monthly
+                                                standing + global top members
 
 No shared `prefix` collision risk: `/gamification/*` is a literal path
 segment no other router in this codebase uses at all (confirmed via the
@@ -22,15 +35,21 @@ same posture as `analytics_router`'s own placement note there.
 import datetime as dt
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from app.api.deps import CurrentUser, DbSession
+from app.models.enums import AcademicLevel
 from app.models.user import User
 from app.schemas.gamification import (
+    AliasUpdateIn,
+    AliasUpdateOut,
+    AllTimeRankOut,
     BadgeOut,
     DailyLoginOut,
     GamificationStatsOut,
     LeaderboardEntryOut,
+    MonthlyLeaderboardEntryOut,
+    MonthlyLeaderboardOut,
     WeeklyLeagueEntryOut,
     WeeklyLeagueOut,
 )
@@ -43,10 +62,24 @@ router = APIRouter(prefix="/gamification", tags=["gamification"])
 _LEADERBOARD_SIZE = 10
 
 
-def _display_name(user: User) -> str:
+def _display_name(user: User, display_alias: str | None = None) -> str:
     """Shared fallback chain for a leaderboard entry's human-readable
     name -- see `LeaderboardEntryOut.display_name`'s own docstring for
-    the full reasoning."""
+    the full reasoning.
+
+    Real Leaderboard System, Level 2 addition: `display_alias` (from the
+    SAME `GamificationProfile` row every caller already has in scope --
+    no extra query needed) is now checked FIRST, ahead of `full_name`/
+    `email`. A caller who set a real alias via `PATCH /gamification/alias`
+    sees exactly that name on every leaderboard this function backs,
+    instead of their real name -- this is the entire point of the alias
+    feature (see `GamificationProfile.display_alias`'s own model
+    comment). Falls through to the pre-existing chain unchanged when no
+    alias is set (`None` or empty/whitespace-only, matching the router's
+    own normalization on write -- see `update_display_alias` below).
+    """
+    if display_alias:
+        return display_alias
     if user.full_name:
         return user.full_name
     if user.email:
@@ -77,7 +110,19 @@ async def get_my_stats(current_user: CurrentUser, db: DbSession) -> Gamification
 
 
 @router.get("/leaderboard", response_model=list[LeaderboardEntryOut])
-async def get_leaderboard(current_user: CurrentUser, db: DbSession) -> list[LeaderboardEntryOut]:
+async def get_leaderboard(
+    current_user: CurrentUser,
+    db: DbSession,
+    country: str | None = Query(
+        default=None, description="Real Leaderboard System, Level 2: filter by User.target_country (exact match)."
+    ),
+    major: str | None = Query(
+        default=None, description="Real Leaderboard System, Level 2: filter by User.major (exact match)."
+    ),
+    academic_level: AcademicLevel | None = Query(
+        default=None, description="Real Leaderboard System, Level 2: filter by User.academic_level."
+    ),
+) -> list[LeaderboardEntryOut]:
     """This step's own literal "Top 10 users ordered by total_xp
     descending" requirement. `current_user: CurrentUser` is declared but
     not read directly in this handler's body -- same established
@@ -92,8 +137,15 @@ async def get_leaderboard(current_user: CurrentUser, db: DbSession) -> list[Lead
     `GamificationProfile` row can only ever exist for a real `user_id`
     (the FK is `ON DELETE CASCADE`, not nullable), so there is no
     "orphaned profile" case an outer join would need to handle here.
+
+    Real Leaderboard System, Level 2 addition: `country`/`major`/
+    `academic_level` are optional, each applied only if supplied (see
+    `gamification_service.get_leaderboard`'s own docstring for the real,
+    server-side, pre-`LIMIT` filtering this delegates to).
     """
-    profiles = await gamification_service.get_leaderboard(db, limit=_LEADERBOARD_SIZE)
+    profiles = await gamification_service.get_leaderboard(
+        db, limit=_LEADERBOARD_SIZE, country=country, major=major, academic_level=academic_level
+    )
 
     entries: list[LeaderboardEntryOut] = []
     for rank, profile in enumerate(profiles, start=1):
@@ -109,12 +161,50 @@ async def get_leaderboard(current_user: CurrentUser, db: DbSession) -> list[Lead
             LeaderboardEntryOut(
                 rank=rank,
                 user_id=profile.user_id,
-                display_name=_display_name(user),
+                display_name=_display_name(user, profile.display_alias),
                 total_xp=profile.total_xp,
                 current_streak=profile.current_streak,
             )
         )
     return entries
+
+
+@router.get("/leaderboard/me", response_model=AllTimeRankOut)
+async def get_my_alltime_rank(current_user: CurrentUser, db: DbSession) -> AllTimeRankOut:
+    """Real Leaderboard System, Level 2 addition -- the all-time
+    equivalent of `GET /gamification/leagues/leaderboard`'s own "your
+    standing" fields, for a user who may not be in `GET /gamification/
+    leaderboard`'s top 10. See `gamification_service.get_user_alltime_rank`
+    for the query itself. DISCLOSED ROUTE-ORDERING NOTE, same posture as
+    `users.py`'s own: `/leaderboard/me` is a literal path segment (not a
+    path parameter), so it cannot collide with any future `/leaderboard/
+    {id}`-shaped route -- no declaration-order precaution is needed
+    against the plain `/leaderboard` route above it either, since FastAPI
+    only conflicts on identical paths.
+    """
+    own = await gamification_service.get_user_alltime_rank(db, current_user.id)
+    return AllTimeRankOut(**own)
+
+
+@router.patch("/alias", response_model=AliasUpdateOut)
+async def update_display_alias(
+    payload: AliasUpdateIn, current_user: CurrentUser, db: DbSession
+) -> AliasUpdateOut:
+    """Real Leaderboard System, Level 2 addition -- sets or clears the
+    caller's own leaderboard `display_alias`. An all-whitespace string is
+    normalized to `None` (clears the alias) here, at the router boundary,
+    rather than in the service layer -- `set_display_alias` itself stores
+    exactly what it's given, matching this codebase's own established
+    "validation/normalization at the edge, service layer trusts its
+    inputs" convention (e.g. `users.py`'s own `q` requiring `min_length=1`
+    at the `Query(...)` boundary, not inside `build_user_search_statement`).
+    """
+    normalized = payload.alias.strip() if payload.alias else None
+    profile = await gamification_service.set_display_alias(db, current_user.id, normalized or None)
+    return AliasUpdateOut(
+        display_alias=profile.display_alias,
+        display_name=_display_name(current_user, profile.display_alias),
+    )
 
 
 @router.post("/daily-login", response_model=DailyLoginOut)
@@ -201,7 +291,7 @@ async def get_weekly_league(current_user: CurrentUser, db: DbSession) -> WeeklyL
             continue
         top_members.append(
             WeeklyLeagueEntryOut(
-                rank=rank, user_id=profile.user_id, display_name=_display_name(user),
+                rank=rank, user_id=profile.user_id, display_name=_display_name(user, profile.display_alias),
                 weekly_xp=profile.weekly_xp,
             )
         )
@@ -209,5 +299,37 @@ async def get_weekly_league(current_user: CurrentUser, db: DbSession) -> WeeklyL
     return WeeklyLeagueOut(
         league=own["league"], weekly_xp=own["weekly_xp"], rank=own["rank"],
         league_size=own["league_size"], xp_to_next_rank=own["xp_to_next_rank"],
+        top_members=top_members,
+    )
+
+
+@router.get("/months/leaderboard", response_model=MonthlyLeaderboardOut)
+async def get_monthly_leaderboard(current_user: CurrentUser, db: DbSession) -> MonthlyLeaderboardOut:
+    """Real Leaderboard System, Level 2 addition -- the monthly-period
+    equivalent of `GET /gamification/leagues/leaderboard`: the caller's
+    own standing plus a global top-members list, both ranked by
+    `monthly_xp`. Mirrors that route's exact shape, MINUS `league`/
+    `league_size` (there is no monthly league concept -- see
+    `app/models/badges.py`'s own comment on `GamificationProfile.
+    monthly_xp`, and `total_participants` here is global, not
+    league-scoped)."""
+    own = await gamification_service.get_user_monthly_rank(db, current_user.id)
+    top_profiles = await gamification_service.get_monthly_leaderboard(db, limit=10)
+
+    top_members: list[MonthlyLeaderboardEntryOut] = []
+    for rank, profile in enumerate(top_profiles, start=1):
+        user = await db.get(User, profile.user_id)
+        if user is None:
+            continue
+        top_members.append(
+            MonthlyLeaderboardEntryOut(
+                rank=rank, user_id=profile.user_id, display_name=_display_name(user, profile.display_alias),
+                monthly_xp=profile.monthly_xp,
+            )
+        )
+
+    return MonthlyLeaderboardOut(
+        monthly_xp=own["monthly_xp"], rank=own["rank"],
+        total_participants=own["total_participants"], xp_to_next_rank=own["xp_to_next_rank"],
         top_members=top_members,
     )

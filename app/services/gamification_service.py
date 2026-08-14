@@ -44,6 +44,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.badges import Badge, GamificationProfile, UserBadge
+from app.models.user import User
 from app.services import notification_service
 
 logger = logging.getLogger(__name__)
@@ -206,6 +207,14 @@ async def add_xp(
     profile = await get_or_create_profile(db, user_id)
     profile.total_xp += amount
     profile.weekly_xp += amount
+    # Real Leaderboard System, Level 2 addition: `monthly_xp` is a THIRD
+    # independent counter, incremented alongside `total_xp`/`weekly_xp`
+    # in this same call -- every XP-earning event (daily login, course
+    # completion, UGC approval) counts toward all three periods at once,
+    # exactly like `weekly_xp` already does; see `app/models/badges.py`'s
+    # own comment on this column for why there's no monthly LEAGUE
+    # concept alongside it.
+    profile.monthly_xp += amount
     db.add(profile)
     await db.flush()
 
@@ -301,7 +310,14 @@ async def get_next_badge_threshold(db: AsyncSession, total_xp: int) -> Badge | N
     return result.scalar_one_or_none()
 
 
-async def get_leaderboard(db: AsyncSession, limit: int = 10) -> list[GamificationProfile]:
+async def get_leaderboard(
+    db: AsyncSession,
+    limit: int = 10,
+    *,
+    country: str | None = None,
+    major: str | None = None,
+    academic_level: str | None = None,
+) -> list[GamificationProfile]:
     """Top `limit` `GamificationProfile` rows by `total_xp` descending --
     this step's own literal "Top 10 users ordered by total_xp
     descending" requirement, `limit` left as a parameter (defaulting to
@@ -315,12 +331,33 @@ async def get_leaderboard(db: AsyncSession, limit: int = 10) -> list[Gamificatio
     non-unique column needs SOME deterministic tiebreak to avoid a
     leaderboard whose row order could shuffle between two otherwise
     identical requests.
+
+    Real Leaderboard System, Level 2 addition: `country`/`major`/
+    `academic_level` are optional segmentation filters, each applied only
+    if the caller actually supplied it (an omitted filter must not
+    silently exclude every row that happens to have a different value in
+    that column -- same posture `users.py`'s own `build_user_search_
+    statement` already uses for its `role`/`academic_level` filters).
+    These three fields live on `User`, not `GamificationProfile` (see
+    `app/models/user.py`), so a real `JOIN` against `users` is required
+    to filter on them -- this is done server-side, against the full,
+    unpaginated table, BEFORE the `LIMIT`, not by fetching an
+    already-limited top-10 and filtering it client-side (which would
+    silently return fewer than `limit` rows, or zero, for any filter that
+    excludes even one of the real top 10).
     """
-    result = await db.execute(
-        select(GamificationProfile)
-        .order_by(GamificationProfile.total_xp.desc(), GamificationProfile.user_id.asc())
-        .limit(limit)
-    )
+    stmt = select(GamificationProfile)
+    if country is not None or major is not None or academic_level is not None:
+        stmt = stmt.join(User, User.id == GamificationProfile.user_id)
+        if country is not None:
+            stmt = stmt.where(User.target_country == country)
+        if major is not None:
+            stmt = stmt.where(User.major == major)
+        if academic_level is not None:
+            stmt = stmt.where(User.academic_level == academic_level)
+    stmt = stmt.order_by(GamificationProfile.total_xp.desc(), GamificationProfile.user_id.asc()).limit(limit)
+
+    result = await db.execute(stmt)
     return list(result.scalars().all())
 
 
@@ -362,6 +399,51 @@ async def get_user_league_rank(db: AsyncSession, user_id: UUID) -> dict:
         "league_size": len(ranked),
         "xp_to_next_rank": max(xp_ahead, 0),
     }
+
+
+async def get_user_alltime_rank(db: AsyncSession, user_id: UUID) -> dict:
+    """Real Leaderboard System, Level 2 addition -- mirrors
+    `get_user_league_rank`'s own shape and query pattern exactly, but
+    against the all-time `total_xp` counter with NO league `WHERE`
+    clause (there is no all-time league concept, unlike the weekly
+    system): this user's own total_xp, 1-based rank among ALL profiles,
+    how many total participants exist, and how many XP separate them
+    from the next-higher profile (0 if they're already #1). Backs `GET
+    /gamification/leaderboard/me` -- the all-time equivalent of what
+    `GET /gamification/leagues/leaderboard`'s own "own standing" fields
+    already give the weekly leaderboard."""
+    profile = await get_or_create_profile(db, user_id)
+
+    result = await db.execute(
+        select(GamificationProfile.user_id, GamificationProfile.total_xp).order_by(
+            GamificationProfile.total_xp.desc(), GamificationProfile.user_id.asc()
+        )
+    )
+    ranked = result.all()
+    rank = next((i + 1 for i, (uid, _) in enumerate(ranked) if uid == user_id), len(ranked))
+    xp_ahead = ranked[rank - 2][1] - profile.total_xp if rank > 1 else 0
+
+    return {
+        "total_xp": profile.total_xp,
+        "rank": rank,
+        "total_participants": len(ranked),
+        "xp_to_next_rank": max(xp_ahead, 0),
+    }
+
+
+async def set_display_alias(db: AsyncSession, user_id: UUID, alias: str | None) -> GamificationProfile:
+    """Real Leaderboard System, Level 2 addition -- sets or clears (when
+    `alias` is `None`) this user's leaderboard `display_alias`. Backs
+    `PATCH /gamification/alias`. Same `get_or_create_profile` lazy-create
+    convention as every other profile-touching function in this module --
+    a user who has never earned any XP yet can still set an alias before
+    ever appearing on a leaderboard."""
+    profile = await get_or_create_profile(db, user_id)
+    profile.display_alias = alias
+    db.add(profile)
+    await db.commit()
+    await db.refresh(profile)
+    return profile
 
 
 async def reset_weekly_leagues(db: AsyncSession) -> dict[str, int]:
@@ -410,3 +492,66 @@ async def reset_weekly_leagues(db: AsyncSession) -> dict[str, int]:
     await db.commit()
     logger.info("Weekly league reset: %s", moved)
     return moved
+
+
+# --- Real Leaderboard System, Level 2: monthly period (no league concept) ---
+
+
+async def get_monthly_leaderboard(db: AsyncSession, limit: int = 10) -> list[GamificationProfile]:
+    """Top `limit` profiles globally by `monthly_xp` -- same shape as
+    `get_leaderboard`, but ranked on the monthly counter. No league
+    `WHERE` clause, unlike `get_weekly_league_leaderboard`: there is no
+    monthly league concept (see `app/models/badges.py`'s own comment on
+    `monthly_xp`). Ties broken by `user_id`, same determinism reason as
+    every other leaderboard query in this module."""
+    result = await db.execute(
+        select(GamificationProfile)
+        .order_by(GamificationProfile.monthly_xp.desc(), GamificationProfile.user_id.asc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def get_user_monthly_rank(db: AsyncSession, user_id: UUID) -> dict:
+    """Same shape/pattern as `get_user_alltime_rank`, ranked on
+    `monthly_xp` instead of `total_xp`, globally (no league scoping).
+    Backs `GET /gamification/months/leaderboard`'s own "own standing"
+    fields."""
+    profile = await get_or_create_profile(db, user_id)
+
+    result = await db.execute(
+        select(GamificationProfile.user_id, GamificationProfile.monthly_xp).order_by(
+            GamificationProfile.monthly_xp.desc(), GamificationProfile.user_id.asc()
+        )
+    )
+    ranked = result.all()
+    rank = next((i + 1 for i, (uid, _) in enumerate(ranked) if uid == user_id), len(ranked))
+    xp_ahead = ranked[rank - 2][1] - profile.monthly_xp if rank > 1 else 0
+
+    return {
+        "monthly_xp": profile.monthly_xp,
+        "rank": rank,
+        "total_participants": len(ranked),
+        "xp_to_next_rank": max(xp_ahead, 0),
+    }
+
+
+async def reset_monthly_leaderboard(db: AsyncSession) -> dict[str, int]:
+    """Monthly cron (1st of the month, 00:00 UTC -- see
+    `app/workers/league_tasks.py`'s own `reset_monthly_leaderboard_task`
+    and its `celery_app.conf.beat_schedule` registration): zeroes every
+    `GamificationProfile.monthly_xp` for the new month. Deliberately much
+    simpler than `reset_weekly_leagues` -- no promote/demote step, since
+    there is no monthly league concept (see `app/models/badges.py`'s own
+    comment on `monthly_xp`); this is a plain period reset, modeled
+    directly on the tail ("zero every weekly_xp") of that function."""
+    result = await db.execute(select(GamificationProfile))
+    reset_count = 0
+    for profile in result.scalars().all():
+        profile.monthly_xp = 0
+        db.add(profile)
+        reset_count += 1
+
+    await db.commit()
+    logger.info("Monthly leaderboard reset: %d profile(s)", reset_count)
+    return {"reset": reset_count}

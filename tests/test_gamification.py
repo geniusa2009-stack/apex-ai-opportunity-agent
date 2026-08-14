@@ -45,7 +45,6 @@ from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
 from app.models.badges import Badge, GamificationProfile, UserBadge
-from app.models.notification import Notification
 from app.models.user import User
 from app.services import gamification_service
 
@@ -93,27 +92,55 @@ CREATE TABLE user_bookmarks (
 """
 
 
+_CREATE_NOTIFICATIONS_TABLE_SQL = """
+CREATE TABLE notifications (
+    id VARCHAR(36) PRIMARY KEY,
+    user_id VARCHAR(36) NOT NULL,
+    type VARCHAR(50) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    message TEXT NOT NULL,
+    is_read BOOLEAN NOT NULL DEFAULT 0,
+    payload TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
+
 @pytest_asyncio.fixture
 async def db_session_factory():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", poolclass=StaticPool)
     async with engine.begin() as conn:
         await conn.execute(text(_CREATE_USERS_TABLE_SQL))
         await conn.execute(text(_CREATE_USER_BOOKMARKS_TABLE_SQL))
+        # DISCLOSED, NECESSARY FIX (found running the full suite during the
+        # Real Leaderboard System task -- unrelated to that task's own
+        # changes, a pre-existing regression from an EARLIER migration):
+        # this fixture used to put `Notification.__table__` through
+        # `Base.metadata.create_all` directly, on the (once-true) theory
+        # that "none of the three new models has a JSONB/ARRAY column"
+        # (see this file's own module docstring) covered `Notification`
+        # too. It no longer does -- migration 0033 (Actionable
+        # Notifications, landed after this fixture was written) added a
+        # real `JSONB` column, `Notification.payload`, which SQLite's DDL
+        # compiler cannot render at all (`CompileError`). Same fix as
+        # `_CREATE_USERS_TABLE_SQL` above already uses for `User.skills`
+        # (a Postgres `ARRAY`): a raw-SQL `CREATE TABLE`, `payload` as
+        # plain `TEXT` -- ORM-level reads/writes of the `dict | None`
+        # Python value still round-trip fine against a TEXT column; it was
+        # only DDL compilation of the `JSONB` TYPE itself that failed.
+        await conn.execute(text(_CREATE_NOTIFICATIONS_TABLE_SQL))
         await conn.run_sync(
             Base.metadata.create_all,
-            # `Notification.__table__` added for the Smart Notifications
-            # Engine step -- `gamification_service.add_xp`'s badge-unlock
-            # loop now also calls `notification_service.create_notification`
-            # for every newly-unlocked badge, which needs a real
-            # `notifications` table to write into, same "update the
-            # dependent fixture" discipline already established in
-            # `tests/test_analytics.py`'s own fixture (see that file's
-            # own docstring on this exact point).
+            # `gamification_service.add_xp`'s badge-unlock loop calls
+            # `notification_service.create_notification` for every newly-
+            # unlocked badge -- the real `notifications` table it writes
+            # into is created via raw SQL just above instead, for the
+            # reason disclosed there; only these three still go through
+            # the ORM's own real DDL.
             tables=[
                 GamificationProfile.__table__,
                 Badge.__table__,
                 UserBadge.__table__,
-                Notification.__table__,
             ],
         )
 
@@ -133,8 +160,15 @@ async def db_session(db_session_factory):
 # ---------------------------------------------------------------------
 
 
-async def _make_user(db: AsyncSession) -> User:
-    user = User(id=uuid.uuid4(), email=f"{uuid.uuid4()}@example.com", full_name="Test Student")
+async def _make_user(db: AsyncSession, **fields) -> User:
+    """`**fields` is a Real Leaderboard System, Level 2 addition -- lets
+    the new segmented-leaderboard tests below seed a `target_country`/
+    `major`/`academic_level` on a user without needing a second, parallel
+    user-factory helper. Every pre-existing call site (no kwargs) behaves
+    identically to before."""
+    defaults = dict(id=uuid.uuid4(), email=f"{uuid.uuid4()}@example.com", full_name="Test Student")
+    defaults.update(fields)
+    user = User(**defaults)
     db.add(user)
     await db.commit()
     await db.refresh(user)
@@ -346,8 +380,19 @@ class TestLeaderboard:
 # Router-level tests (real HTTP, via TestClient)
 # ---------------------------------------------------------------------
 
-
-class TestGamificationRouterHTTP:
+# MOVED TO MODULE LEVEL as a Real Leaderboard System, Level 2 change:
+# originally defined only inside `TestGamificationRouterHTTP` below (as a
+# `self`-scoped fixture), but the new `TestAllTimeRank`/`TestDisplayAlias`/
+# `TestSegmentedLeaderboard`/`TestMonthlyPeriod` classes below ALSO need
+# real HTTP-level coverage (e.g. confirming `PATCH /gamification/alias`'s
+# actual response shape, not just the service function it calls) and a
+# pytest fixture defined inside one test class is not visible to another.
+# Promoting it to module scope changes nothing about its own behavior or
+# `TestGamificationRouterHTTP`'s own usage of it -- module-scoped fixtures
+# are visible to every test in the file, class-based or not, same as
+# before for that class specifically.
+@pytest.fixture
+def client_factory(db_session_factory):
     """Same `client_factory` fixture pattern as `tests/test_analytics.py`'s
     own `TestHeartbeatRouterHTTP` -- a fresh `User` row seeded through
     the SAME `db_session_factory` every other fixture/helper in this
@@ -355,28 +400,28 @@ class TestGamificationRouterHTTP:
     route through it, real `TestClient(app)` HTTP calls against the
     real FastAPI routes."""
 
-    @pytest.fixture
-    def client_factory(self, db_session_factory):
-        async def _build():
-            async with db_session_factory() as setup_session:
-                user = await _make_user(setup_session)
+    async def _build():
+        async with db_session_factory() as setup_session:
+            user = await _make_user(setup_session)
 
-            async def _override_get_db():
-                async with db_session_factory() as session:
-                    yield session
+        async def _override_get_db():
+            async with db_session_factory() as session:
+                yield session
 
-            async def _override_get_current_user():
-                async with db_session_factory() as session:
-                    return await session.get(User, user.id)
+        async def _override_get_current_user():
+            async with db_session_factory() as session:
+                return await session.get(User, user.id)
 
-            app.dependency_overrides[get_db] = _override_get_db
-            app.dependency_overrides[get_current_user] = _override_get_current_user
+        app.dependency_overrides[get_db] = _override_get_db
+        app.dependency_overrides[get_current_user] = _override_get_current_user
 
-            return TestClient(app), user
+        return TestClient(app), user
 
-        yield _build
-        app.dependency_overrides.clear()
+    yield _build
+    app.dependency_overrides.clear()
 
+
+class TestGamificationRouterHTTP:
     async def test_my_stats_for_a_brand_new_user_is_all_zeros_not_a_404(self, client_factory):
         client, _user = await client_factory()
 
@@ -424,3 +469,215 @@ class TestGamificationRouterHTTP:
         assert body[1]["rank"] == 2
         assert body[1]["user_id"] == str(other.id)
         assert body[1]["total_xp"] == 50
+
+
+# ---------------------------------------------------------------------
+# Real Leaderboard System, Level 2: all-time personal rank
+# ---------------------------------------------------------------------
+
+
+class TestAllTimeRank:
+    async def test_rank_and_gap_for_a_user_outside_the_top_list(self, db_session):
+        low = await _make_user(db_session)
+        mid = await _make_user(db_session)
+        high = await _make_user(db_session)
+
+        await gamification_service.add_xp(db_session, high.id, 500, "test")
+        await gamification_service.add_xp(db_session, mid.id, 200, "test")
+        await gamification_service.add_xp(db_session, low.id, 50, "test")
+
+        own = await gamification_service.get_user_alltime_rank(db_session, low.id)
+
+        assert own["total_xp"] == 50
+        assert own["rank"] == 3
+        assert own["total_participants"] == 3
+        assert own["xp_to_next_rank"] == 150, "150 XP separates #3 (50) from #2 (200)"
+
+    async def test_rank_1_has_zero_xp_to_next_rank(self, db_session):
+        user = await _make_user(db_session)
+        await gamification_service.add_xp(db_session, user.id, 10, "test")
+
+        own = await gamification_service.get_user_alltime_rank(db_session, user.id)
+
+        assert own["rank"] == 1
+        assert own["xp_to_next_rank"] == 0
+
+    async def test_brand_new_user_with_zero_xp_still_gets_a_real_rank(self, db_session):
+        other = await _make_user(db_session)
+        await gamification_service.add_xp(db_session, other.id, 100, "test")
+        brand_new = await _make_user(db_session)
+
+        own = await gamification_service.get_user_alltime_rank(db_session, brand_new.id)
+
+        assert own["total_xp"] == 0
+        assert own["rank"] == 2
+        assert own["total_participants"] == 2
+
+    async def test_http_leaderboard_me_route(self, db_session_factory, client_factory):
+        client, user = await client_factory()
+        async with db_session_factory() as session:
+            other = await _make_user(session)
+            await gamification_service.add_xp(session, other.id, 999, "test")
+            await gamification_service.add_xp(session, user.id, 10, "test")
+
+        response = client.get("/api/v1/gamification/leaderboard/me")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["total_xp"] == 10
+        assert body["rank"] == 2
+        assert body["total_participants"] == 2
+        assert body["xp_to_next_rank"] == 989
+
+
+# ---------------------------------------------------------------------
+# Real Leaderboard System, Level 2: display alias
+# ---------------------------------------------------------------------
+
+
+class TestDisplayAlias:
+    async def test_alias_overrides_full_name_on_the_leaderboard(self, db_session_factory, client_factory):
+        client, user = await client_factory()
+        async with db_session_factory() as session:
+            await gamification_service.add_xp(session, user.id, 100, "test")
+
+        patch_response = client.patch("/api/v1/gamification/alias", json={"alias": "Nightowl42"})
+        assert patch_response.status_code == 200
+        assert patch_response.json() == {"display_alias": "Nightowl42", "display_name": "Nightowl42"}
+
+        leaderboard_response = client.get("/api/v1/gamification/leaderboard")
+        body = leaderboard_response.json()
+        assert body[0]["display_name"] == "Nightowl42", "the real full_name must NOT appear once an alias is set"
+
+    async def test_clearing_the_alias_reverts_to_the_real_name_fallback_chain(self, db_session_factory, client_factory):
+        client, user = await client_factory()
+        async with db_session_factory() as session:
+            await gamification_service.add_xp(session, user.id, 100, "test")
+
+        client.patch("/api/v1/gamification/alias", json={"alias": "Temp Alias"})
+        clear_response = client.patch("/api/v1/gamification/alias", json={"alias": None})
+
+        assert clear_response.status_code == 200
+        assert clear_response.json()["display_alias"] is None
+        assert clear_response.json()["display_name"] == "Test Student", "reverts to User.full_name once cleared"
+
+    async def test_whitespace_only_alias_is_normalized_to_cleared_not_stored_literally(
+        self, db_session_factory, client_factory
+    ):
+        client, user = await client_factory()
+
+        response = client.patch("/api/v1/gamification/alias", json={"alias": "   "})
+
+        assert response.status_code == 200
+        assert response.json()["display_alias"] is None
+
+
+# ---------------------------------------------------------------------
+# Real Leaderboard System, Level 2: segmented (country/major/academic_level)
+# ---------------------------------------------------------------------
+
+
+class TestSegmentedLeaderboard:
+    async def test_country_filter_excludes_non_matching_users(self, db_session):
+        egypt_user = await _make_user(db_session, target_country="Egypt")
+        canada_user = await _make_user(db_session, target_country="Canada")
+        await gamification_service.add_xp(db_session, egypt_user.id, 50, "test")
+        await gamification_service.add_xp(db_session, canada_user.id, 500, "test")
+
+        results = await gamification_service.get_leaderboard(db_session, limit=10, country="Egypt")
+
+        assert [p.user_id for p in results] == [egypt_user.id]
+
+    async def test_major_filter_excludes_non_matching_users(self, db_session):
+        cs_user = await _make_user(db_session, major="Computer Science")
+        bio_user = await _make_user(db_session, major="Biology")
+        await gamification_service.add_xp(db_session, cs_user.id, 10, "test")
+        await gamification_service.add_xp(db_session, bio_user.id, 10, "test")
+
+        results = await gamification_service.get_leaderboard(db_session, limit=10, major="Computer Science")
+
+        assert [p.user_id for p in results] == [cs_user.id]
+
+    async def test_no_filters_returns_everyone_unfiltered(self, db_session):
+        a = await _make_user(db_session, target_country="Egypt")
+        b = await _make_user(db_session, target_country="Canada")
+        await gamification_service.add_xp(db_session, a.id, 10, "test")
+        await gamification_service.add_xp(db_session, b.id, 20, "test")
+
+        results = await gamification_service.get_leaderboard(db_session, limit=10)
+
+        assert len(results) == 2
+
+    async def test_http_leaderboard_route_accepts_country_query_param(self, db_session_factory, client_factory):
+        client, user = await client_factory()
+        async with db_session_factory() as session:
+            db_user = await session.get(User, user.id)
+            db_user.target_country = "Egypt"
+            session.add(db_user)
+            await session.commit()
+            other = await _make_user(session, target_country="Canada")
+            await gamification_service.add_xp(session, user.id, 10, "test")
+            await gamification_service.add_xp(session, other.id, 999, "test")
+
+        response = client.get("/api/v1/gamification/leaderboard?country=Egypt")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert len(body) == 1
+        assert body[0]["user_id"] == str(user.id)
+
+
+# ---------------------------------------------------------------------
+# Real Leaderboard System, Level 2: monthly period
+# ---------------------------------------------------------------------
+
+
+class TestMonthlyPeriod:
+    async def test_add_xp_increments_monthly_xp_alongside_total_and_weekly(self, db_session):
+        user = await _make_user(db_session)
+
+        profile, _ = await gamification_service.add_xp(db_session, user.id, 40, "test")
+
+        assert profile.total_xp == 40
+        assert profile.weekly_xp == 40
+        assert profile.monthly_xp == 40
+
+    async def test_monthly_leaderboard_orders_by_monthly_xp_descending(self, db_session):
+        low = await _make_user(db_session)
+        high = await _make_user(db_session)
+        await gamification_service.add_xp(db_session, low.id, 10, "test")
+        await gamification_service.add_xp(db_session, high.id, 90, "test")
+
+        results = await gamification_service.get_monthly_leaderboard(db_session, limit=10)
+
+        assert [p.user_id for p in results] == [high.id, low.id]
+
+    async def test_reset_monthly_leaderboard_zeroes_monthly_xp_but_not_total_or_weekly(self, db_session):
+        user = await _make_user(db_session)
+        await gamification_service.add_xp(db_session, user.id, 75, "test")
+
+        summary = await gamification_service.reset_monthly_leaderboard(db_session)
+        assert summary == {"reset": 1}
+
+        profile = await gamification_service.get_or_create_profile(db_session, user.id)
+        assert profile.monthly_xp == 0
+        assert profile.total_xp == 75, "the monthly reset must never touch the permanent all-time score"
+        assert profile.weekly_xp == 75, "the monthly reset must never touch the independent weekly counter"
+
+    async def test_http_months_leaderboard_route_shape(self, db_session_factory, client_factory):
+        client, user = await client_factory()
+        async with db_session_factory() as session:
+            other = await _make_user(session)
+            await gamification_service.add_xp(session, user.id, 300, "test")
+            await gamification_service.add_xp(session, other.id, 50, "test")
+
+        response = client.get("/api/v1/gamification/months/leaderboard")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["monthly_xp"] == 300
+        assert body["rank"] == 1
+        assert body["total_participants"] == 2
+        assert body["xp_to_next_rank"] == 0
+        assert body["top_members"][0]["monthly_xp"] == 300
+        assert body["top_members"][1]["monthly_xp"] == 50

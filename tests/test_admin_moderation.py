@@ -41,7 +41,6 @@ from app.db.session import get_db
 from app.main import app
 from app.models.badges import Badge, GamificationProfile, UserBadge
 from app.models.enums import StudentVideoStatus
-from app.models.notification import Notification
 from app.models.student_videos import StudentVideo
 from app.models.user import User
 
@@ -129,6 +128,20 @@ CREATE TABLE student_videos (
 """
 
 
+_CREATE_NOTIFICATIONS_TABLE_SQL = """
+CREATE TABLE notifications (
+    id VARCHAR(36) PRIMARY KEY,
+    user_id VARCHAR(36) NOT NULL,
+    type VARCHAR(50) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    message TEXT NOT NULL,
+    is_read BOOLEAN NOT NULL DEFAULT 0,
+    payload TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
+
 @pytest_asyncio.fixture
 async def db_session_factory():
     engine = create_async_engine(
@@ -145,18 +158,29 @@ async def db_session_factory():
         # service.add_xp` (added in the earlier Gamification milestone)
         # AND `notification_service.create_notification` (this step) --
         # neither of those tables previously existed in this file's own
-        # fixture. Both are added here via `Base.metadata.create_all`
-        # directly (none of the three new models have a `JSONB`/`ARRAY`
-        # column, so the ORM's own real DDL compiles fine on SQLite
-        # unmodified) -- same "update the dependent fixture" discipline
-        # already established in `tests/test_analytics.py`'s own fixture.
+        # fixture.
+        #
+        # DISCLOSED, NECESSARY FIX (found running the full suite during
+        # the Real Leaderboard System task -- unrelated to that task's own
+        # changes, a pre-existing regression from an EARLIER migration):
+        # the comment that used to be here claimed "none of the three new
+        # models have a JSONB/ARRAY column, so the ORM's own real DDL
+        # compiles fine on SQLite unmodified" -- true when written, no
+        # longer true since migration 0033 added a real `JSONB` column,
+        # `Notification.payload` (Actionable Notifications), which
+        # SQLite's DDL compiler cannot render (`CompileError`). Same fix
+        # as `_CREATE_USERS_TABLE_SQL` above already uses for `User.skills`
+        # (a Postgres `ARRAY`): a raw-SQL `CREATE TABLE`, `payload` as
+        # plain `TEXT` -- only DDL compilation of the `JSONB` type itself
+        # failed; ORM-level reads/writes of the `dict | None` Python value
+        # still round-trip fine against a TEXT column.
+        await conn.execute(text(_CREATE_NOTIFICATIONS_TABLE_SQL))
         await conn.run_sync(
             Base.metadata.create_all,
             tables=[
                 GamificationProfile.__table__,
                 Badge.__table__,
                 UserBadge.__table__,
-                Notification.__table__,
             ],
         )
 

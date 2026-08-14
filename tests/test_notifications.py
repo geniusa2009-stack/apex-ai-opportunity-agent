@@ -94,13 +94,44 @@ CREATE TABLE user_bookmarks (
 """
 
 
+_CREATE_NOTIFICATIONS_TABLE_SQL = """
+CREATE TABLE notifications (
+    id VARCHAR(36) PRIMARY KEY,
+    user_id VARCHAR(36) NOT NULL,
+    type VARCHAR(50) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    message TEXT NOT NULL,
+    is_read BOOLEAN NOT NULL DEFAULT 0,
+    payload TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
+
 @pytest_asyncio.fixture
 async def db_session_factory():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", poolclass=StaticPool)
     async with engine.begin() as conn:
         await conn.execute(text(_CREATE_USERS_TABLE_SQL))
         await conn.execute(text(_CREATE_USER_BOOKMARKS_TABLE_SQL))
-        await conn.run_sync(Base.metadata.create_all, tables=[Notification.__table__])
+        # DISCLOSED, NECESSARY FIX (found running the full suite during the
+        # Real Leaderboard System task -- unrelated to that task's own
+        # changes, a pre-existing regression from an EARLIER migration):
+        # this module's own docstring above claims "`Notification` has no
+        # `JSONB`/`ARRAY` column" -- true when originally written, but no
+        # longer true since migration 0033 added `Notification.payload` as
+        # a real `JSONB` column (Actionable Notifications). `Base.metadata.
+        # create_all` on `Notification.__table__` therefore now fails to
+        # even compile on SQLite (`CompileError: ... can't render element
+        # of type JSONB`), the same "Postgres-only DDL, SQLite's DDL
+        # compiler chokes on it" problem `_CREATE_USERS_TABLE_SQL` above
+        # already exists to work around for `User.skills` (ARRAY). Same
+        # fix, applied here: a raw-SQL `CREATE TABLE`, `payload` as a plain
+        # `TEXT` column (JSON-serializable dicts still round-trip through
+        # SQLAlchemy's ORM-level ``Mapped[dict | None]`` typing fine against
+        # a TEXT column at the DML level -- it's only DDL compilation of
+        # the `JSONB` type itself that SQLite's compiler can't do).
+        await conn.execute(text(_CREATE_NOTIFICATIONS_TABLE_SQL))
 
     session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     yield session_factory

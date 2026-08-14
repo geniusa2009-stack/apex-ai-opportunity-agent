@@ -1,7 +1,7 @@
 import datetime as dt
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class BadgeOut(BaseModel):
@@ -97,3 +97,72 @@ class WeeklyLeagueOut(BaseModel):
     league_size: int
     xp_to_next_rank: int
     top_members: list[WeeklyLeagueEntryOut]
+
+
+class AllTimeRankOut(BaseModel):
+    """`GET /gamification/leaderboard/me` response -- Real Leaderboard
+    System, Level 2 addition. Mirrors `WeeklyLeagueOut`'s own "your
+    standing" fields exactly, but against the all-time `total_xp` counter
+    with NO league scoping (there is no all-time league concept, unlike
+    the weekly system) -- so a user outside `GET /gamification/
+    leaderboard`'s top-10 list can still see their real rank and gap to
+    the next spot, same problem `WeeklyLeagueOut.rank`/`.xp_to_next_rank`
+    already solve for the weekly leaderboard."""
+
+    total_xp: int
+    rank: int
+    total_participants: int
+    xp_to_next_rank: int
+
+
+class AliasUpdateIn(BaseModel):
+    """`PATCH /gamification/alias` request body -- Real Leaderboard
+    System, Level 2 addition. `alias=None` (or an all-whitespace string,
+    normalized to `None` by the router) explicitly CLEARS a previously-set
+    alias, reverting the caller's leaderboard `display_name` back to the
+    real-name/email fallback chain -- same "`None` is a meaningful,
+    intentional value, not merely absent" posture `UserProfileUpdate`
+    already uses elsewhere in this codebase, except here `None` means
+    "clear it" rather than "leave unchanged" (this endpoint has exactly
+    one field, so there is no other field a partial update needs to
+    protect from being silently nulled)."""
+
+    alias: str | None = Field(default=None, max_length=60)
+
+
+class AliasUpdateOut(BaseModel):
+    """`PATCH /gamification/alias` response -- confirms the alias that
+    was actually stored (post-normalization) and the `display_name` a
+    leaderboard will now render for this user, so the caller never has to
+    guess whether their change took effect or re-derive the fallback
+    chain client-side."""
+
+    display_alias: str | None
+    display_name: str
+
+
+class MonthlyLeaderboardEntryOut(BaseModel):
+    """One row of `GET /gamification/months/leaderboard` -- Real
+    Leaderboard System, Level 2 addition. Same shape as
+    `WeeklyLeagueEntryOut`, ranked by `monthly_xp` instead of
+    `weekly_xp`."""
+
+    rank: int
+    user_id: UUID
+    display_name: str
+    monthly_xp: int
+
+
+class MonthlyLeaderboardOut(BaseModel):
+    """`GET /gamification/months/leaderboard` response -- Real
+    Leaderboard System, Level 2 addition. Mirrors `WeeklyLeagueOut`'s own
+    shape exactly (own standing + top members), but global (no league
+    scoping -- there is no monthly league/promotion concept, only a
+    monthly XP counter and period reset; see `app/models/badges.py`'s own
+    comment on `GamificationProfile.monthly_xp` for why)."""
+
+    monthly_xp: int
+    rank: int
+    total_participants: int
+    xp_to_next_rank: int
+    top_members: list[MonthlyLeaderboardEntryOut]

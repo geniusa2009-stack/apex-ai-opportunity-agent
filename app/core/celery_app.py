@@ -117,4 +117,16 @@ celery_app.conf.beat_schedule = {
         "task": "app.workers.league_tasks.reset_weekly_leagues_task",
         "schedule": crontab(day_of_week=1, hour=0, minute=0),
     },
+    # Real Leaderboard System, Level 2 -- monthly XP period reset. 1st of
+    # the month, 00:00 UTC (`crontab(day_of_month=1, ...)` -- NOT a
+    # `day_of_week` cron like the weekly entry above; a month has no
+    # fixed weekday). No promote/demote step, unlike the weekly entry --
+    # see `gamification_service.reset_monthly_leaderboard`'s own
+    # docstring for why. `leaderboard.html`'s own monthly countdown must
+    # stay in sync with this exact schedule -- see that page's own
+    # comment on its countdown constant.
+    "reset-monthly-leaderboard": {
+        "task": "app.workers.league_tasks.reset_monthly_leaderboard_task",
+        "schedule": crontab(day_of_month=1, hour=0, minute=0),
+    },
 }
