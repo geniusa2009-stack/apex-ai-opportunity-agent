@@ -15,6 +15,7 @@ from app.models.application_tracker import ApplicationTracker
 from app.models.badges import Badge, GamificationProfile, UserBadge
 from app.models.bookmark import UserBookmark
 from app.models.budget_planner import BudgetPlanner
+from app.models.career_compass import CareerCompassResult
 from app.models.chat import ChatMessage, ChatParticipant, ChatRoom
 from app.models.deadline_alert import DeadlineAlert
 from app.models.decision_matrix import DecisionMatrix

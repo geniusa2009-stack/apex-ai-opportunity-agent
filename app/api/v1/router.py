@@ -19,6 +19,7 @@ from app.api.v1.endpoints.autofill import router as autofill_router
 # truly deleted (a sandbox restriction on `rm`, disclosed there).
 from app.api.v1.endpoints.bookmarks import router as bookmarks_router
 from app.api.v1.endpoints.budget_planner import router as budget_planner_router
+from app.api.v1.endpoints.career_compass import router as career_compass_router
 from app.api.v1.endpoints.chat import router as chat_router
 from app.api.v1.endpoints.coach import router as coach_router
 from app.api.v1.endpoints.competition_scout import router as competition_scout_router
@@ -263,3 +264,11 @@ api_router.include_router(live_sessions_router)
 # registration order). Placed last for the same low-stakes reason as
 # `mentorship_router` immediately above: most recently added router.
 api_router.include_router(ai_cv_builder_router)
+# `career_compass_router` (Career Compass -- real deterministic RIASEC
+# interest inventory) -- both its paths (`GET /career-compass/questions`,
+# `POST /career-compass/submit`, `GET /career-compass/me`) live under a
+# literal `/career-compass` prefix no other router in this codebase uses
+# at all, so registration order here is provably irrelevant, same posture
+# as `mentorship_router`/`ai_cv_builder_router` above. Placed last for the
+# same low-stakes reason: most recently added router.
+api_router.include_router(career_compass_router)
