@@ -212,6 +212,50 @@ class AcademicLevel(str, enum.Enum):
     PHD = "phd"
 
 
+class Gender(str, enum.Enum):
+    """A student's self-reported gender (Real Age/Academic-Year/Gender
+    Opportunity Filtering step).
+
+    DISCLOSED, NECESSARY ADDITION: confirmed via a full-repo grep
+    (`grep -rn -i gender app/`) that no field of this name, or concept
+    like it, existed anywhere on `User` or `Opportunity` before this --
+    genuinely net-new, not a rename or an extension of something that
+    already existed (unlike `age`/`academic_level`, which this same step
+    confirmed were already real and already wired through
+    `PATCH /users/me`).
+
+    Lives on `User.gender` (app/models/user.py) and
+    `Opportunity.target_gender` (app/models/opportunity.py, single value
+    -- NOT an array, unlike `target_academic_levels` -- an opportunity's
+    gender restriction, when it has one at all, is exactly one of these
+    two values, never "male AND female," which would just be
+    "unrestricted," i.e. `NULL`). Nullable everywhere it's used, same
+    self-reported/unverified trust model as every other `User` profile
+    field on this codebase (`academic_level`, `target_country`, ...) --
+    a user who hasn't set this is simply excluded from any gender-based
+    filter, never defaulted to a guess.
+
+    Two values, not more: this platform's own real, currently-scraped
+    opportunity eligibility language (Egyptian scholarship/internship
+    postings) only ever restricts by a binary male/female distinction
+    when it restricts at all -- confirmed via `aggregator_service.py`'s
+    own extraction prompt and a scraper-pipeline read before adding this
+    field, which found no third category referenced anywhere in this
+    codebase's real data model. A future step can extend this enum
+    (an additive Postgres `ALTER TYPE ... ADD VALUE` migration) if a
+    real need for more values is ever found -- not invented speculatively
+    here.
+
+    Native Postgres ENUM type (`native_enum=True`) -- matches
+    `AcademicLevel`/`UserRole`'s own precedent (a small, stable
+    classification enum), not the lifecycle-status enums' looser
+    plain-String posture.
+    """
+
+    MALE = "male"
+    FEMALE = "female"
+
+
 class MentorshipStatus(str, enum.Enum):
     """Lifecycle state of a `MentorshipRelation` (Hyper-Personalized
     Platform step's "Mentorship Relation Model (Maturity 7)").

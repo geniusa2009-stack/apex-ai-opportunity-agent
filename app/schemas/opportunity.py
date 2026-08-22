@@ -4,7 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
-from app.models.enums import AcademicLevel, OpportunityType, SourceType
+from app.models.enums import AcademicLevel, Gender, OpportunityType, SourceType
 
 T = TypeVar("T")
 
@@ -65,6 +65,18 @@ class OpportunityOut(BaseModel):
     # will have `target_academic_levels: null` until either a future
     # aggregator-prompt update or manual admin curation populates it.
     target_academic_levels: list[AcademicLevel] | None
+    # Real Age/Academic-Year/Gender Opportunity Filtering step additions.
+    # Same disclosed scope boundary as `target_academic_levels` directly
+    # above: exposed here for reads, NOT added to `OpportunityCreate`
+    # below -- the real Gemini aggregator pipeline has not been taught to
+    # extract a numeric age range or a gender restriction from a scraped
+    # posting (confirmed via a direct read of that prompt/schema). Every
+    # existing row will have these as `null` (unrestricted) until a
+    # future aggregator-prompt update or manual admin curation populates
+    # them.
+    min_age: int | None
+    max_age: int | None
+    target_gender: Gender | None
     source: SourceOut
     created_at: datetime
     updated_at: datetime

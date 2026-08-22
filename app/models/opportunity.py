@@ -3,13 +3,13 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
-from app.models.enums import AcademicLevel, OpportunityType
+from app.models.enums import AcademicLevel, Gender, OpportunityType
 from app.models.mixins import TimestampMixin
 
 if TYPE_CHECKING:
@@ -145,6 +145,52 @@ class Opportunity(Base, TimestampMixin):
                 create_type=False,
                 values_callable=lambda enum_cls: [e.value for e in enum_cls],
             )
+        ),
+        nullable=True,
+    )
+
+    # --- Real Age/Academic-Year/Gender Opportunity Filtering step ---
+    # `min_age`/`max_age` -- genuinely new: this table previously had no
+    # numeric age-range concept at all, only the coarse free-text
+    # `target_age_group` bucket above (confirmed via a full-model read
+    # before adding these). Plain nullable `Integer` columns -- matches
+    # `User.age`'s own type exactly (Integer), the field these are
+    # compared against in `opportunities.py`'s new eligibility filter --
+    # deliberately NOT a native range type (Postgres `int4range`); two
+    # plain nullable integers keep the "missing means unrestricted"
+    # semantics trivial to express independently for each bound (a real
+    # opportunity might have a minimum with no maximum, or vice versa),
+    # which a single range column would make more awkward to express as
+    # "no lower bound"/"no upper bound" via SQLAlchemy's ORM layer.
+    # `None` on either column means that particular bound is unrestricted
+    # -- the same "missing signal excludes nothing" posture already
+    # established for `target_age_group.is_(None)`/`target_academic_levels.is_(None)`.
+    min_age: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_age: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # `target_gender` -- see `Gender`'s own docstring (app/models/enums.py)
+    # for why this is a single nullable value, not an array. `NULL` means
+    # no gender restriction (open to everyone), matching every other
+    # eligibility field's NULL convention on this model.
+    #
+    # DISCLOSED SCOPE BOUNDARY, same posture as `target_academic_levels`
+    # above: NOT added to `OpportunityCreate`/`AIExtractedOpportunityFields`
+    # in this pass -- `aggregator_service.py`'s own Gemini extraction
+    # prompt has not been taught to extract a gender-restriction signal
+    # from a scraped posting (confirmed via a direct read of that
+    # prompt/schema before writing this column). Every row this schema
+    # serializes will have `target_gender: null` (i.e. unrestricted, the
+    # correct default for existing data) until either a future
+    # aggregator-prompt update or manual admin curation populates it --
+    # same real, honest limitation already disclosed for
+    # `target_academic_levels`, not a new one this step introduces.
+    target_gender: Mapped[Gender | None] = mapped_column(
+        SAEnum(
+            Gender,
+            name="gender",
+            native_enum=True,
+            create_type=False,
+            values_callable=lambda enum_cls: [e.value for e in enum_cls],
         ),
         nullable=True,
     )

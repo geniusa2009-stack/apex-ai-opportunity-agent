@@ -1,6 +1,6 @@
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -23,6 +23,7 @@ async def semantic_search(
     query: str,
     limit: int = 10,
     min_similarity: float | None = None,
+    extra_filters: list[ColumnElement[bool]] | None = None,
 ) -> list[OpportunitySearchResult]:
     """Semantic search over verified opportunities using pgvector cosine
     similarity.
@@ -32,6 +33,17 @@ async def semantic_search(
     REST endpoint and the chatbot's search tool (Step 3.5) -- the pgvector
     query construction lives in exactly one place instead of being
     copy-pasted across two call sites and risking drift between them.
+
+    `extra_filters` -- Real Age/Academic-Year/Gender Opportunity
+    Filtering step addition. Optional, defaults to `None` (no extra
+    filters, i.e. this function's exact pre-existing behavior) so the
+    chatbot's search tool (`app/services/chatbot.py`, which has no signed-
+    in user's profile readily available in its own closure) keeps working
+    completely unchanged -- only `/opportunities/search`'s own REST
+    endpoint passes real eligibility filters (built the same way
+    `/opportunities/`'s listing endpoint does, via
+    `opportunities.py::_build_eligibility_filters`) when the caller is
+    signed in.
 
     Note on index: there's no ANN index (ivfflat/hnsw) on
     `opportunities.embedding` yet (deliberately deferred back in Step 1.2
@@ -62,6 +74,7 @@ async def semantic_search(
             Opportunity.is_verified.is_(True),
             Opportunity.embedding.is_not(None),
             similarity >= threshold,
+            *(extra_filters or []),
         )
         .order_by(distance.asc())
         .limit(limit)

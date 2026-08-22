@@ -82,6 +82,7 @@ CREATE TABLE users (
     age_group VARCHAR(50),
     age INTEGER,
     academic_level VARCHAR(20),
+    gender VARCHAR(10),
     bio TEXT,
     search_vector TEXT,
     role VARCHAR(20) NOT NULL DEFAULT 'student',
@@ -155,6 +156,9 @@ CREATE TABLE opportunities (
     is_local_egypt BOOLEAN NOT NULL DEFAULT 0,
     target_age_group VARCHAR(50),
     target_academic_levels TEXT,
+    min_age INTEGER,
+    max_age INTEGER,
+    target_gender VARCHAR(10),
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 )
@@ -283,7 +287,13 @@ async def _make_opportunity(db: AsyncSession, *, source_id: uuid.UUID, **overrid
         # `"SCHOLARSHIP"`), not `.value` (`"scholarship"`) -- confirmed
         # directly (a lowercase raw insert here raised a real
         # `LookupError` on read-back the first time this test ran).
-        "type": "SCHOLARSHIP",
+        # Lowercase, not the Python enum MEMBER NAME -- pre-existing bug in
+        # this fixture found while running the full suite for the Real
+        # Age/Academic-Year/Gender Opportunity Filtering step (unrelated to
+        # that step's own changes): `Opportunity.type`'s own column comment
+        # already documents the real `values_callable` fix requiring
+        # lowercase values here; this fixture just hadn't been updated.
+        "type": "scholarship",
         "deadline": None,
         "is_local_egypt": True,
         "target_age_group": None,

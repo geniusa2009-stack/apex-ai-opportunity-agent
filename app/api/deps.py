@@ -96,6 +96,47 @@ async def get_current_user(
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
+# Separate `HTTPBearer(auto_error=False)` instance -- NOT the same
+# `_bearer_scheme` object `get_current_user` uses above, which has
+# `auto_error=True` and raises its own 401 the moment the header is
+# missing/malformed, before this dependency ever runs. An endpoint that
+# wants to stay usable by BOTH signed-out and signed-in callers (Real
+# Age/Academic-Year/Gender Opportunity Filtering step's own explicit
+# "additive -- don't break the public unauthenticated listing"
+# requirement) needs a variant that treats "no credentials at all" as a
+# valid, non-error case, not a rejection.
+_bearer_scheme_optional = HTTPBearer(auto_error=False)
+
+
+async def get_current_user_optional(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer_scheme_optional)],
+    db: DbSession,
+) -> User | None:
+    """Same resolution as `get_current_user` when a valid bearer token IS
+    present; returns `None` (never raises) for every case that would
+    otherwise be a 401/403 -- no `Authorization` header at all, a
+    malformed/expired/invalid token, or an inactive user. An endpoint
+    using this dependency must treat `None` as "behave exactly like the
+    fully public, unauthenticated case," not as an error condition --
+    the whole point of this dependency is to make personalization
+    ADDITIVE on top of an endpoint that already works with no identity
+    at all, per this step's own explicit requirement.
+    """
+    if credentials is None:
+        return None
+    try:
+        token_payload = decode_supabase_access_token(credentials.credentials)
+    except TokenPayloadError:
+        return None
+
+    user = await _resolve_or_provision_user(token_payload, db)
+    if not user.is_active:
+        return None
+    return user
+
+
+CurrentUserOptional = Annotated[User | None, Depends(get_current_user_optional)]
+
 
 # --- English-Only Gamified Real-time Chat ---
 #

@@ -68,6 +68,7 @@ CREATE TABLE users (
     age_group VARCHAR(50),
     age INTEGER,
     academic_level VARCHAR(20),
+    gender VARCHAR(10),
     bio TEXT,
     search_vector TEXT,
     role VARCHAR(20) NOT NULL DEFAULT 'student',

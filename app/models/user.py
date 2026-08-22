@@ -7,7 +7,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, TSVECTOR, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
-from app.models.enums import AcademicLevel, UserRole
+from app.models.enums import AcademicLevel, Gender, UserRole
 from app.models.mixins import TimestampMixin
 
 if TYPE_CHECKING:
@@ -136,6 +136,20 @@ class User(Base, TimestampMixin):
     # `PATCH /users/me` wiring as every field above.
     academic_level: Mapped[AcademicLevel | None] = mapped_column(
         SAEnum(AcademicLevel, name="academic_level", native_enum=True),
+        nullable=True,
+    )
+
+    # --- Added for the Real Age/Academic-Year/Gender Opportunity
+    # Filtering step ---
+    # `gender` -- see `Gender`'s own docstring (app/models/enums.py) for
+    # the full "confirmed genuinely net-new" disclosure. Nullable,
+    # self-reported, unverified -- same trust model as every other
+    # profile field on this model -- and immediately settable via the
+    # existing `PATCH /users/me` (see `app/schemas/user.py`'s
+    # `UserProfileUpdate`), no new endpoint needed, same precedent as
+    # `target_country`/`age_group`/`age`/`bio` above.
+    gender: Mapped[Gender | None] = mapped_column(
+        SAEnum(Gender, name="gender", native_enum=True),
         nullable=True,
     )
 

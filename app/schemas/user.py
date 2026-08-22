@@ -3,7 +3,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
-from app.models.enums import AcademicLevel, UserRole
+from app.models.enums import AcademicLevel, Gender, UserRole
 
 # `UserCreate` and `Token` were removed as part of the Supabase
 # integration step -- both existed solely for the local `POST
@@ -63,6 +63,12 @@ class UserOut(BaseModel):
     # nullable profile field above it.
     role: UserRole
 
+    # Added for the Real Age/Academic-Year/Gender Opportunity Filtering
+    # step -- see app/models/user.py's comment on this column and
+    # `Gender`'s own docstring (app/models/enums.py) for the "confirmed
+    # genuinely net-new" disclosure.
+    gender: Gender | None
+
 
 class UserProfileUpdate(BaseModel):
     """PATCH body for updating the profile fields added in Step 3.20.
@@ -112,3 +118,8 @@ class UserProfileUpdate(BaseModel):
     # default" -- a caller who wants to actually change their role must
     # send an explicit `role` value.
     role: UserRole | None = None
+
+    # Added for the Real Age/Academic-Year/Gender Opportunity Filtering
+    # step -- self-reported like every other field on this schema;
+    # `None` means "leave unchanged," same established semantics.
+    gender: Gender | None = None

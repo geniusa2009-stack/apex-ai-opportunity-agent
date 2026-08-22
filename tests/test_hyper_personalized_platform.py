@@ -89,6 +89,7 @@ CREATE TABLE users (
     age_group VARCHAR(50),
     age INTEGER,
     academic_level VARCHAR(20),
+    gender VARCHAR(10),
     bio TEXT,
     search_vector TEXT,
     role VARCHAR(20) NOT NULL DEFAULT 'student',
@@ -140,6 +141,9 @@ CREATE TABLE opportunities (
     is_local_egypt BOOLEAN NOT NULL DEFAULT 0,
     target_age_group VARCHAR(50),
     target_academic_levels TEXT,
+    min_age INTEGER,
+    max_age INTEGER,
+    target_gender VARCHAR(10),
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 )

@@ -272,6 +272,7 @@ CREATE TABLE users (
     age_group VARCHAR(50),
     age INTEGER,
     academic_level VARCHAR(20),
+    gender VARCHAR(10),
     bio TEXT,
     search_vector TEXT,
     role VARCHAR(20) NOT NULL DEFAULT 'student',
@@ -296,6 +297,9 @@ CREATE TABLE chat_rooms (
     id VARCHAR(36) PRIMARY KEY,
     name VARCHAR(255),
     is_group BOOLEAN NOT NULL DEFAULT 0,
+    is_auto_assigned BOOLEAN NOT NULL DEFAULT 0,
+    max_members INTEGER,
+    course_id VARCHAR(36),
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 )
 """
@@ -305,6 +309,9 @@ CREATE TABLE chat_participants (
     room_id VARCHAR(36) NOT NULL,
     user_id VARCHAR(36) NOT NULL,
     joined_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    is_pinned BOOLEAN NOT NULL DEFAULT 0,
+    last_active_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    is_muted BOOLEAN NOT NULL DEFAULT 0,
     PRIMARY KEY (room_id, user_id)
 )
 """
@@ -315,7 +322,8 @@ CREATE TABLE chat_messages (
     room_id VARCHAR(36) NOT NULL,
     sender_id VARCHAR(36) NOT NULL,
     content TEXT NOT NULL,
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    is_bot BOOLEAN NOT NULL DEFAULT 0
 )
 """
 
