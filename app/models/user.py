@@ -135,7 +135,23 @@ class User(Base, TimestampMixin):
     # three coarse free-text buckets. Nullable/self-reported, same
     # `PATCH /users/me` wiring as every field above.
     academic_level: Mapped[AcademicLevel | None] = mapped_column(
-        SAEnum(AcademicLevel, name="academic_level", native_enum=True),
+        # `values_callable` -- disclosed fix, same defect and same fix as
+        # `Opportunity.type`/`.target_academic_levels` (see
+        # app/models/opportunity.py's own comment on this exact issue).
+        # Without it, SQLAlchemy sends the Python enum MEMBER NAME
+        # ("UNIVERSITY") to Postgres instead of `.value` ("university"),
+        # but the native Postgres enum type holds the lowercase VALUES.
+        # Confirmed as a real crash while testing admin-moderation
+        # endpoints: `role` (below), which is NOT NULL with a
+        # `server_default`, made this fire on every single authenticated
+        # request via `get_current_user`'s `User` load -- this is a real,
+        # pre-existing application bug, not a sandbox artifact.
+        SAEnum(
+            AcademicLevel,
+            name="academic_level",
+            native_enum=True,
+            values_callable=lambda enum_cls: [e.value for e in enum_cls],
+        ),
         nullable=True,
     )
 
@@ -149,7 +165,13 @@ class User(Base, TimestampMixin):
     # `UserProfileUpdate`), no new endpoint needed, same precedent as
     # `target_country`/`age_group`/`age`/`bio` above.
     gender: Mapped[Gender | None] = mapped_column(
-        SAEnum(Gender, name="gender", native_enum=True),
+        # `values_callable` -- same disclosed fix as `academic_level` above.
+        SAEnum(
+            Gender,
+            name="gender",
+            native_enum=True,
+            values_callable=lambda enum_cls: [e.value for e in enum_cls],
+        ),
         nullable=True,
     )
 
@@ -216,7 +238,22 @@ class User(Base, TimestampMixin):
     # check stays on `is_superuser` alone; see `UserRole`'s own docstring
     # for why the two are kept as separate, non-overlapping signals.
     role: Mapped[UserRole] = mapped_column(
-        SAEnum(UserRole, name="user_role", native_enum=True),
+        # `values_callable` -- same disclosed fix as `academic_level`/`gender`
+        # above. This column is NOT NULL with a `server_default` (migration
+        # 0031), so unlike the two nullable columns above, this bug fired on
+        # EVERY single `User` load (via `get_current_user`, i.e. nearly every
+        # authenticated request in the app) before this fix -- confirmed as
+        # a real crash (not a hypothesis) while booting the backend to test
+        # the admin-moderation endpoints: any seeded/real user row raised
+        # `LookupError: 'student' is not among the defined enum values.
+        # Enum name: user_role. Possible values: STUDENT, MENTOR` the moment
+        # it was loaded.
+        SAEnum(
+            UserRole,
+            name="user_role",
+            native_enum=True,
+            values_callable=lambda enum_cls: [e.value for e in enum_cls],
+        ),
         nullable=False,
         default=UserRole.STUDENT,
     )
