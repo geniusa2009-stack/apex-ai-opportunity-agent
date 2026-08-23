@@ -72,6 +72,7 @@ CREATE TABLE users (
     bio TEXT,
     search_vector TEXT,
     role VARCHAR(20) NOT NULL DEFAULT 'student',
+    admin_role VARCHAR(20),
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 )
@@ -256,7 +257,17 @@ def client_factory(db_session_factory):
 
 class TestAdminGating:
     """This step's own explicit verification requirement #1: "a standard
-    student receives a 403 Forbidden" on the admin endpoints."""
+    student receives a 403 Forbidden" on the admin endpoints.
+
+    DISCLOSED, DELIBERATE MESSAGE CHANGE (Real Tiered Role System step):
+    both routes below moved from `RequireAdmin` ("Only administrators can
+    perform this action.") to `RequireModerationAccess` ("Requires
+    moderator access or higher.") -- see `app/api/deps.py`'s
+    `_require_admin_rank` and `AdminRole`'s own docstring
+    (app/models/enums.py). The 403 itself is unchanged and still fully
+    covered by these tests; only the detail string changed, updated here
+    to match.
+    """
 
     async def test_standard_student_gets_403_on_review_queue(self, db_session_factory, client_factory):
         async with db_session_factory() as session:
@@ -266,7 +277,7 @@ class TestAdminGating:
         response = client.get("/api/v1/admin/videos/review-queue")
 
         assert response.status_code == 403
-        assert response.json()["detail"] == "Only administrators can perform this action."
+        assert response.json()["detail"] == "Requires moderator access or higher."
 
     async def test_standard_student_gets_403_on_override(self, db_session_factory, client_factory):
         async with db_session_factory() as session:
@@ -280,7 +291,7 @@ class TestAdminGating:
         )
 
         assert response.status_code == 403
-        assert response.json()["detail"] == "Only administrators can perform this action."
+        assert response.json()["detail"] == "Requires moderator access or higher."
 
         # Defense in depth: confirm the 403 genuinely blocked the write,
         # not just the response envelope -- the video must be completely

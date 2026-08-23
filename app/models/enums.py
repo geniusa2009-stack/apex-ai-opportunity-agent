@@ -392,3 +392,89 @@ class UserRole(str, enum.Enum):
 
     STUDENT = "student"
     MENTOR = "mentor"
+
+
+class AdminRole(str, enum.Enum):
+    """Real, ordered moderation/admin tier (Real Tiered Role System step),
+    replacing the "everyone is `is_superuser=True` or nobody" all-or-
+    nothing posture that the live admin-moderation endpoint test (the
+    step immediately before this one) confirmed was the ONLY admin
+    signal in the codebase, with zero writable API to grant it.
+
+    DISCLOSED, IMPORTANT DISTINCTION from `UserRole` immediately above --
+    that enum's own docstring explains it deliberately has no `ADMIN`
+    member specifically to avoid creating "two places that could
+    disagree about whether a given user is an admin." This enum is NOT
+    that mistake repeated: it does not compete with `is_superuser` as an
+    independent yes/no admin signal. Instead, exactly one resolution
+    rule governs both signals together everywhere this enum is checked
+    (`app/api/deps.py`'s `_effective_admin_rank`): a user's effective
+    tier is `OWNER` if EITHER `is_superuser` is `True` OR `admin_role`
+    is `OWNER`, otherwise it's whatever `admin_role` says (or "no tier"
+    if `admin_role` is `None`). `is_superuser` is treated as a legacy/
+    backward-compatible ALIAS for `OWNER`, not a second, independently-
+    checked gate -- so an already-`is_superuser=True` account (there is
+    exactly one path to becoming one today: direct DB access) keeps
+    working exactly as before, with no regression, while every NEW grant
+    going forward happens through this real, tiered, auditable column
+    instead.
+
+    Three tiers, ordered low to high (see `.rank` below -- a real
+    ordering, not just three more booleans):
+
+    - `MODERATOR` -- the entry tier for a new volunteer. Real moderation
+      actions that are reviewable/reversible: view the review queue,
+      approve/reject a flagged video (`override_video_decision` -- can
+      always be called again to correct an earlier decision), view the
+      admin dashboard, lift a chat ban early. Deliberately does NOT get
+      the two actions that permanently destroy data with no undo path
+      (`DELETE /admin/videos/{id}`, `POST .../reject-and-purge-media` --
+      both trigger real, irreversible R2/storage deletion via
+      `task_delete_orphaned_media`, on top of the row mutation/deletion
+      itself). This mirrors ordinary trust-and-safety practice: broad
+      day-to-day moderation judgment calls are fine to delegate widely
+      and immediately; irreversible destructive actions are not, until
+      someone has more standing.
+    - `SENIOR_MODERATOR` -- everything `MODERATOR` can do, PLUS the two
+      destructive actions above. Still cannot grant/revoke roles for
+      other users -- that stays `OWNER`-only, per this step's own
+      explicit design.
+    - `OWNER` -- everything `SENIOR_MODERATOR` can do, plus role
+      management (`PATCH /admin/users/{user_id}/role`,
+      `GET /admin/team`). NOT grantable through that same role-management
+      endpoint (see its own docstring) -- the very first `OWNER` for a
+      deployment is a genuine bootstrapping problem (nobody exists yet
+      who could grant it through an API gated on already having it), so
+      it is deliberately a one-time, disclosed, direct-DB/script step
+      (`scripts/bootstrap_first_owner.py`), not new API surface built for
+      something that happens once per deployment.
+
+    Nullable on `User` (`admin_role`, unlike `UserRole.role`'s NOT NULL
+    `STUDENT` default) -- `None` is a real, common, correct state ("no
+    elevated moderation tier"), not an omission needing a fallback
+    value; nearly every user will correctly have `admin_role IS NULL`
+    forever.
+
+    Native Postgres ENUM type (`native_enum=True`) -- same "small,
+    stable, unlikely-to-change-often classification enum" precedent as
+    `UserRole`/`AcademicLevel` immediately above, not the looser
+    lifecycle-status posture. Uses the same disclosed `values_callable`
+    fix (`app/models/user.py`) already applied to `UserRole`/
+    `AcademicLevel`/`Gender` in the immediately preceding step, from the
+    start -- this enum was never affected by that bug in the first
+    place, by construction.
+    """
+
+    MODERATOR = "moderator"
+    SENIOR_MODERATOR = "senior_moderator"
+    OWNER = "owner"
+
+    @property
+    def rank(self) -> int:
+        """Higher is more privileged. Used for real ">=this tier" checks
+        (`app/api/deps.py`) instead of separate booleans per action."""
+        return {
+            AdminRole.MODERATOR: 1,
+            AdminRole.SENIOR_MODERATOR: 2,
+            AdminRole.OWNER: 3,
+        }[self]

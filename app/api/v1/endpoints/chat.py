@@ -5,7 +5,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel, Field, ValidationError
 
-from app.api.deps import CurrentUser, DbSession, RequireAdmin, get_websocket_user
+from app.api.deps import CurrentUser, DbSession, RequireModerationAccess, get_websocket_user
 from app.core.config import settings
 from app.models.chat import ChatParticipant
 from app.schemas.chat import (
@@ -285,12 +285,15 @@ async def ban_status(current_user: CurrentUser) -> BanStatusOut:
 
 @router.delete("/admin/bans/{user_id}", response_model=UnbanResponse)
 async def admin_unban_user(
-    user_id: uuid.UUID, current_user: CurrentUser, _: RequireAdmin
+    user_id: uuid.UUID, current_user: CurrentUser, _: RequireModerationAccess
 ) -> UnbanResponse:
-    """Admin-only. Student Dashboard & Admin Control Panel step's own
-    literal "Unban Early" action -- "removes the Redis key" for a
-    currently-banned chat user, lifting the ban immediately instead of
-    waiting out its remaining TTL.
+    """Moderator-or-higher (Real Tiered Role System step -- lifting a ban
+    early is reversible/non-destructive, same tier as the review-queue
+    and override actions; see `AdminRole.MODERATOR`'s own docstring).
+    Student Dashboard & Admin Control Panel step's own literal "Unban
+    Early" action -- "removes the Redis key" for a currently-banned chat
+    user, lifting the ban immediately instead of waiting out its
+    remaining TTL.
 
     Routing-precedence check: this path's literal segments
     (`admin`, `bans`, `{user_id}`) share no template with any other

@@ -1,8 +1,15 @@
 """Admin Override Dashboard & AI Decision Correction System.
 
-Three endpoints, all `RequireAdmin`-gated, letting a human administrator
-audit, manually correct, and permanently remove flagged `StudentVideo`
-decisions:
+Four endpoints, letting a human moderator audit, manually correct, and
+permanently remove flagged `StudentVideo` decisions. As of the Real
+Tiered Role System step, these are no longer uniformly `RequireAdmin`
+(`is_superuser`-only)-gated -- `get_review_queue`/`override_video_decision`
+are `RequireModerationAccess` (Moderator tier or higher; reviewable,
+reversible actions), while `delete_video_permanently`/
+`reject_video_and_purge_media` are `RequireSeniorModerationAccess`
+(Senior Moderator tier or higher; both trigger real, irreversible
+storage deletion) -- see `AdminRole`'s own docstring
+(app/models/enums.py) for the full tier reasoning:
 
     GET    /admin/videos/review-queue                    -- paginated queue of flagged videos
     POST   /admin/videos/{video_id}/override             -- manually set a video's final status
@@ -67,7 +74,12 @@ from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import ValidationError
 from sqlalchemy import func, select
 
-from app.api.deps import CurrentUser, DbSession, RequireAdmin
+from app.api.deps import (
+    CurrentUser,
+    DbSession,
+    RequireModerationAccess,
+    RequireSeniorModerationAccess,
+)
 from app.models.enums import StudentVideoStatus
 from app.models.student_videos import StudentVideo
 from app.models.user import User
@@ -156,7 +168,7 @@ def _build_review_item(video: StudentVideo, student_name: str | None) -> AdminVi
 async def get_review_queue(
     db: DbSession,
     current_user: CurrentUser,
-    _: RequireAdmin,
+    _: RequireModerationAccess,
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ) -> PaginatedResponse[AdminVideoReviewOut]:
@@ -210,9 +222,9 @@ async def override_video_decision(
     payload: AdminOverrideRequest,
     current_user: CurrentUser,
     db: DbSession,
-    _: RequireAdmin,
+    _: RequireModerationAccess,
 ) -> AdminOverrideResponse:
-    """Admin-only. Manually sets `video.status` to `payload.target_status`
+    """Moderator-or-higher. Manually sets `video.status` to `payload.target_status`
     (already validated to be `APPROVED` or `REJECTED` at the Pydantic
     layer -- see `AdminOverrideRequest`), flips `admin_override` to
     `True`, and stores `payload.notes` as `admin_notes` -- exactly this
@@ -305,9 +317,13 @@ async def delete_video_permanently(
     video_id: uuid.UUID,
     current_user: CurrentUser,
     db: DbSession,
-    _: RequireAdmin,
+    _: RequireSeniorModerationAccess,
 ) -> None:
-    """Admin-only. Permanently deletes ANY student's `StudentVideo` row --
+    """Senior-Moderator-or-higher (Real Tiered Role System step -- this
+    action triggers real, irreversible R2/storage deletion on top of the
+    row delete itself, which `AdminRole.MODERATOR`'s own docstring
+    explains is deliberately out of scope for the entry tier). Permanently
+    deletes ANY student's `StudentVideo` row --
     see this module's own docstring for why this is a NEW, separate
     endpoint from `override_video_decision`, not a side effect of
     rejecting a video. No ownership check (same posture as
@@ -354,9 +370,11 @@ async def reject_video_and_purge_media(
     payload: AdminRejectAndPurgeRequest,
     current_user: CurrentUser,
     db: DbSession,
-    _: RequireAdmin,
+    _: RequireSeniorModerationAccess,
 ) -> AdminOverrideResponse:
-    """Admin-only. Student Dashboard & Admin Control Panel step's own
+    """Senior-Moderator-or-higher (Real Tiered Role System step -- same
+    "triggers irreversible storage deletion" reasoning as
+    `delete_video_permanently` above). Student Dashboard & Admin Control Panel step's own
     literal "Reject & Delete" action: "Updates the DB to REJECTED, and
     critically, triggers the existing `task_delete_orphaned_media` to
     unpin from IPFS / delete from R2, ensuring zero storage bloat."

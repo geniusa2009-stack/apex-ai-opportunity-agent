@@ -7,7 +7,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, TSVECTOR, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
-from app.models.enums import AcademicLevel, Gender, UserRole
+from app.models.enums import AcademicLevel, AdminRole, Gender, UserRole
 from app.models.mixins import TimestampMixin
 
 if TYPE_CHECKING:
@@ -256,6 +256,26 @@ class User(Base, TimestampMixin):
         ),
         nullable=False,
         default=UserRole.STUDENT,
+    )
+
+    # `admin_role` -- Real Tiered Role System step. See `AdminRole`'s own
+    # docstring (app/models/enums.py) for the full tier design and for
+    # why this is NOT a repeat of the `UserRole`-vs-`is_superuser`
+    # "two disagreeing signals" mistake that enum's own docstring warns
+    # against: `is_superuser` remains the sole legacy `OWNER`-equivalent
+    # alias, and `app/api/deps.py::_effective_admin_rank` is the ONE
+    # place that resolves both signals into a single effective tier.
+    # Nullable, no default -- unlike `role` above, `None` ("no elevated
+    # moderation tier") is correct for the overwhelming majority of
+    # users, not a placeholder needing a fallback value.
+    admin_role: Mapped[AdminRole | None] = mapped_column(
+        SAEnum(
+            AdminRole,
+            name="admin_role",
+            native_enum=True,
+            values_callable=lambda enum_cls: [e.value for e in enum_cls],
+        ),
+        nullable=True,
     )
 
     # lazy="selectin" issues a second batched query instead of a lazy-load,

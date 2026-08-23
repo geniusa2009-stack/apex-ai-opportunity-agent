@@ -64,7 +64,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter
 from sqlalchemy import ColumnElement, func, or_, select
 
-from app.api.deps import CurrentUser, DbSession, RequireAdmin
+from app.api.deps import CurrentUser, DbSession, RequireModerationAccess
 from app.models.enums import StudentVideoStatus
 from app.models.opportunity import Opportunity
 from app.models.student_videos import StudentVideo
@@ -260,26 +260,26 @@ async def get_student_dashboard(current_user: CurrentUser, db: DbSession) -> Stu
 
 
 @router.get("/admin", response_model=AdminDashboardOut)
-async def get_admin_dashboard(current_user: CurrentUser, db: DbSession, _: RequireAdmin) -> AdminDashboardOut:
-    """This step's own literal three-section admin hub.
+async def get_admin_dashboard(
+    current_user: CurrentUser, db: DbSession, _: RequireModerationAccess
+) -> AdminDashboardOut:
+    """Moderator-or-higher. This step's own literal three-section admin
+    hub.
 
     DISCLOSED RBAC FIELD-NAME NOTE (this re-ask's own wording says
     "Check if `current_user.is_admin` is True; if not, raise 403"): this
-    codebase's `User` model has no `is_admin` column -- the real,
+    codebase's `User` model has no `is_admin` column -- the original,
     established admin flag is `User.is_superuser` (see `app/models/
-    user.py`), and `RequireAdmin` (`app/api/deps.py`) already IS exactly
-    that check, wired as a dependency rather than an inline `if`: it
-    reads `current_user.is_superuser` and raises `HTTPException(403,
-    "Only administrators can perform this action.")` if it's falsy --
-    same real, hard 403 this re-ask asks for, just expressed as a
-    reusable dependency (already reused by `admin_moderation.py`'s two
-    action endpoints and `chat.py`'s unban endpoint) instead of a
-    duplicated inline check. Adding a second, parallel `is_admin` boolean
-    column purely to match this literal wording would create two
-    sources of truth for the same fact -- not done here. `current_user`
-    itself is still a required parameter (proves standard authentication
-    already ran via `CurrentUser` = `Depends(get_current_user)`), even
-    though the RBAC decision itself is delegated to `RequireAdmin`.
+    user.py`). As of the Real Tiered Role System step, this specific
+    route is no longer gated on `RequireAdmin` (`is_superuser`-only)
+    directly -- it's gated on `RequireModerationAccess` (Moderator tier
+    or higher, which also still admits any `is_superuser=True` legacy
+    account -- see `app/api/deps.py::_effective_admin_rank`), a purely
+    read-only overview being a reasonable thing to delegate to the entry
+    volunteer tier. `current_user` itself is still a required parameter
+    (proves standard authentication already ran via `CurrentUser` =
+    `Depends(get_current_user)`), even though the RBAC decision itself is
+    delegated to `RequireModerationAccess`.
     """
 
     # --- UGC Moderation Queue ---

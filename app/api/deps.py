@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import SupabaseTokenPayload, TokenPayloadError, decode_supabase_access_token
 from app.db.session import get_db
+from app.models.enums import AdminRole
 from app.models.user import User
 from app.services import coach_service
 
@@ -242,3 +243,65 @@ async def require_admin(current_user: CurrentUser) -> None:
 
 
 RequireAdmin = Annotated[None, Depends(require_admin)]
+
+
+# --- Real Tiered Role System step ---
+#
+# `_effective_admin_rank` is the ONE place in this codebase that resolves
+# `is_superuser` and `admin_role` into a single effective tier -- see
+# `AdminRole`'s own docstring (app/models/enums.py) for why this single-
+# resolution-point design is what keeps this from becoming the exact
+# "two places that could disagree about admin status" problem that
+# enum's own docstring (and `UserRole`'s, before it) explicitly warns
+# against. `is_superuser=True` is treated as a legacy alias for `OWNER`
+# rank (rank 3) -- the one, and only, pre-existing admin account created
+# via direct DB access before this step keeps working exactly as before,
+# with zero regression, while every grant from this step forward goes
+# through `admin_role` instead. `require_admin`/`RequireAdmin` above are
+# UNCHANGED and continue to gate every other `is_superuser`-only surface
+# in this codebase (course authoring, media upload, the original
+# `GET /dashboards/admin` check) exactly as before -- this step's own
+# scope is the six confirmed admin-moderation/chat-ban routes plus the
+# two new role-management routes, not a rewrite of every existing admin
+# gate in the app.
+def _effective_admin_rank(user: User) -> int:
+    if user.is_superuser:
+        return AdminRole.OWNER.rank
+    if user.admin_role is not None:
+        return user.admin_role.rank
+    return 0
+
+
+def _require_admin_rank(minimum: AdminRole) -> Callable[..., Coroutine[None, None, None]]:
+    """Factory mirroring `require_tokens`'s own factory shape immediately
+    above -- returns a dependency that 403s unless the current user's
+    effective tier (`_effective_admin_rank`) is at least `minimum`."""
+
+    async def _dependency(current_user: CurrentUser) -> None:
+        if _effective_admin_rank(current_user) < minimum.rank:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Requires {minimum.value.replace('_', ' ')} access or higher.",
+            )
+
+    return _dependency
+
+
+# Gates the four already-live moderation actions this step's own design
+# (Step 1) decided are safe to delegate at the entry tier: viewing the
+# review queue, approving/rejecting a video, viewing the admin dashboard,
+# and lifting a chat ban early -- see `AdminRole.MODERATOR`'s own
+# docstring for the full reasoning on why the two destructive actions
+# below are excluded from this tier.
+RequireModerationAccess = Annotated[None, Depends(_require_admin_rank(AdminRole.MODERATOR))]
+
+# Gates the two actions that trigger real, irreversible storage/data
+# deletion (`DELETE /admin/videos/{id}`, `POST .../reject-and-purge-media`)
+# -- see `AdminRole.SENIOR_MODERATOR`'s own docstring.
+RequireSeniorModerationAccess = Annotated[
+    None, Depends(_require_admin_rank(AdminRole.SENIOR_MODERATOR))
+]
+
+# Gates role management only (`PATCH /admin/users/{user_id}/role`,
+# `GET /admin/team`) -- see `AdminRole.OWNER`'s own docstring.
+RequireOwner = Annotated[None, Depends(_require_admin_rank(AdminRole.OWNER))]

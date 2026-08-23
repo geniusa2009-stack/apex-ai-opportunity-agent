@@ -86,6 +86,7 @@ CREATE TABLE users (
     bio TEXT,
     search_vector TEXT,
     role VARCHAR(20) NOT NULL DEFAULT 'student',
+    admin_role VARCHAR(20),
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 )

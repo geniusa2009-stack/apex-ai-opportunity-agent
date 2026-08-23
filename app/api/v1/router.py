@@ -3,6 +3,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.endpoints.admin_moderation import router as admin_moderation_router
+from app.api.v1.endpoints.admin_roles import router as admin_roles_router
 from app.api.v1.endpoints.advanced import router as advanced_router
 from app.api.v1.endpoints.ai_cv_builder import router as ai_cv_builder_router
 from app.api.v1.endpoints.ai_tools import router as ai_tools_router
@@ -191,6 +192,14 @@ api_router.include_router(student_videos_router)
 # empirically (see the README's verification section), not just
 # reasoned about.
 api_router.include_router(admin_moderation_router)
+# `admin_roles_router` (Real Tiered Role System step) -- its two paths,
+# `/admin/users/{user_id}/role` and `/admin/team`, diverge at the SECOND
+# path segment (`users`/`team`) from every other `admin/*` route already
+# registered above/below (`admin/videos/*`, `admin/courses/*`) -- no
+# path-template ambiguity, registration order here is provably
+# irrelevant. Placed immediately after `admin_moderation_router` simply
+# because both gate access to the same moderation surface area.
+api_router.include_router(admin_roles_router)
 # `media_router` MUST be included BEFORE `courses_router` -- disclosed
 # routing-precedence requirement, Core Video Media Processing Pipeline
 # step. `media_router` owns `GET /courses/recommendations`, which shares
