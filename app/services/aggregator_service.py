@@ -226,6 +226,14 @@ class AIExtractedOpportunityFields(BaseModel):
     (`process_raw_post_via_ai`), not validated as strict types up front.
     """
 
+    # Backfill Real Eligibility Data step -- DISCLOSED, deliberately NOT
+    # extended with min_age/max_age/target_gender/target_academic_levels
+    # here. See app/workers/tasks.py::verify_new_opportunities's own
+    # docstring for the full reasoning: that function's downstream
+    # verification call is the real single funnel every Opportunity row
+    # (from this pipeline AND the separate Scrapy pipeline) passes
+    # through, and the only place with real retained raw source text for
+    # backfilling existing rows -- extraction lives there instead.
     title: str = Field(description="A clean, human-readable title for the opportunity.")
     description: str | None = Field(
         default=None, description="A cleaned summary of the post's Arabic/English text."

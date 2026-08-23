@@ -73,6 +73,71 @@ class VerifiedOpportunitySchema(BaseModel):
         ge=0.0, le=1.0, description="Confidence (0-1) in the is_legitimate judgment."
     )
 
+    # --- Backfill Real Eligibility Data step additions ---
+    # Deliberately plain `str`/`list[str]` here, not `Gender`/`AcademicLevel`
+    # Pydantic enum types -- same established pattern `AIExtractedOpportunityFields.
+    # opportunity_type` already uses (a free-text field, defensively coerced
+    # AFTER the structured call succeeds via `_coerce_opportunity_type`), so
+    # a value Gemini returns that doesn't cleanly match this codebase's real
+    # enum vocabulary degrades to a logged warning + `None`/dropped entry
+    # (see tasks.py's `_coerce_gender`/`_coerce_academic_levels`) instead of
+    # a hard Pydantic validation failure that would throw away the entire
+    # otherwise-good verification response over one bad sub-field.
+    #
+    # ALL FOUR fields share one non-negotiable rule, repeated in the prompt
+    # below: null/empty is the correct, default answer whenever the source
+    # text doesn't explicitly state (or, for academic level only, clearly
+    # name a real education stage for) a restriction. Guessing a restriction
+    # the source never mentioned is a worse outcome than leaving a real
+    # opportunity looking unrestricted -- it would wrongly hide that
+    # opportunity from students who were, in fact, eligible.
+    min_age: int | None = Field(
+        default=None,
+        description=(
+            "Minimum age to apply, ONLY if the source text states an explicit "
+            "number (e.g. 'ages 16-19', 'must be 18 or older' -> 18) or an "
+            "explicit adult-only cutoff. Null if no numeric age restriction is stated."
+        ),
+    )
+    max_age: int | None = Field(
+        default=None,
+        description=(
+            "Maximum age to apply, ONLY if the source text states an explicit "
+            "number (e.g. 'ages 16-19' -> 19, 'under 30' -> 29). Null if no "
+            "numeric upper age bound is stated."
+        ),
+    )
+    target_gender: str | None = Field(
+        default=None,
+        description=(
+            "'male' or 'female', ONLY if the source text EXPLICITLY restricts "
+            "eligibility to one gender (e.g. 'for women only', 'girls "
+            "scholarship', 'young men program'). Null if the source is silent "
+            "on gender, says 'open to all genders', or is in any way ambiguous. "
+            "Never infer this from an opportunity's subject matter or a "
+            "source/channel's general audience -- only from an explicit "
+            "eligibility statement in THIS listing's own text."
+        ),
+    )
+    target_academic_levels: list[str] | None = Field(
+        default=None,
+        description=(
+            "The specific academic-level values (from this fixed vocabulary: "
+            "prep_1, prep_2, prep_3, secondary_1, secondary_2, secondary_3, "
+            "university_year_1, university_year_2, university_year_3, "
+            "university_year_4, university_year_5, university_year_6, "
+            "masters, phd) that this listing explicitly restricts eligibility "
+            "to. Only include a level when the source text names a real "
+            "education stage this opportunity is FOR (e.g. 'open to "
+            "secondary school students' -> "
+            "[secondary_1, secondary_2, secondary_3]; 'undergraduate "
+            "scholarship' -> every university_year_N value; 'PhD candidates "
+            "only' -> [phd]). Null or an empty list if the source states no "
+            "academic-level restriction at all, or only a vague phrase like "
+            "'students' or 'young people' with no identifiable stage."
+        ),
+    )
+
 
 _VERIFICATION_SYSTEM_PROMPT = """\
 You are a verification analyst for Apex, a platform aggregating scholarships, \
@@ -86,6 +151,30 @@ flag scams, expired listings, placeholder/test content, and pages that aren't \
 actually opportunities as not legitimate.
 3. Give a confidence score (0-1) reflecting how sure you are about the \
 legitimacy judgment itself, not how good the opportunity is.
+4. Extract structured eligibility RESTRICTIONS, if and only if this specific \
+listing's own text explicitly states one:
+   - min_age / max_age: only when the text gives an actual number (an explicit \
+age range, or an explicit adult/minor cutoff like "18 or older"). Do not \
+convert a vague phrase into a guessed number.
+   - target_gender: only when the text explicitly restricts eligibility to one \
+gender ("women only", "for young men", "girls' scholarship" -> 'female'/'male'). \
+A scholarship's SUBJECT (e.g. "Women in STEM Scholarship" as a program NAME) \
+does not by itself prove a gender restriction unless the eligibility text \
+also restricts WHO may apply -- when in doubt, leave this null.
+   - target_academic_levels: only when the text names a real education stage \
+this opportunity is restricted to (secondary school, a specific university \
+year, undergraduates broadly, master's, PhD). Map it onto the fixed \
+academic_level vocabulary described in that field. A vague phrase like \
+"students" or "young people" is NOT a stage and must NOT be mapped to any level.
+
+THE SINGLE MOST IMPORTANT RULE FOR STEP 4: leaving a field null/empty because \
+the source didn't clearly state a restriction is always the CORRECT, EXPECTED \
+answer, not a failure -- most real listings state no restriction at all on \
+some or all of these dimensions, and inventing one that isn't in the source \
+text would wrongly hide this opportunity from eligible students later. Never \
+infer a restriction from an opportunity's general subject, target audience \
+guesswork, or the channel/source it came from -- only from this listing's own \
+explicit eligibility language.
 
 If the raw data is too sparse to make a confident judgment, set is_legitimate \
 to false and give a low confidence_score rather than guessing.
