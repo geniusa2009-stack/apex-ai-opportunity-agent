@@ -509,6 +509,17 @@ class ModerationAction(str, enum.Enum):
     VIDEO_REJECT_AND_PURGE = "video_reject_and_purge"
     CHAT_UNBAN = "chat_unban"
 
+    # --- Extend Moderation to Chat Messages addition (migration 0040) ---
+    # Three new real WRITE actions on a `ChatMessageReport` case -- see
+    # `app/api/v1/endpoints/admin_chat_reports.py`'s own module docstring
+    # for the full "second queue" reasoning and each route's own tier
+    # decision. Same "NEXT ADMIN ACTION" discipline as above: a plain enum
+    # member addition, paired with its own real `log_action(...)` call
+    # site, nothing more.
+    CHAT_REPORT_DISMISS = "chat_report_dismiss"
+    CHAT_MESSAGE_DELETE = "chat_message_delete"
+    CHAT_REPORT_ESCALATE_BAN = "chat_report_escalate_ban"
+
 
 class ModerationTargetType(str, enum.Enum):
     """What kind of real row a `ModerationLogEntry.target_id` refers to
@@ -516,7 +527,46 @@ class ModerationTargetType(str, enum.Enum):
     column's own docstring for why), so this discriminator is what makes
     a stored id unambiguous across the two real target kinds this step's
     four actions ever touch.
+
+    ALSO reused, unmodified, as the `{item_type}` path-segment discriminator
+    for the Claim System's own `_CLAIMABLE_MODELS` dispatch table
+    (`app/api/v1/endpoints/admin_claims.py`) -- that module's own docstring
+    explains why a genuinely new claimable queue is meant to be a new
+    member here, not a new pair of endpoints. `CHAT_MESSAGE_REPORT` below
+    is the first real use of that extension point.
     """
 
     STUDENT_VIDEO = "student_video"
     USER = "user"
+    # --- Extend Moderation to Chat Messages addition (migration 0040) ---
+    # The reported-message "case" itself (`ChatMessageReport`, one open
+    # row per reported `ChatMessage`) -- NOT `ChatMessage` directly, and
+    # NOT one member per individual report submission. See
+    # `app/models/chat_moderation.py`'s own module docstring for the full
+    # "what is a case, this time" reasoning, mirroring Phase 4's own
+    # `admin_claims.py` Step 1 investigation for `StudentVideo`.
+    CHAT_MESSAGE_REPORT = "chat_message_report"
+
+
+class ChatReportReason(str, enum.Enum):
+    """The closed set of reasons a user may cite when reporting a chat
+    message (`POST /chat/rooms/{room_id}/messages/{message_id}/report`).
+    Plain `str` enum, same posture as every other closed-set classification
+    in this codebase (`OpportunityType`, `StudentVideoStatus`) -- native
+    Postgres enum on the `chat_message_report_entries.reason` column (see
+    that model), matching `ChatReportReason`'s own "small, stable,
+    unlikely-to-change" precedent (`AdminRole`/`UserRole`), not the looser
+    lifecycle-status posture `StudentVideoStatus` deliberately opts out of.
+
+    Four categories -- the task's own literal "spam, harassment,
+    inappropriate content, etc." examples, plus a real `OTHER` escape
+    hatch with a free-text `details` field alongside it (see
+    `ChatMessageReportEntry.details`) for a real reason this closed set
+    doesn't anticipate, rather than forcing every edge case into the
+    nearest-fit bucket and losing the reporter's actual context.
+    """
+
+    SPAM = "spam"
+    HARASSMENT = "harassment"
+    INAPPROPRIATE_CONTENT = "inappropriate_content"
+    OTHER = "other"

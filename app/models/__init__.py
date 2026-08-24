@@ -17,6 +17,7 @@ from app.models.bookmark import UserBookmark
 from app.models.budget_planner import BudgetPlanner
 from app.models.career_compass import CareerCompassResult
 from app.models.chat import ChatMessage, ChatParticipant, ChatRoom
+from app.models.chat_moderation import ChatMessageReport, ChatMessageReportEntry
 from app.models.deadline_alert import DeadlineAlert
 from app.models.decision_matrix import DecisionMatrix
 from app.models.expat_survival import ExpatSurvival
@@ -74,6 +75,8 @@ __all__ = [
     "ChatRoom",
     "ChatParticipant",
     "ChatMessage",
+    "ChatMessageReport",
+    "ChatMessageReportEntry",
     "Notification",
     "Certificate",
     "LessonStudyAid",

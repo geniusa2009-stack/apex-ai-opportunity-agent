@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, ValidationError
 from app.api.deps import CurrentUser, DbSession, RequireModerationAccess, effective_admin_role, get_websocket_user
 from app.models.enums import ModerationAction, ModerationTargetType
 from app.core.config import settings
-from app.models.chat import ChatParticipant
+from app.models.chat import ChatMessage as ChatMessageRow, ChatParticipant
 from app.schemas.chat import (
     BannedEvent,
     BanStatusOut,
@@ -25,7 +25,8 @@ from app.schemas.chat import (
     PinRoomResponse,
     UnbanResponse,
 )
-from app.services import chat_group_service, chat_security, chat_service, chatbot, moderation_log_service
+from app.schemas.chat_moderation import ChatMessageReportRequest, ChatMessageReportResponse
+from app.services import chat_group_service, chat_report_service, chat_security, chat_service, chatbot, moderation_log_service
 from app.services.chat_connection_manager import manager, publish_message
 
 logger = logging.getLogger(__name__)
@@ -272,6 +273,84 @@ async def room_message_history(
 
     messages = await chat_service.get_message_history(db, room_id, limit=limit)
     return [ChatMessageOut.model_validate(m) for m in messages]
+
+
+@router.post(
+    "/rooms/{room_id}/messages/{message_id}/report",
+    response_model=ChatMessageReportResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def report_message(
+    room_id: uuid.UUID,
+    message_id: uuid.UUID,
+    payload: ChatMessageReportRequest,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> ChatMessageReportResponse:
+    """Extend Moderation to Chat Messages -- the genuinely new user-facing
+    report action this codebase had no equivalent of before (see
+    `app/services/chat_report_service.py`'s own module docstring for the
+    real Step 1/2 investigation confirming that, and the real anti-mass-
+    report/threshold reasoning).
+
+    Any real participant of the room may report any real message in it
+    (403, not 404, for a non-participant -- same posture as
+    `room_message_history` immediately above, for the identical "don't
+    let a 404 leak which random UUIDs are real rooms" reason). 404 for a
+    message that doesn't exist, or that exists in a DIFFERENT room than
+    `room_id` names (the path's own `room_id` is trusted as the scope the
+    caller already proved membership of; a message_id belonging to some
+    other room the caller also happens to be in must not be reportable
+    through a mismatched URL).
+
+    400 for a self-report (`SelfReportError`) -- disclosed necessary
+    guard, see the service's own docstring. Real 409
+    (`DuplicateReportError`) if this caller already has an open report on
+    this message -- the real, enforced anti-mass-report rule, not a
+    silent idempotent success (a 409 here is honest: the caller's SECOND
+    attempt to report the SAME message is a real no-op from the system's
+    perspective, and pretending it succeeded again would misrepresent
+    what actually happened).
+    """
+    if not await chat_service.is_participant(db, room_id, current_user.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="You are not a participant in this chat room."
+        )
+
+    message = await db.get(ChatMessageRow, message_id)
+    if message is None or message.room_id != room_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat message not found")
+
+    try:
+        case, entry, total = await chat_report_service.create_report(
+            db,
+            message=message,
+            reporter_id=current_user.id,
+            reason=payload.reason,
+            details=payload.details,
+        )
+    except chat_report_service.SelfReportError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except chat_report_service.DuplicateReportError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    await db.commit()
+    # Same "refresh after commit before reading a server-generated
+    # column" posture as `admin_claims.py::claim_item`'s own
+    # `db.refresh(item)` call -- `entry.created_at` is a
+    # `server_default=func.now()` column; refreshing guarantees the real
+    # DB-assigned value is what's returned, regardless of whether the
+    # active dialect/driver already eagerly populated it via RETURNING
+    # during the flush above.
+    await db.refresh(entry)
+
+    return ChatMessageReportResponse(
+        report_id=case.id,
+        message_id=message.id,
+        reason=entry.reason,
+        created_at=entry.created_at,
+        total_reports=total,
+    )
 
 
 @router.get("/ban-status", response_model=BanStatusOut)

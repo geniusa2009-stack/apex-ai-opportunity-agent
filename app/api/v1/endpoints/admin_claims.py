@@ -63,6 +63,7 @@ import uuid
 from fastapi import APIRouter, HTTPException, status
 
 from app.api.deps import CurrentUser, DbSession, RequireModerationAccess, effective_admin_role
+from app.models.chat_moderation import ChatMessageReport
 from app.models.enums import AdminRole, ModerationTargetType
 from app.models.student_videos import StudentVideo
 from app.schemas.moderation_claims import ModerationClaimOut
@@ -71,11 +72,24 @@ from app.services import moderation_claim_service
 router = APIRouter(tags=["admin-claims"])
 
 # STEP 1's own extension point (see module docstring) -- the only real
-# entry today. A future claimable item type is added here, with no
-# other change to this file's route bodies (both already look the
-# model up generically via this table).
-_CLAIMABLE_MODELS: dict[ModerationTargetType, type[StudentVideo]] = {
+# entry until the "Extend Moderation to Chat Messages" task. A future
+# claimable item type is added here, with no other change to this file's
+# route bodies (both already look the model up generically via this
+# table).
+#
+# `ChatMessageReport` (see `app/models/chat_moderation.py`'s own module
+# docstring) is the SECOND real entry -- confirming this extension point
+# genuinely works as designed: no new claim endpoint, no schema change,
+# nothing in this file's route bodies touched at all. `ChatMessageReport`
+# satisfies `moderation_claim_service._Claimable`'s structural Protocol
+# (`claimed_by`/`claimed_at` attributes) the exact same way `StudentVideo`
+# does, so the whole claim/release flow -- including the SAME 30-minute
+# lazy-expiry rule and the SAME "claimant or Owner may release" posture --
+# applies to a reported chat message with zero new code beyond this one
+# dict entry.
+_CLAIMABLE_MODELS: dict[ModerationTargetType, type[StudentVideo] | type[ChatMessageReport]] = {
     ModerationTargetType.STUDENT_VIDEO: StudentVideo,
+    ModerationTargetType.CHAT_MESSAGE_REPORT: ChatMessageReport,
 }
 
 

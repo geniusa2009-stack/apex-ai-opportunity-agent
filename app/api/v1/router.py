@@ -3,6 +3,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.endpoints.admin_activity_log import router as admin_activity_log_router
+from app.api.v1.endpoints.admin_chat_reports import router as admin_chat_reports_router
 from app.api.v1.endpoints.admin_claims import router as admin_claims_router
 from app.api.v1.endpoints.admin_moderation import router as admin_moderation_router
 from app.api.v1.endpoints.admin_roles import router as admin_roles_router
@@ -232,6 +233,16 @@ api_router.include_router(admin_claims_router)
 # immediately after `admin_claims_router` simply because it's the most
 # recent addition to the same moderation subsystem.
 api_router.include_router(admin_stats_router)
+# `admin_chat_reports_router` (Extend Moderation to Chat Messages -- the
+# "second real queue" `admin_claims_router`'s own module docstring left
+# open) -- its paths, `/admin/chat/reports*`, diverge at the SECOND path
+# segment (`chat`) from every other `admin/*` route already registered
+# above (`admin/videos/*`, `admin/users/*`, `admin/team*`,
+# `admin/activity-log*`, `admin/moderation/*`) -- no path-template
+# ambiguity, registration order here is provably irrelevant. Placed
+# immediately after `admin_stats_router` simply because it's the most
+# recent addition to the same moderation subsystem.
+api_router.include_router(admin_chat_reports_router)
 # `media_router` MUST be included BEFORE `courses_router` -- disclosed
 # routing-precedence requirement, Core Video Media Processing Pipeline
 # step. `media_router` owns `GET /courses/recommendations`, which shares
