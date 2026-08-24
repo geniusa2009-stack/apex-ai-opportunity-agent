@@ -239,6 +239,30 @@ class StudentVideo(Base):
     admin_override: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     admin_notes: Mapped[str | None] = mapped_column(String, nullable=True)
 
+    # --- Claim System (Prevent Duplicate Work on the Same Case) addition
+    # (migration 0039) --- see `app/api/v1/endpoints/admin_claims.py`'s
+    # own module docstring for the full "what is a case" reasoning: the
+    # review queue's only real item kind today is a `StudentVideo` row,
+    # so a claim is two fields added directly to it rather than a
+    # separate polymorphic table -- the review-queue listing already
+    # `SELECT`s this row, so surfacing claim state per item costs zero
+    # extra queries, satisfying that step's own "no second round-trip
+    # per item" requirement for free.
+    #
+    # `claimed_by` uses `ondelete="SET NULL"` (not `CASCADE`) -- same
+    # posture as `ModerationLogEntry.actor_id`: if a moderator's account
+    # is deleted mid-claim, the CLAIM shouldn't survive as a permanent
+    # dangling reference, but the VIDEO row itself must not be touched.
+    # `claimed_at` deliberately stays non-`None` after a `SET NULL`
+    # (nothing re-nulls it) -- harmless, because every real read site
+    # (`moderation_claim_service.get_effective_claim`) treats
+    # `claimed_by IS NULL` as sufficient on its own to mean "unclaimed,"
+    # never reading `claimed_at` in isolation.
+    claimed_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    claimed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

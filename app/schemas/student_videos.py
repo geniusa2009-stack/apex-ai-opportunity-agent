@@ -221,6 +221,17 @@ class AdminVideoReviewOut(BaseModel):
     admin_override: bool
     admin_notes: str | None
 
+    # --- Claim System (Prevent Duplicate Work on the Same Case) addition ---
+    # This step's own Step 2.5 requirement: "show real claim state per
+    # item... so the frontend can show this without a second round-trip
+    # per item." All three reflect the EFFECTIVE claim state (an expired
+    # claim already reads back as `None` here, same as never-claimed --
+    # see `moderation_claim_service.get_effective_claim`), computed by
+    # the router at query time, not read straight off the ORM row.
+    claimed_by: UUID | None = None
+    claimed_by_name: str | None = None
+    claimed_at: datetime | None = None
+
 
 class AdminOverrideRequest(BaseModel):
     """`POST /admin/videos/{video_id}/override` request body.

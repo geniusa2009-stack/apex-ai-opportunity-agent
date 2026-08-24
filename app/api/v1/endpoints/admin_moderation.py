@@ -73,6 +73,7 @@ import uuid
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import ValidationError
 from sqlalchemy import func, select
+from sqlalchemy.orm import aliased
 
 from app.api.deps import (
     CurrentUser,
@@ -92,7 +93,7 @@ from app.schemas.student_videos import (
     AdminVideoReviewOut,
     AIFeedback,
 )
-from app.services import gamification_service, moderation_log_service, notification_service
+from app.services import gamification_service, moderation_claim_service, moderation_log_service, notification_service
 from app.workers.cleanup_tasks import task_delete_orphaned_media
 
 logger = logging.getLogger(__name__)
@@ -121,14 +122,26 @@ _REVIEW_QUEUE_STATUSES = [
 _AI_FEEDBACK_FIELDS = set(AIFeedback.model_fields)
 
 
-def _build_review_item(video: StudentVideo, student_name: str | None) -> AdminVideoReviewOut:
+def _build_review_item(
+    video: StudentVideo, student_name: str | None, claimant_name: str | None = None
+) -> AdminVideoReviewOut:
     """Turns one `StudentVideo` ORM row (plus its uploader's resolved
     `full_name`) into one `AdminVideoReviewOut`, correctly splitting the
     single `ai_feedback` JSONB column into either real Gemini feedback
     (`REJECTED`) or a pipeline-error message (`FAILED`) -- see
     `AdminVideoReviewOut`'s own docstring for why this can't just be a
     `model_validate(video)` call.
+
+    Claim System addition: `claimant_name` is the SECOND outer-joined
+    `User.full_name` (the claimant's, not the uploader's -- see
+    `get_review_queue`'s own query for the `aliased(User)` this needs,
+    since both joins target the same `users` table). Claim state itself
+    is resolved through `moderation_claim_service.get_effective_claim`
+    below, NOT read straight off `video.claimed_by`/`video.claimed_at`
+    -- an expired claim must render as unclaimed here, same as it does
+    everywhere else this feature reads claim state.
     """
+    effective_claimed_by, effective_claimed_at = moderation_claim_service.get_effective_claim(video)
     ai_feedback: AIFeedback | None = None
     pipeline_error: str | None = None
 
@@ -162,6 +175,9 @@ def _build_review_item(video: StudentVideo, student_name: str | None) -> AdminVi
         pipeline_error=pipeline_error,
         admin_override=video.admin_override,
         admin_notes=video.admin_notes,
+        claimed_by=effective_claimed_by,
+        claimed_by_name=claimant_name if effective_claimed_by is not None else None,
+        claimed_at=effective_claimed_at,
     )
 
 
@@ -203,16 +219,25 @@ async def get_review_queue(
         await db.execute(select(func.count()).select_from(StudentVideo).where(*filters))
     ).scalar_one()
 
+    # Claim System addition: `Claimant` is a SECOND alias of `User` --
+    # the uploader join (`User`) and the claimant join both target the
+    # same `users` table, and SQL has no way to tell two joins against
+    # the same table apart without aliasing one of them.
+    Claimant = aliased(User)
     result = await db.execute(
-        select(StudentVideo, User.full_name)
+        select(StudentVideo, User.full_name, Claimant.full_name)
         .outerjoin(User, User.id == StudentVideo.student_id)
+        .outerjoin(Claimant, Claimant.id == StudentVideo.claimed_by)
         .where(*filters)
         .order_by(StudentVideo.created_at.asc())
         .limit(limit)
         .offset(offset)
     )
 
-    items = [_build_review_item(video, student_name) for video, student_name in result.all()]
+    items = [
+        _build_review_item(video, student_name, claimant_name)
+        for video, student_name, claimant_name in result.all()
+    ]
 
     return PaginatedResponse[AdminVideoReviewOut](items=items, total=total, limit=limit, offset=offset)
 

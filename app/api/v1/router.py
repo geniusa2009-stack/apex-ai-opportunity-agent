@@ -3,6 +3,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.endpoints.admin_activity_log import router as admin_activity_log_router
+from app.api.v1.endpoints.admin_claims import router as admin_claims_router
 from app.api.v1.endpoints.admin_moderation import router as admin_moderation_router
 from app.api.v1.endpoints.admin_roles import router as admin_roles_router
 from app.api.v1.endpoints.advanced import router as advanced_router
@@ -210,6 +211,16 @@ api_router.include_router(admin_roles_router)
 # simply because both are Owner-only surfaces over the same moderation
 # subsystem.
 api_router.include_router(admin_activity_log_router)
+# `admin_claims_router` (Claim System step) -- its two paths (`POST`/
+# `DELETE /admin/moderation/{item_type}/{item_id}/claim`) live under a
+# literal `admin/moderation/...` prefix that diverges at the SECOND path
+# segment (`moderation`) from every other `admin/*` route already
+# registered above (`admin/videos/*`, `admin/users/*`, `admin/team`,
+# `admin/activity-log*`) -- no path-template ambiguity, registration
+# order here is provably irrelevant. Placed immediately after
+# `admin_activity_log_router` simply because both are recent additions
+# to the same moderation subsystem.
+api_router.include_router(admin_claims_router)
 # `media_router` MUST be included BEFORE `courses_router` -- disclosed
 # routing-precedence requirement, Core Video Media Processing Pipeline
 # step. `media_router` owns `GET /courses/recommendations`, which shares

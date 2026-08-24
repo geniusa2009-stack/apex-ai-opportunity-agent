@@ -85,6 +85,8 @@ CREATE TABLE student_videos (
     thumbnail_url VARCHAR(500),
     admin_override BOOLEAN NOT NULL DEFAULT 0,
     admin_notes TEXT,
+    claimed_by VARCHAR(36),
+    claimed_at DATETIME,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 )
 """
