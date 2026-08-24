@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.endpoints.admin_activity_log import router as admin_activity_log_router
 from app.api.v1.endpoints.admin_moderation import router as admin_moderation_router
 from app.api.v1.endpoints.admin_roles import router as admin_roles_router
 from app.api.v1.endpoints.advanced import router as advanced_router
@@ -200,6 +201,15 @@ api_router.include_router(admin_moderation_router)
 # irrelevant. Placed immediately after `admin_moderation_router` simply
 # because both gate access to the same moderation surface area.
 api_router.include_router(admin_roles_router)
+# `admin_activity_log_router` (Automatic Moderation Activity Log step)
+# -- its two paths, `/admin/activity-log/{user_id}` and
+# `/admin/activity-log`, diverge at the SECOND path segment
+# (`activity-log`) from every other `admin/*` route already registered
+# above -- no path-template ambiguity, registration order here is
+# provably irrelevant. Placed immediately after `admin_roles_router`
+# simply because both are Owner-only surfaces over the same moderation
+# subsystem.
+api_router.include_router(admin_activity_log_router)
 # `media_router` MUST be included BEFORE `courses_router` -- disclosed
 # routing-precedence requirement, Core Video Media Processing Pipeline
 # step. `media_router` owns `GET /courses/recommendations`, which shares

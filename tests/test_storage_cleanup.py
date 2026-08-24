@@ -371,6 +371,24 @@ CREATE TABLE student_videos (
 )
 """
 
+# NEW as of the Automatic Moderation Activity Log step: the admin-delete
+# path this file exercises (`delete_video_permanently`) now writes a
+# real `ModerationLogEntry` row in the same transaction as the video
+# deletion. Same "JSONB has no SQLite DDL compiler" raw-SQL pattern as
+# elsewhere.
+_CREATE_MODERATION_LOG_TABLE_SQL = """
+CREATE TABLE moderation_log_entries (
+    id VARCHAR(36) PRIMARY KEY,
+    actor_id VARCHAR(36),
+    actor_role VARCHAR(20) NOT NULL,
+    action VARCHAR(30) NOT NULL,
+    target_type VARCHAR(20) NOT NULL,
+    target_id VARCHAR(36) NOT NULL,
+    outcome TEXT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
 
 @pytest_asyncio.fixture
 async def db_session_factory():
@@ -383,6 +401,7 @@ async def db_session_factory():
         await conn.execute(text(_CREATE_USERS_TABLE_SQL))
         await conn.execute(text(_CREATE_USER_BOOKMARKS_TABLE_SQL))
         await conn.execute(text(_CREATE_STUDENT_VIDEOS_TABLE_SQL))
+        await conn.execute(text(_CREATE_MODERATION_LOG_TABLE_SQL))
 
     session_factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
     yield session_factory

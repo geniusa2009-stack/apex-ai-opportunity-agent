@@ -478,3 +478,45 @@ class AdminRole(str, enum.Enum):
             AdminRole.SENIOR_MODERATOR: 2,
             AdminRole.OWNER: 3,
         }[self]
+
+
+class ModerationAction(str, enum.Enum):
+    """Automatic Moderation Activity Log step -- the closed set of
+    actions that write a real `ModerationLogEntry`
+    (app/models/moderation_log.py).
+
+    Deliberately covers exactly the four real WRITE actions among the
+    six routes the Real Tiered Role System step confirmed and tiered --
+    `GET /admin/videos/review-queue` and `GET /dashboards/admin` are
+    both read-only and excluded per this step's own literal "review-
+    queue-view doesn't need logging since it's read-only" instruction.
+
+    NEXT ADMIN ACTION, READ THIS: any FUTURE write-action route gated on
+    `RequireModerationAccess`/`RequireSeniorModerationAccess`/`RequireOwner`
+    should add its own member here, then call
+    `moderation_log_service.log_action(...)` at its own real mutation
+    site -- same pattern as the four call sites already wired (see each
+    one's own "Automatic Moderation Activity Log" comment in
+    `admin_moderation.py`/`chat.py`). This is a real, ordinary enum
+    member addition, NOT a decorator or a separate registration step --
+    intentionally, so a future action can't silently "forget" logging by
+    missing an unrelated wiring step; the only way to add a new logged
+    action is to touch this file AND the route's own body together.
+    """
+
+    VIDEO_OVERRIDE = "video_override"
+    VIDEO_DELETE = "video_delete"
+    VIDEO_REJECT_AND_PURGE = "video_reject_and_purge"
+    CHAT_UNBAN = "chat_unban"
+
+
+class ModerationTargetType(str, enum.Enum):
+    """What kind of real row a `ModerationLogEntry.target_id` refers to
+    -- `target_id` itself is deliberately NOT a foreign key (see that
+    column's own docstring for why), so this discriminator is what makes
+    a stored id unambiguous across the two real target kinds this step's
+    four actions ever touch.
+    """
+
+    STUDENT_VIDEO = "student_video"
+    USER = "user"

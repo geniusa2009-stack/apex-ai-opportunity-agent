@@ -272,6 +272,24 @@ def _effective_admin_rank(user: User) -> int:
     return 0
 
 
+# Automatic Moderation Activity Log step -- the `AdminRole` counterpart
+# to `_effective_admin_rank` above (returns the resolved ENUM, not just
+# a rank int), for the one real new caller that needs the actual value:
+# `moderation_log_service.log_action`'s `actor_role` column, which must
+# capture what the acting user's role EFFECTIVELY was (honoring the
+# legacy `is_superuser=True` alias) at the moment they acted -- not the
+# possibly-`None` raw `admin_role` column. Callable ONLY on a user who
+# already passed a `RequireModerationAccess`-or-stricter dependency
+# (i.e. `_effective_admin_rank(user) >= AdminRole.MODERATOR.rank`), so
+# the `None` fallthrough below is unreachable in practice and exists
+# purely so this function has a total, honest return type rather than
+# an `AdminRole | None` every caller would need to null-check.
+def effective_admin_role(user: User) -> AdminRole:
+    if user.is_superuser:
+        return AdminRole.OWNER
+    return user.admin_role or AdminRole.MODERATOR
+
+
 def _require_admin_rank(minimum: AdminRole) -> Callable[..., Coroutine[None, None, None]]:
     """Factory mirroring `require_tokens`'s own factory shape immediately
     above -- returns a dependency that 403s unless the current user's

@@ -5,7 +5,8 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel, Field, ValidationError
 
-from app.api.deps import CurrentUser, DbSession, RequireModerationAccess, get_websocket_user
+from app.api.deps import CurrentUser, DbSession, RequireModerationAccess, effective_admin_role, get_websocket_user
+from app.models.enums import ModerationAction, ModerationTargetType
 from app.core.config import settings
 from app.models.chat import ChatParticipant
 from app.schemas.chat import (
@@ -24,7 +25,7 @@ from app.schemas.chat import (
     PinRoomResponse,
     UnbanResponse,
 )
-from app.services import chat_group_service, chat_security, chat_service, chatbot
+from app.services import chat_group_service, chat_security, chat_service, chatbot, moderation_log_service
 from app.services.chat_connection_manager import manager, publish_message
 
 logger = logging.getLogger(__name__)
@@ -285,7 +286,7 @@ async def ban_status(current_user: CurrentUser) -> BanStatusOut:
 
 @router.delete("/admin/bans/{user_id}", response_model=UnbanResponse)
 async def admin_unban_user(
-    user_id: uuid.UUID, current_user: CurrentUser, _: RequireModerationAccess
+    user_id: uuid.UUID, current_user: CurrentUser, db: DbSession, _: RequireModerationAccess
 ) -> UnbanResponse:
     """Moderator-or-higher (Real Tiered Role System step -- lifting a ban
     early is reversible/non-destructive, same tier as the review-queue
@@ -308,6 +309,29 @@ async def admin_unban_user(
     non-admin gets a real `403`, not a silently-ignored request.
     """
     was_banned = await chat_security.unban_user(user_id)
+
+    # Automatic Moderation Activity Log step -- logged regardless of
+    # `was_banned` (an admin invoking this action is real and worth
+    # recording even if the target turned out not to be banned; the
+    # `outcome` field is exactly where that nuance lives, matching this
+    # step's own "confirmation the unban succeeded" wording). This is
+    # the ONE call site among the four real logged actions with no other
+    # DB mutation of its own (`unban_user` is Redis-only) -- the log
+    # entry's own `db.commit()` below is a real, deliberate write, not
+    # piggybacking on an existing one the way the three video actions in
+    # `admin_moderation.py` do. NEXT ADMIN ACTION: see that module's own
+    # call sites for the same pattern.
+    moderation_log_service.log_action(
+        db,
+        actor_id=current_user.id,
+        actor_role=effective_admin_role(current_user),
+        action=ModerationAction.CHAT_UNBAN,
+        target_type=ModerationTargetType.USER,
+        target_id=user_id,
+        outcome={"was_banned": was_banned},
+    )
+    await db.commit()
+
     return UnbanResponse(user_id=user_id, was_banned=was_banned)
 
 

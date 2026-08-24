@@ -143,6 +143,25 @@ CREATE TABLE notifications (
 )
 """
 
+# NEW as of the Automatic Moderation Activity Log step: this file's own
+# `override_video_decision`/`delete_video_permanently`/
+# `reject_video_and_purge_media` calls now each write a real
+# `ModerationLogEntry` row in the SAME transaction as their own
+# mutation. Same "JSONB has no SQLite DDL compiler" reason as
+# `notifications.payload` above -- raw SQL, `outcome` as plain `TEXT`.
+_CREATE_MODERATION_LOG_TABLE_SQL = """
+CREATE TABLE moderation_log_entries (
+    id VARCHAR(36) PRIMARY KEY,
+    actor_id VARCHAR(36),
+    actor_role VARCHAR(20) NOT NULL,
+    action VARCHAR(30) NOT NULL,
+    target_type VARCHAR(20) NOT NULL,
+    target_id VARCHAR(36) NOT NULL,
+    outcome TEXT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
 
 @pytest_asyncio.fixture
 async def db_session_factory():
@@ -155,6 +174,7 @@ async def db_session_factory():
         await conn.execute(text(_CREATE_USERS_TABLE_SQL))
         await conn.execute(text(_CREATE_USER_BOOKMARKS_TABLE_SQL))
         await conn.execute(text(_CREATE_STUDENT_VIDEOS_TABLE_SQL))
+        await conn.execute(text(_CREATE_MODERATION_LOG_TABLE_SQL))
         # Smart Notifications Engine addition: `override_video_decision`'s
         # own APPROVED-transition branch now calls BOTH `gamification_
         # service.add_xp` (added in the earlier Gamification milestone)

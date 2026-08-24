@@ -328,6 +328,24 @@ CREATE TABLE chat_messages (
 )
 """
 
+# NEW as of the Automatic Moderation Activity Log step: `admin_unban_user`
+# now writes a real `ModerationLogEntry` row (its own newly-added
+# `db.commit()`, distinct from the video-mutation call sites which
+# piggyback on an already-open transaction). Same "JSONB has no SQLite
+# DDL compiler" raw-SQL pattern as elsewhere in this file's own fixture.
+_CREATE_MODERATION_LOG_TABLE_SQL = """
+CREATE TABLE moderation_log_entries (
+    id VARCHAR(36) PRIMARY KEY,
+    actor_id VARCHAR(36),
+    actor_role VARCHAR(20) NOT NULL,
+    action VARCHAR(30) NOT NULL,
+    target_type VARCHAR(20) NOT NULL,
+    target_id VARCHAR(36) NOT NULL,
+    outcome TEXT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
 
 @pytest_asyncio.fixture
 async def db_session_factory():
@@ -342,6 +360,7 @@ async def db_session_factory():
         await conn.execute(text(_CREATE_CHAT_ROOMS_TABLE_SQL))
         await conn.execute(text(_CREATE_CHAT_PARTICIPANTS_TABLE_SQL))
         await conn.execute(text(_CREATE_CHAT_MESSAGES_TABLE_SQL))
+        await conn.execute(text(_CREATE_MODERATION_LOG_TABLE_SQL))
 
     session_factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
     yield session_factory

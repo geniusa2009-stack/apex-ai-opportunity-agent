@@ -79,8 +79,9 @@ from app.api.deps import (
     DbSession,
     RequireModerationAccess,
     RequireSeniorModerationAccess,
+    effective_admin_role,
 )
-from app.models.enums import StudentVideoStatus
+from app.models.enums import ModerationAction, ModerationTargetType, StudentVideoStatus
 from app.models.student_videos import StudentVideo
 from app.models.user import User
 from app.schemas.opportunity import PaginatedResponse
@@ -91,7 +92,7 @@ from app.schemas.student_videos import (
     AdminVideoReviewOut,
     AIFeedback,
 )
-from app.services import gamification_service, notification_service
+from app.services import gamification_service, moderation_log_service, notification_service
 from app.workers.cleanup_tasks import task_delete_orphaned_media
 
 logger = logging.getLogger(__name__)
@@ -268,6 +269,24 @@ async def override_video_decision(
     video.admin_notes = payload.notes
 
     db.add(video)
+
+    # Automatic Moderation Activity Log step -- logged BEFORE the commit
+    # below, same transaction as the video mutation itself (see
+    # `moderation_log_service`'s own docstring for why this must be
+    # atomic with the action, not a best-effort side effect). NEXT ADMIN
+    # ACTION: add your own `moderation_log_service.log_action(...)` call
+    # here at your own real mutation site, using a new
+    # `ModerationAction` member (see that enum's own docstring).
+    moderation_log_service.log_action(
+        db,
+        actor_id=current_user.id,
+        actor_role=effective_admin_role(current_user),
+        action=ModerationAction.VIDEO_OVERRIDE,
+        target_type=ModerationTargetType.STUDENT_VIDEO,
+        target_id=video.id,
+        outcome={"new_status": video.status, "notes": video.admin_notes},
+    )
+
     await db.commit()
     await db.refresh(video)
 
@@ -353,8 +372,27 @@ async def delete_video_permanently(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student video not found")
 
     r2_urls = [url for url in (video.hls_master_url, video.thumbnail_url) if url]
+    # Captured BEFORE `db.delete(video)` below -- the row (and its `.id`)
+    # is about to be deleted; the log entry needs `target_id` recorded
+    # while the object is still a live, attached instance.
+    deleted_video_id = video.id
+    deleted_student_id = video.student_id
 
     await db.delete(video)
+
+    # Automatic Moderation Activity Log step -- same "same transaction,
+    # not best-effort" posture as `override_video_decision` above. NEXT
+    # ADMIN ACTION: see that call site's own comment.
+    moderation_log_service.log_action(
+        db,
+        actor_id=current_user.id,
+        actor_role=effective_admin_role(current_user),
+        action=ModerationAction.VIDEO_DELETE,
+        target_type=ModerationTargetType.STUDENT_VIDEO,
+        target_id=deleted_video_id,
+        outcome={"video_deleted": True, "student_id": str(deleted_student_id), "r2_urls_purged": r2_urls},
+    )
+
     await db.commit()
 
     if r2_urls:
@@ -426,6 +464,20 @@ async def reject_video_and_purge_media(
     video.thumbnail_url = None
 
     db.add(video)
+
+    # Automatic Moderation Activity Log step -- same "same transaction,
+    # not best-effort" posture as `override_video_decision` above. NEXT
+    # ADMIN ACTION: see that call site's own comment.
+    moderation_log_service.log_action(
+        db,
+        actor_id=current_user.id,
+        actor_role=effective_admin_role(current_user),
+        action=ModerationAction.VIDEO_REJECT_AND_PURGE,
+        target_type=ModerationTargetType.STUDENT_VIDEO,
+        target_id=video.id,
+        outcome={"new_status": video.status, "r2_urls_purged": r2_urls},
+    )
+
     await db.commit()
     await db.refresh(video)
 

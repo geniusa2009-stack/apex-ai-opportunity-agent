@@ -180,6 +180,24 @@ CREATE TABLE notifications (
 )
 """
 
+# NEW as of the Automatic Moderation Activity Log step: this file's own
+# `TestRejectAndPurgeMedia`/`TestAdminUnban` tests exercise write
+# actions that now each log a real `ModerationLogEntry` row. Same
+# "JSONB has no SQLite DDL compiler" raw-SQL pattern as `notifications`
+# above.
+_CREATE_MODERATION_LOG_TABLE_SQL = """
+CREATE TABLE moderation_log_entries (
+    id VARCHAR(36) PRIMARY KEY,
+    actor_id VARCHAR(36),
+    actor_role VARCHAR(20) NOT NULL,
+    action VARCHAR(30) NOT NULL,
+    target_type VARCHAR(20) NOT NULL,
+    target_id VARCHAR(36) NOT NULL,
+    outcome TEXT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
 
 @pytest_asyncio.fixture
 async def db_session_factory():
@@ -194,6 +212,7 @@ async def db_session_factory():
         await conn.execute(text(_CREATE_STUDENT_VIDEOS_TABLE_SQL))
         await conn.execute(text(_CREATE_SOURCES_TABLE_SQL))
         await conn.execute(text(_CREATE_OPPORTUNITIES_TABLE_SQL))
+        await conn.execute(text(_CREATE_MODERATION_LOG_TABLE_SQL))
         # DISCLOSED, NECESSARY FIX (found running the full suite during the
         # Real Leaderboard System task -- unrelated to that task's own
         # changes, a pre-existing regression from an EARLIER migration):
