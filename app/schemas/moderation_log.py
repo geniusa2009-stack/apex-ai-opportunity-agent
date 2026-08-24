@@ -21,13 +21,22 @@ class ModerationLogEntryOut(BaseModel):
     `AdminOverrideResponse`'s own precedent for keeping denormalized
     display fields OUT of a model that doesn't own them) and are
     likewise `None` for a deleted actor.
+
+    `actor_role: AdminRole | None` (Repeat-Offender Detection addition,
+    migration 0041) -- mirrors the model column's own widening (see
+    `app/models/moderation_log.py`'s `actor_role` docstring): `None` now
+    means "no human actor," a real, distinct case from "actor account
+    was deleted" (`actor_id is None` while `actor_role` still holds the
+    real historical role that human once had). The new system-initiated
+    `ModerationAction.CHAT_AUTO_BAN` entries are the only rows where
+    both are `None`.
     """
 
     id: uuid.UUID
     actor_id: uuid.UUID | None
     actor_email: str | None
     actor_full_name: str | None
-    actor_role: AdminRole
+    actor_role: AdminRole | None
     action: ModerationAction
     target_type: ModerationTargetType
     target_id: uuid.UUID

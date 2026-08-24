@@ -520,6 +520,19 @@ class ModerationAction(str, enum.Enum):
     CHAT_MESSAGE_DELETE = "chat_message_delete"
     CHAT_REPORT_ESCALATE_BAN = "chat_report_escalate_ban"
 
+    # --- Repeat-Offender Detection addition (migration 0041) ---
+    # The automatic Arabic-filter ban (`app/api/v1/endpoints/chat.py`'s
+    # WebSocket handler, `chat_security.ban_user` call site) previously
+    # wrote NO log entry at all -- confirmed, real gap: a Redis TTL ban
+    # self-deletes on expiry with no durable trace, so a real "how many
+    # times has this user been banned" count silently undercounted every
+    # auto-ban that had already expired by the time anyone asked. This
+    # member, paired with a real new `log_action(...)` call at that exact
+    # site, closes it -- `target_type=USER`/`target_id=<banned user>`,
+    # same direct-target convention `CHAT_UNBAN` already uses (no
+    # `outcome` JSON extraction needed to recover the real offender).
+    CHAT_AUTO_BAN = "chat_auto_ban"
+
 
 class ModerationTargetType(str, enum.Enum):
     """What kind of real row a `ModerationLogEntry.target_id` refers to

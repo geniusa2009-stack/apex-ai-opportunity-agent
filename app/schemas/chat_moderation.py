@@ -109,6 +109,14 @@ class AdminChatReportOut(BaseModel):
     resolved_at: datetime | None = None
     resolution_notes: str | None = None
 
+    # --- Repeat-Offender Detection addition (migration 0041) ---
+    # Same real, inline "how many times has THIS message's sender been
+    # moderated recently" context as `AdminVideoReviewOut.
+    # offender_recent_action_count` -- see that field's own docstring and
+    # `app/services/repeat_offender_service.py`'s module docstring for the
+    # shared reasoning. Keyed off `message.sender_id`, not the reporter.
+    offender_recent_action_count: int = 0
+
 
 class AdminChatReportDismissRequest(BaseModel):
     """`POST /admin/chat/reports/{report_id}/dismiss` body."""

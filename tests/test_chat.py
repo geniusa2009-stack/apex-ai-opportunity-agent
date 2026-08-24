@@ -337,7 +337,7 @@ _CREATE_MODERATION_LOG_TABLE_SQL = """
 CREATE TABLE moderation_log_entries (
     id VARCHAR(36) PRIMARY KEY,
     actor_id VARCHAR(36),
-    actor_role VARCHAR(20) NOT NULL,
+    actor_role VARCHAR(20),
     action VARCHAR(30) NOT NULL,
     target_type VARCHAR(20) NOT NULL,
     target_id VARCHAR(36) NOT NULL,
@@ -345,6 +345,14 @@ CREATE TABLE moderation_log_entries (
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 )
 """
+# Repeat-Offender Detection addition (migration 0041): `actor_role` was
+# widened to nullable on the real model -- this fixture's own DDL must
+# match, since the WebSocket Arabic-filter path now writes a real
+# `CHAT_AUTO_BAN` log entry with `actor_id=None`/`actor_role=None` (see
+# `app/api/v1/endpoints/chat.py`'s own WebSocket handler). Confirmed as a
+# real, proactively-caught fixture gap: `test_arabic_message_bans_the_sender_and_closes_the_connection`
+# below failed with a real `NOT NULL constraint failed: moderation_log_entries.actor_role`
+# against the OLD copy of this DDL before this fix.
 
 
 @pytest_asyncio.fixture

@@ -93,7 +93,13 @@ from app.schemas.student_videos import (
     AdminVideoReviewOut,
     AIFeedback,
 )
-from app.services import gamification_service, moderation_claim_service, moderation_log_service, notification_service
+from app.services import (
+    gamification_service,
+    moderation_claim_service,
+    moderation_log_service,
+    notification_service,
+    repeat_offender_service,
+)
 from app.workers.cleanup_tasks import task_delete_orphaned_media
 
 logger = logging.getLogger(__name__)
@@ -123,7 +129,10 @@ _AI_FEEDBACK_FIELDS = set(AIFeedback.model_fields)
 
 
 def _build_review_item(
-    video: StudentVideo, student_name: str | None, claimant_name: str | None = None
+    video: StudentVideo,
+    student_name: str | None,
+    claimant_name: str | None = None,
+    offender_recent_action_count: int = 0,
 ) -> AdminVideoReviewOut:
     """Turns one `StudentVideo` ORM row (plus its uploader's resolved
     `full_name`) into one `AdminVideoReviewOut`, correctly splitting the
@@ -178,6 +187,7 @@ def _build_review_item(
         claimed_by=effective_claimed_by,
         claimed_by_name=claimant_name if effective_claimed_by is not None else None,
         claimed_at=effective_claimed_at,
+        offender_recent_action_count=offender_recent_action_count,
     )
 
 
@@ -234,9 +244,19 @@ async def get_review_queue(
         .offset(offset)
     )
 
+    rows = result.all()
+
+    # Repeat-Offender Detection addition (migration 0041): ONE real query
+    # for the whole page of results, not one per row -- see
+    # `repeat_offender_service.get_recent_offense_counts`'s own docstring
+    # for why this is a single bounded query rather than N.
+    offense_counts = await repeat_offender_service.get_recent_offense_counts(db)
+
     items = [
-        _build_review_item(video, student_name, claimant_name)
-        for video, student_name, claimant_name in result.all()
+        _build_review_item(
+            video, student_name, claimant_name, offense_counts.get(video.student_id, 0)
+        )
+        for video, student_name, claimant_name in rows
     ]
 
     return PaginatedResponse[AdminVideoReviewOut](items=items, total=total, limit=limit, offset=offset)

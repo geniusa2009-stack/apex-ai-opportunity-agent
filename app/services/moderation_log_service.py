@@ -50,8 +50,8 @@ LogEntryWithActor = tuple[ModerationLogEntry, str | None, str | None]
 def log_action(
     db: AsyncSession,
     *,
-    actor_id: uuid.UUID,
-    actor_role: AdminRole,
+    actor_id: uuid.UUID | None,
+    actor_role: AdminRole | None,
     action: ModerationAction,
     target_type: ModerationTargetType,
     target_id: uuid.UUID,
@@ -66,10 +66,17 @@ def log_action(
     (`app/api/deps.py::effective_admin_role`), not the raw
     `User.admin_role` column -- a legacy `is_superuser=True` account can
     have `admin_role IS NULL` (see `AdminRole`'s own docstring on the
-    legacy-alias resolution), which would violate this column's
-    `nullable=False` constraint if passed through unresolved. Every real
-    call site resolves this the same way; see each one's own "Automatic
-    Moderation Activity Log" comment.
+    legacy-alias resolution). Every HUMAN-actor call site resolves this
+    the same way; see each one's own "Automatic Moderation Activity Log"
+    comment.
+
+    `actor_id`/`actor_role` are BOTH `| None` (Repeat-Offender Detection
+    addition) -- `actor_role`'s own column docstring
+    (`app/models/moderation_log.py`) explains why a system-initiated
+    action (the automatic Arabic-filter ban, `ModerationAction.
+    CHAT_AUTO_BAN`) has neither. Every pre-existing call site keeps
+    passing real, non-`None` values for both -- this widening is purely
+    additive.
     """
     entry = ModerationLogEntry(
         actor_id=actor_id,

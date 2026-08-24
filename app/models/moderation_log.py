@@ -108,7 +108,27 @@ class ModerationLogEntry(Base):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
-    actor_role: Mapped[AdminRole] = mapped_column(
+    # --- Repeat-Offender Detection addition (migration 0041), DISCLOSED
+    # WIDENING: was `nullable=False` -- every log entry until this step
+    # was written by a real human moderator with a real `AdminRole`. The
+    # new automatic Arabic-filter auto-ban log entry (see
+    # `ModerationAction.CHAT_AUTO_BAN`'s own docstring) has no human
+    # actor at all -- it's the system itself acting, and `AdminRole` has
+    # no `SYSTEM` member (deliberately: that enum is a real, closed
+    # tiering of HUMAN moderation trust levels, not a place to bolt on an
+    # unrelated "who/what triggered this" concept). Rather than invent a
+    # fourth `AdminRole` member purely to satisfy a NOT NULL constraint
+    # -- which would let a real human tier check (`effective_admin_role`,
+    # `_require_admin_rank`) accidentally treat "system" as a rankable
+    # tier -- `actor_role` becomes nullable, `None` reads as "this action
+    # had no human actor," matching `actor_id`'s own existing nullable
+    # posture (which already means "no live actor reference" for a
+    # different reason -- a deleted account). Every EXISTING call site
+    # (`admin_moderation.py`/`admin_chat_reports.py`/`chat.py`'s own
+    # `admin_unban_user`) is completely unaffected -- they all pass a
+    # real, non-None `effective_admin_role(current_user)` exactly as
+    # before; only the new system-initiated call site passes `None`.
+    actor_role: Mapped[AdminRole | None] = mapped_column(
         SAEnum(
             AdminRole,
             name="admin_role",
@@ -116,7 +136,7 @@ class ModerationLogEntry(Base):
             create_type=False,
             values_callable=lambda enum_cls: [e.value for e in enum_cls],
         ),
-        nullable=False,
+        nullable=True,
     )
 
     action: Mapped[ModerationAction] = mapped_column(

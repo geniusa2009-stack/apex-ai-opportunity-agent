@@ -88,7 +88,7 @@ from app.schemas.chat_moderation import (
     AdminChatReportOut,
 )
 from app.schemas.opportunity import PaginatedResponse
-from app.services import chat_security, moderation_claim_service, moderation_log_service
+from app.services import chat_security, moderation_claim_service, moderation_log_service, repeat_offender_service
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +182,11 @@ async def get_chat_reports_queue(
                 )
             )
 
+    # Repeat-Offender Detection addition (migration 0041): ONE real query
+    # for the whole page, mirroring `get_review_queue`'s own posture --
+    # see `repeat_offender_service.get_recent_offense_counts`'s docstring.
+    offense_counts = await repeat_offender_service.get_recent_offense_counts(db)
+
     items: list[AdminChatReportOut] = []
     for report, message, sender_name, claimant_name, resolver_name in rows:
         effective_claimed_by, effective_claimed_at = moderation_claim_service.get_effective_claim(report)
@@ -208,6 +213,7 @@ async def get_chat_reports_queue(
                 resolved_by_name=resolver_name if report.resolved_by is not None else None,
                 resolved_at=report.resolved_at,
                 resolution_notes=report.resolution_notes,
+                offender_recent_action_count=offense_counts.get(message.sender_id, 0),
             )
         )
 

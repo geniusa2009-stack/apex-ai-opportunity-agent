@@ -502,6 +502,42 @@ async def chat_websocket(websocket: WebSocket, room_id: uuid.UUID, db: DbSession
             if chat_security.contains_arabic(incoming.content):
                 await chat_security.ban_user(user.id, _ARABIC_BAN_DURATION_SECONDS)
                 logger.info("chat: user %s banned for Arabic content in room %s", user.id, room_id)
+
+                # Repeat-Offender Detection addition (migration 0041) --
+                # this automatic ban previously wrote NO durable record
+                # at all: the Redis TTL ban self-expires with nothing
+                # left behind, so a real "how many times has this user
+                # been banned" count silently undercounted every auto-ban
+                # that had already expired by the time anyone asked (the
+                # confirmed, real gap from this task's own Step 1/2
+                # investigation). `actor_id=None`/`actor_role=None` --
+                # this is the system itself acting, not a human
+                # moderator (see `ModerationLogEntry.actor_role`'s own
+                # column docstring for why that's `None`, not a new
+                # `AdminRole.SYSTEM` member). `target_type=USER`/
+                # `target_id=user.id` is the SAME direct-target
+                # convention `CHAT_UNBAN` already uses above -- no
+                # `outcome`-JSON extraction is needed to recover the real
+                # offender later. This is a standalone commit (not
+                # piggybacking on the message-save transaction) since the
+                # ban itself is Redis-only, matching `admin_unban_user`'s
+                # own "no other DB mutation of its own" posture just
+                # above.
+                moderation_log_service.log_action(
+                    db,
+                    actor_id=None,
+                    actor_role=None,
+                    action=ModerationAction.CHAT_AUTO_BAN,
+                    target_type=ModerationTargetType.USER,
+                    target_id=user.id,
+                    outcome={
+                        "duration_seconds": _ARABIC_BAN_DURATION_SECONDS,
+                        "trigger": "arabic_filter",
+                        "room_id": str(room_id),
+                    },
+                )
+                await db.commit()
+
                 await websocket.send_json(
                     BannedEvent(banned_until_seconds=_ARABIC_BAN_DURATION_SECONDS).model_dump(
                         mode="json"

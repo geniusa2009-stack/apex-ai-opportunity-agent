@@ -232,6 +232,21 @@ class AdminVideoReviewOut(BaseModel):
     claimed_by_name: str | None = None
     claimed_at: datetime | None = None
 
+    # --- Repeat-Offender Detection addition (migration 0041) ---
+    # Real-time inline context, per this step's own Step 3.2 decision
+    # (see `app/services/repeat_offender_service.py`'s own module
+    # docstring for the full reasoning): how many real, punitive
+    # moderation actions have been taken against THIS video's owner
+    # (`student_id`), across every source (video + chat), within
+    # `repeat_offender_service.REPEAT_OFFENDER_LOOKBACK_DAYS`. Shown
+    # while a moderator is already reviewing this exact case -- no
+    # separate round-trip, no push notification, matching the user's own
+    # "I check in on my own schedule" preference while still surfacing
+    # real context at the one moment it's actually useful. `0` (not
+    # `None`) when the owner has no other recent offenses -- a real,
+    # meaningful "clean record" fact, not a missing value.
+    offender_recent_action_count: int = 0
+
 
 class AdminOverrideRequest(BaseModel):
     """`POST /admin/videos/{video_id}/override` request body.
