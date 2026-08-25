@@ -34,7 +34,13 @@ from app.models.chat import ChatMessage, ChatParticipant, ChatRoom
 from app.models.chat_moderation import ChatMessageReport, ChatMessageReportEntry
 from app.models.enums import AdminRole, ChatReportReason
 from app.models.user import User
-from app.services import chat_report_service, chat_security, moderation_claim_service
+from app.services import (
+    chat_report_service,
+    chat_security,
+    moderation_claim_service,
+    notification_connection_manager,
+    notification_service,
+)
 
 _CREATE_USERS_TABLE_SQL = """
 CREATE TABLE users (
@@ -88,6 +94,25 @@ CREATE TABLE moderation_log_entries (
 )
 """
 
+# Transparency: Notify Users of Moderation Actions addition -- both
+# `delete_reported_message` and `escalate_chat_report_to_ban` now call
+# `notification_service.create_notification`, which was previously never
+# exercised by this file's own fixture. Same raw-SQL/JSONB-as-TEXT
+# pattern this codebase already uses for this table everywhere else it's
+# needed (`tests/test_admin_moderation.py`, `tests/test_repeat_offenders.py`).
+_CREATE_NOTIFICATIONS_TABLE_SQL = """
+CREATE TABLE notifications (
+    id VARCHAR(36) PRIMARY KEY,
+    user_id VARCHAR(36) NOT NULL,
+    type VARCHAR(50) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    message TEXT NOT NULL,
+    is_read BOOLEAN NOT NULL DEFAULT 0,
+    payload TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
 
 @pytest_asyncio.fixture
 async def db_session_factory():
@@ -100,6 +125,7 @@ async def db_session_factory():
         await conn.execute(text(_CREATE_USERS_TABLE_SQL))
         await conn.execute(text(_CREATE_USER_BOOKMARKS_TABLE_SQL))
         await conn.execute(text(_CREATE_MODERATION_LOG_TABLE_SQL))
+        await conn.execute(text(_CREATE_NOTIFICATIONS_TABLE_SQL))
         await conn.run_sync(
             Base.metadata.create_all,
             tables=[
@@ -173,6 +199,32 @@ def fake_redis(monkeypatch):
     redis = _FakeRedis()
     monkeypatch.setattr(chat_security, "_get_redis_client", lambda: redis)
     return redis
+
+
+@pytest.fixture(autouse=True)
+def _fake_notification_broadcast(monkeypatch):
+    """Transparency: Notify Users of Moderation Actions addition -- both
+    `delete_reported_message` and `escalate_chat_report_to_ban` now call
+    `notification_service.create_notification`, which both publishes a
+    real-time event and (for `type="WARNING"`, the type both call sites
+    use) dispatches a real Celery email task. Neither `redis://redis:6379`
+    nor a Celery broker is reachable in this sandbox; both are already
+    wrapped in `create_notification`'s own best-effort try/except, but
+    the real DNS-resolution timeout on each costs several real seconds.
+    Patched at the same boundaries those two modules already isolate,
+    same posture as `fake_redis` above for `chat_security`'s own client.
+    """
+
+    class _NoopPublishClient:
+        async def publish(self, channel: str, message: str) -> None:
+            return None
+
+    class _NoopEmailTask:
+        def delay(self, *args, **kwargs) -> None:
+            return None
+
+    monkeypatch.setattr(notification_connection_manager, "_get_redis_client", lambda: _NoopPublishClient())
+    monkeypatch.setattr(notification_service, "send_transactional_email_task", _NoopEmailTask())
 
 
 @pytest.fixture

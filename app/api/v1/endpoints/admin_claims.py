@@ -65,6 +65,7 @@ from fastapi import APIRouter, HTTPException, status
 from app.api.deps import CurrentUser, DbSession, RequireModerationAccess, effective_admin_role
 from app.models.chat_moderation import ChatMessageReport
 from app.models.enums import AdminRole, ModerationTargetType
+from app.models.moderation_appeal import ModerationAppeal
 from app.models.student_videos import StudentVideo
 from app.schemas.moderation_claims import ModerationClaimOut
 from app.services import moderation_claim_service
@@ -87,9 +88,17 @@ router = APIRouter(tags=["admin-claims"])
 # lazy-expiry rule and the SAME "claimant or Owner may release" posture --
 # applies to a reported chat message with zero new code beyond this one
 # dict entry.
-_CLAIMABLE_MODELS: dict[ModerationTargetType, type[StudentVideo] | type[ChatMessageReport]] = {
+_CLAIMABLE_MODELS: dict[
+    ModerationTargetType, type[StudentVideo] | type[ChatMessageReport] | type[ModerationAppeal]
+] = {
     ModerationTargetType.STUDENT_VIDEO: StudentVideo,
     ModerationTargetType.CHAT_MESSAGE_REPORT: ChatMessageReport,
+    # Transparency: Notify Users + Real Appeal Path addition -- THIRD real
+    # entry, confirming this extension point again: zero new claim
+    # endpoints, zero schema changes, just this one line (see
+    # `app/models/moderation_appeal.py`'s own module docstring for why
+    # `ModerationAppeal` satisfies the same structural Protocol).
+    ModerationTargetType.MODERATION_APPEAL: ModerationAppeal,
 }
 
 

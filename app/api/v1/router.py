@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.endpoints.admin_activity_log import router as admin_activity_log_router
 from app.api.v1.endpoints.admin_chat_reports import router as admin_chat_reports_router
 from app.api.v1.endpoints.admin_repeat_offenders import router as admin_repeat_offenders_router
+from app.api.v1.endpoints.moderation_appeals import router as moderation_appeals_router
 from app.api.v1.endpoints.admin_claims import router as admin_claims_router
 from app.api.v1.endpoints.admin_moderation import router as admin_moderation_router
 from app.api.v1.endpoints.admin_roles import router as admin_roles_router
@@ -253,6 +254,14 @@ api_router.include_router(admin_chat_reports_router)
 # addition to the same moderation subsystem and reads its real,
 # durable audit-log data.
 api_router.include_router(admin_repeat_offenders_router)
+# `moderation_appeals_router` (Transparency: Notify Users + Real Appeal
+# Path) -- its real paths, `/moderation/appeals*` and `/admin/appeals*`,
+# are both brand-new top-level literals sharing no segment position with
+# any other route registered above -- no path-template ambiguity,
+# registration order here is provably irrelevant. Placed immediately
+# after `admin_repeat_offenders_router` simply because it's the most
+# recent addition to the same moderation subsystem.
+api_router.include_router(moderation_appeals_router)
 # `media_router` MUST be included BEFORE `courses_router` -- disclosed
 # routing-precedence requirement, Core Video Media Processing Pipeline
 # step. `media_router` owns `GET /courses/recommendations`, which shares

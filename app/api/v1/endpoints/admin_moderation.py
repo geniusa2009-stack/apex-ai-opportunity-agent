@@ -87,6 +87,7 @@ from app.models.student_videos import StudentVideo
 from app.models.user import User
 from app.schemas.opportunity import PaginatedResponse
 from app.schemas.student_videos import (
+    AdminDeleteVideoRequest,
     AdminOverrideRequest,
     AdminOverrideResponse,
     AdminRejectAndPurgeRequest,
@@ -322,7 +323,12 @@ async def override_video_decision(
     # ACTION: add your own `moderation_log_service.log_action(...)` call
     # here at your own real mutation site, using a new
     # `ModerationAction` member (see that enum's own docstring).
-    moderation_log_service.log_action(
+    # Return value captured (Transparency: Notify Users addition) -- the
+    # REJECT-branch notification below needs this exact row's real,
+    # persisted `id` to embed as `log_entry_id` in its payload, so a
+    # student's "appeal this" UI action can reference the exact real
+    # action being appealed.
+    log_entry = moderation_log_service.log_action(
         db,
         actor_id=current_user.id,
         actor_role=effective_admin_role(current_user),
@@ -371,6 +377,41 @@ async def override_video_decision(
                 video.student_id, video_id,
             )
 
+    # --- Transparency: Notify Users of Moderation Actions addition ---
+    # The REJECT branch of this same endpoint -- confirmed, real gap:
+    # before this task, a rejected override notified nobody at all (only
+    # the APPROVE branch above ever did). Real, honest wording reuses
+    # `payload.notes` when the moderator provided one; an explicit,
+    # non-evasive fallback sentence when they didn't, rather than a vague
+    # "something happened" message. `payload` embeds the real
+    # `log_entry_id` + `appealable: True` so the frontend can deep-link
+    # straight to a real appeal submission form -- see
+    # `moderation_appeal_service.APPEALABLE_ACTIONS` for why
+    # `VIDEO_OVERRIDE` (when rejecting) is genuinely appealable and
+    # REVERSIBLE if upheld. Best-effort, same reasoning as the APPROVE
+    # branch's own notification above.
+    elif payload.target_status == StudentVideoStatus.REJECTED:
+        try:
+            reason_text = payload.notes or "No additional reason was provided by the reviewing moderator."
+            await notification_service.create_notification(
+                db,
+                video.student_id,
+                "WARNING",
+                "Your video was rejected",
+                f'Your video "{video.title}" was reviewed and rejected. Reason: {reason_text}',
+                payload={
+                    "type": "moderation_action",
+                    "log_entry_id": str(log_entry.id),
+                    "action": ModerationAction.VIDEO_OVERRIDE.value,
+                    "appealable": True,
+                },
+            )
+        except Exception:
+            logger.exception(
+                "Notifications: failed to notify student %s of video %s rejection via admin override",
+                video.student_id, video_id,
+            )
+
     return AdminOverrideResponse(
         success=True, video_id=video.id, new_status=StudentVideoStatus(video.status)
     )
@@ -382,6 +423,7 @@ async def delete_video_permanently(
     current_user: CurrentUser,
     db: DbSession,
     _: RequireSeniorModerationAccess,
+    payload: AdminDeleteVideoRequest | None = None,
 ) -> None:
     """Senior-Moderator-or-higher (Real Tiered Role System step -- this
     action triggers real, irreversible R2/storage deletion on top of the
@@ -411,6 +453,13 @@ async def delete_video_permanently(
     404s for a video that doesn't exist -- same posture as every other
     `{video_id}`-parameterized route in this router and in
     `student_videos.py`.
+
+    Transparency: Notify Users addition -- `payload` is a NEW, genuinely
+    optional request body (this route previously took none at all); its
+    `notes` becomes the real reason surfaced in the student's own
+    notification below. `payload=None` (a caller sends no body at all)
+    is handled the same as an empty `AdminDeleteVideoRequest()` -- kept
+    backward-compatible with any existing caller that never sent one.
     """
     video = await db.get(StudentVideo, video_id)
     if video is None:
@@ -422,26 +471,61 @@ async def delete_video_permanently(
     # while the object is still a live, attached instance.
     deleted_video_id = video.id
     deleted_student_id = video.student_id
+    deleted_video_title = video.title
+    notes = payload.notes if payload is not None else None
 
     await db.delete(video)
 
     # Automatic Moderation Activity Log step -- same "same transaction,
     # not best-effort" posture as `override_video_decision` above. NEXT
     # ADMIN ACTION: see that call site's own comment.
-    moderation_log_service.log_action(
+    log_entry = moderation_log_service.log_action(
         db,
         actor_id=current_user.id,
         actor_role=effective_admin_role(current_user),
         action=ModerationAction.VIDEO_DELETE,
         target_type=ModerationTargetType.STUDENT_VIDEO,
         target_id=deleted_video_id,
-        outcome={"video_deleted": True, "student_id": str(deleted_student_id), "r2_urls_purged": r2_urls},
+        outcome={
+            "video_deleted": True,
+            "student_id": str(deleted_student_id),
+            "r2_urls_purged": r2_urls,
+            "notes": notes,
+        },
     )
 
     await db.commit()
 
     if r2_urls:
         task_delete_orphaned_media.delay(r2_urls=r2_urls)
+
+    # Transparency: Notify Users of Moderation Actions addition -- a real,
+    # confirmed gap: this endpoint notified nobody before this task.
+    # `can_be_restored` is NOT included in this payload -- see
+    # `moderation_appeal_service`'s own module docstring for why
+    # `VIDEO_DELETE` can never be reversed even if an appeal is upheld;
+    # that honest fact is surfaced on the appeal itself once filed, not
+    # promised or denied prematurely in the notification.
+    try:
+        reason_text = notes or "No additional reason was provided by the reviewing moderator."
+        await notification_service.create_notification(
+            db,
+            deleted_student_id,
+            "WARNING",
+            "Your video was permanently removed",
+            f'Your video "{deleted_video_title}" was permanently removed by an admin. Reason: {reason_text}',
+            payload={
+                "type": "moderation_action",
+                "log_entry_id": str(log_entry.id),
+                "action": ModerationAction.VIDEO_DELETE.value,
+                "appealable": True,
+            },
+        )
+    except Exception:
+        logger.exception(
+            "Notifications: failed to notify student %s of video %s permanent delete",
+            deleted_student_id, deleted_video_id,
+        )
 
 
 @router.post(
@@ -489,12 +573,15 @@ async def reject_video_and_purge_media(
     No "already REJECTED" guard the way `override_video_decision` guards
     its APPROVED-XP-award branch -- this action is idempotent-ish by
     nature (calling it twice on an already-purged video simply finds
-    `r2_urls` empty the second time and dispatches nothing), and no
-    notification is sent for a rejection (this step's own ask only names
-    a notification for the "Approve" action, not this one -- consistent
-    with the existing pipeline's own behavior, which also never notifies
-    a student of a REJECTED outcome; see `notification_service`'s own
-    trigger points).
+    `r2_urls` empty the second time and dispatches nothing).
+
+    Transparency: Notify Users addition -- DOES now notify the student
+    (the paragraph above describing "no notification is sent" was this
+    endpoint's ORIGINAL posture, confirmed stale during this task's own
+    Step 1 investigation and corrected below). `can_be_restored=False`
+    in the appeal payload -- see `moderation_appeal_service`'s own module
+    docstring for why a purged video's media can never actually come
+    back even if an appeal is later upheld.
     """
     video = await db.get(StudentVideo, video_id)
     if video is None:
@@ -513,7 +600,7 @@ async def reject_video_and_purge_media(
     # Automatic Moderation Activity Log step -- same "same transaction,
     # not best-effort" posture as `override_video_decision` above. NEXT
     # ADMIN ACTION: see that call site's own comment.
-    moderation_log_service.log_action(
+    log_entry = moderation_log_service.log_action(
         db,
         actor_id=current_user.id,
         actor_role=effective_admin_role(current_user),
@@ -528,6 +615,34 @@ async def reject_video_and_purge_media(
 
     if r2_urls:
         task_delete_orphaned_media.delay(r2_urls=r2_urls)
+
+    # Transparency: Notify Users of Moderation Actions addition -- see
+    # this endpoint's own updated docstring above for why this is a
+    # genuinely new, real gap being closed here, not an existing behavior
+    # being preserved. `appealable: True` / not `can_be_restored` (that
+    # honest "media is gone either way" fact lives on the appeal itself
+    # once filed, not duplicated into every notification payload).
+    try:
+        reason_text = payload.notes or "No additional reason was provided by the reviewing moderator."
+        await notification_service.create_notification(
+            db,
+            video.student_id,
+            "WARNING",
+            "Your video was rejected and its media removed",
+            f'Your video "{video.title}" was reviewed, rejected, and its media file permanently removed. '
+            f"Reason: {reason_text}",
+            payload={
+                "type": "moderation_action",
+                "log_entry_id": str(log_entry.id),
+                "action": ModerationAction.VIDEO_REJECT_AND_PURGE.value,
+                "appealable": True,
+            },
+        )
+    except Exception:
+        logger.exception(
+            "Notifications: failed to notify student %s of video %s reject-and-purge",
+            video.student_id, video_id,
+        )
 
     return AdminOverrideResponse(
         success=True, video_id=video.id, new_status=StudentVideoStatus(video.status)

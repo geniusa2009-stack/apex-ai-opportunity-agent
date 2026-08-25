@@ -26,6 +26,7 @@ from app.models.focus_room import FocusSession
 from app.models.gamification import StudentAccountability
 from app.models.guilds import Guild, GuildComment, GuildPost, GuildQuest
 from app.models.live_session import LiveSession
+from app.models.moderation_appeal import ModerationAppeal
 from app.models.notification import Notification
 from app.models.opportunity import Opportunity
 from app.models.parent_pitch import ParentPitch
@@ -82,4 +83,5 @@ __all__ = [
     "LessonStudyAid",
     "MentorshipRelation",
     "LiveSession",
+    "ModerationAppeal",
 ]

@@ -82,13 +82,20 @@ from app.models.user import User
 from app.schemas.chat_moderation import (
     AdminChatMessageOut,
     AdminChatReportActionResponse,
+    AdminChatReportDeleteMessageRequest,
     AdminChatReportDismissRequest,
     AdminChatReportEntryOut,
     AdminChatReportEscalateBanRequest,
     AdminChatReportOut,
 )
 from app.schemas.opportunity import PaginatedResponse
-from app.services import chat_security, moderation_claim_service, moderation_log_service, repeat_offender_service
+from app.services import (
+    chat_security,
+    moderation_claim_service,
+    moderation_log_service,
+    notification_service,
+    repeat_offender_service,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +107,23 @@ async def _get_report_or_404(db: DbSession, report_id: uuid.UUID) -> ChatMessage
     if report is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat message report not found")
     return report
+
+
+async def _summarize_report_reasons(db: DbSession, report_id: uuid.UUID) -> str:
+    """Transparency: Notify Users addition -- real reason-category data
+    already exists on every report (`ChatMessageReportEntry.reason`, a
+    real `ChatReportReason`), per this task's own explicit "reuse
+    whatever reason/reason-category data already exists... rather than a
+    generic message" instruction. Distinct reasons across every reporter
+    on this case, comma-joined, human-readable -- e.g. "spam, harassment"
+    -- rather than either a single arbitrary reporter's reason or a
+    generic "policy violation" placeholder.
+    """
+    result = await db.execute(
+        select(ChatMessageReportEntry.reason).where(ChatMessageReportEntry.report_id == report_id).distinct()
+    )
+    reasons = [r.value.replace("_", " ") for r in result.scalars().all()]
+    return ", ".join(reasons) if reasons else "a policy violation"
 
 
 def _require_open(report: ChatMessageReport) -> None:
@@ -261,6 +285,7 @@ async def delete_reported_message(
     current_user: CurrentUser,
     db: DbSession,
     _: RequireSeniorModerationAccess,
+    payload: AdminChatReportDeleteMessageRequest | None = None,
 ) -> AdminChatReportActionResponse:
     """Senior-Moderator-or-higher (irreversible -- see module docstring).
     Permanently deletes the real `ChatMessage` row this case reports,
@@ -271,6 +296,9 @@ async def delete_reported_message(
     resolved_by/at) BEFORE deleting the message, so the case's own
     resolution record survives as real history instead of cascading away
     with the message it was about.
+
+    Transparency: Notify Users addition -- `payload` is a NEW, genuinely
+    optional request body (this route previously took none at all).
     """
     report = await _get_report_or_404(db, report_id)
     _require_open(report)
@@ -285,24 +313,53 @@ async def delete_reported_message(
 
     deleted_message_id = message.id
     deleted_sender_id = message.sender_id
+    notes = payload.notes if payload is not None else None
 
     report.status = REPORT_STATUS_MESSAGE_DELETED
     report.resolved_by = current_user.id
     db.add(report)
 
-    moderation_log_service.log_action(
+    log_entry = moderation_log_service.log_action(
         db,
         actor_id=current_user.id,
         actor_role=effective_admin_role(current_user),
         action=ModerationAction.CHAT_MESSAGE_DELETE,
         target_type=ModerationTargetType.CHAT_MESSAGE_REPORT,
         target_id=report.id,
-        outcome={"message_id": str(deleted_message_id), "sender_id": str(deleted_sender_id)},
+        outcome={"message_id": str(deleted_message_id), "sender_id": str(deleted_sender_id), "notes": notes},
     )
+
+    reason_summary = await _summarize_report_reasons(db, report_id)
 
     await db.delete(message)
     await db.commit()
     await db.refresh(report)
+
+    # Transparency: Notify Users of Moderation Actions addition -- a real,
+    # confirmed gap: this endpoint notified nobody before this task.
+    # `can_be_restored` deliberately not promised here -- the message row
+    # is already hard-deleted; see `moderation_appeal_service`'s own
+    # module docstring.
+    try:
+        extra = f" Additional note: {notes}" if notes else ""
+        await notification_service.create_notification(
+            db,
+            deleted_sender_id,
+            "WARNING",
+            "Your message was removed",
+            f"A message you sent was removed after being reported for {reason_summary}.{extra}",
+            payload={
+                "type": "moderation_action",
+                "log_entry_id": str(log_entry.id),
+                "action": ModerationAction.CHAT_MESSAGE_DELETE.value,
+                "appealable": True,
+            },
+        )
+    except Exception:
+        logger.exception(
+            "Notifications: failed to notify user %s of chat message %s deletion",
+            deleted_sender_id, deleted_message_id,
+        )
 
     return AdminChatReportActionResponse(success=True, report_id=report.id, status=report.status)
 
@@ -340,7 +397,7 @@ async def escalate_chat_report_to_ban(
     report.resolution_notes = payload.notes
     db.add(report)
 
-    moderation_log_service.log_action(
+    log_entry = moderation_log_service.log_action(
         db,
         actor_id=current_user.id,
         actor_role=effective_admin_role(current_user),
@@ -354,8 +411,33 @@ async def escalate_chat_report_to_ban(
         },
     )
 
+    reason_summary = await _summarize_report_reasons(db, report_id)
+    banned_user_id = message.sender_id
+    duration_minutes = payload.duration_seconds // 60
+
     await db.commit()
     await db.refresh(report)
+
+    # Transparency: Notify Users of Moderation Actions addition -- a real,
+    # confirmed gap: this endpoint notified nobody before this task.
+    try:
+        extra = f" Additional note: {payload.notes}" if payload.notes else ""
+        await notification_service.create_notification(
+            db,
+            banned_user_id,
+            "WARNING",
+            "You have been banned from chat",
+            f"You were banned from chat for {duration_minutes} minute(s) after being reported for "
+            f"{reason_summary}.{extra}",
+            payload={
+                "type": "moderation_action",
+                "log_entry_id": str(log_entry.id),
+                "action": ModerationAction.CHAT_REPORT_ESCALATE_BAN.value,
+                "appealable": True,
+            },
+        )
+    except Exception:
+        logger.exception("Notifications: failed to notify user %s of chat ban", banned_user_id)
 
     return AdminChatReportActionResponse(
         success=True, report_id=report.id, status=report.status, banned_until_seconds=payload.duration_seconds

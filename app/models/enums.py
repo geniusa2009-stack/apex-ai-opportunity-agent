@@ -533,6 +533,21 @@ class ModerationAction(str, enum.Enum):
     # `outcome` JSON extraction needed to recover the real offender).
     CHAT_AUTO_BAN = "chat_auto_ban"
 
+    # --- Transparency: Notify Users + Real Appeal Path addition
+    # (migration 0042) --- The real closed pair of outcomes a
+    # Senior-Moderator-or-higher's appeal RESOLUTION itself writes --
+    # see `app/services/moderation_appeal_service.py`'s own module
+    # docstring for the full reversible-vs-acknowledgment-only design
+    # this pair sits on top of. Resolving an appeal is itself a real,
+    # loggable moderation action (it can reverse an earlier one), so it
+    # gets its own members here rather than silently reusing
+    # `VIDEO_OVERRIDE`/`CHAT_UNBAN` for the cases where a real reversal
+    # happens underneath -- the audit trail should show "an appeal was
+    # upheld," not make it look like a moderator spontaneously re-reviewed
+    # the video/ban a second time out of nowhere.
+    APPEAL_UPHELD = "appeal_upheld"
+    APPEAL_DENIED = "appeal_denied"
+
 
 class ModerationTargetType(str, enum.Enum):
     """What kind of real row a `ModerationLogEntry.target_id` refers to
@@ -559,6 +574,15 @@ class ModerationTargetType(str, enum.Enum):
     # "what is a case, this time" reasoning, mirroring Phase 4's own
     # `admin_claims.py` Step 1 investigation for `StudentVideo`.
     CHAT_MESSAGE_REPORT = "chat_message_report"
+
+    # --- Transparency: Notify Users + Real Appeal Path addition
+    # (migration 0042) --- The appeal itself is the CASE a moderator
+    # opens/claims/resolves -- same "the case, not the individual
+    # submission" shape `CHAT_MESSAGE_REPORT` already established (though
+    # here there is only ever one submitter, the real affected student,
+    # so there is no separate per-submission entry table the way chat
+    # reports needed one for multiple reporters).
+    MODERATION_APPEAL = "moderation_appeal"
 
 
 class ChatReportReason(str, enum.Enum):

@@ -26,7 +26,15 @@ from app.schemas.chat import (
     UnbanResponse,
 )
 from app.schemas.chat_moderation import ChatMessageReportRequest, ChatMessageReportResponse
-from app.services import chat_group_service, chat_report_service, chat_security, chat_service, chatbot, moderation_log_service
+from app.services import (
+    chat_group_service,
+    chat_report_service,
+    chat_security,
+    chat_service,
+    chatbot,
+    moderation_log_service,
+    notification_service,
+)
 from app.services.chat_connection_manager import manager, publish_message
 
 logger = logging.getLogger(__name__)
@@ -523,7 +531,7 @@ async def chat_websocket(websocket: WebSocket, room_id: uuid.UUID, db: DbSession
                 # ban itself is Redis-only, matching `admin_unban_user`'s
                 # own "no other DB mutation of its own" posture just
                 # above.
-                moderation_log_service.log_action(
+                log_entry = moderation_log_service.log_action(
                     db,
                     actor_id=None,
                     actor_role=None,
@@ -537,6 +545,30 @@ async def chat_websocket(websocket: WebSocket, room_id: uuid.UUID, db: DbSession
                     },
                 )
                 await db.commit()
+
+                # Transparency: Notify Users of Moderation Actions addition
+                # -- a real, confirmed gap: this automatic ban notified
+                # nobody before this task (the user only ever saw the
+                # in-session `BannedEvent` WebSocket close, which is lost
+                # once they reconnect). Reuses the exact same fixed reason
+                # text already shown in that close event, rather than
+                # inventing a second, possibly-inconsistent wording.
+                try:
+                    await notification_service.create_notification(
+                        db,
+                        user.id,
+                        "WARNING",
+                        "You have been banned from chat",
+                        "Arabic detected. You are banned from chat for 30 minutes.",
+                        payload={
+                            "type": "moderation_action",
+                            "log_entry_id": str(log_entry.id),
+                            "action": ModerationAction.CHAT_AUTO_BAN.value,
+                            "appealable": True,
+                        },
+                    )
+                except Exception:
+                    logger.exception("Notifications: failed to notify user %s of automatic chat ban", user.id)
 
                 await websocket.send_json(
                     BannedEvent(banned_until_seconds=_ARABIC_BAN_DURATION_SECONDS).model_dump(

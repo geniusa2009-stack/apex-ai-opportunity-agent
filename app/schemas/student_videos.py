@@ -292,6 +292,23 @@ class AdminOverrideResponse(BaseModel):
 # =============================================================================
 
 
+class AdminDeleteVideoRequest(BaseModel):
+    """`DELETE /admin/videos/{video_id}` request body -- Transparency:
+    Notify Users of Moderation Actions addition. DISCLOSED, REAL GAP this
+    closes: this endpoint previously took NO body at all (a bare
+    `DELETE`, no way for a moderator to record a real reason). Added
+    purely so the student's own notification can carry a real, specific
+    reason rather than an unavoidable generic one -- same optional-reason
+    shape as `AdminOverrideRequest.notes`/`AdminRejectAndPurgeRequest.notes`,
+    kept genuinely optional (not required) for the same reason those two
+    are: a moderator acting under time pressure on an obvious case
+    shouldn't be blocked from completing an otherwise-authorized action
+    just because they didn't type a sentence first.
+    """
+
+    notes: str | None = Field(default=None, max_length=2000)
+
+
 class AdminRejectAndPurgeRequest(BaseModel):
     """`POST /admin/videos/{video_id}/reject-and-purge-media` request
     body -- this step's own "Reject & Delete" action. Deliberately NOT

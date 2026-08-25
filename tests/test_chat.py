@@ -45,7 +45,7 @@ from app.db.session import get_db
 from app.main import app
 from app.models.chat import ChatMessage
 from app.models.user import User
-from app.services import chat_security, chat_service
+from app.services import chat_security, chat_service, notification_connection_manager, notification_service
 from app.services.chat_connection_manager import ConnectionManager
 
 # Deliberately NOT a module-level `pytestmark = pytest.mark.asyncio` --
@@ -119,6 +119,31 @@ def fake_redis(monkeypatch):
     redis = _FakeRedis()
     monkeypatch.setattr(chat_security, "_get_redis_client", lambda: redis)
     return redis
+
+
+@pytest.fixture(autouse=True)
+def _fake_notification_broadcast(monkeypatch):
+    """Transparency: Notify Users addition -- the Arabic-filter auto-ban
+    path now calls `notification_service.create_notification` (type
+    `WARNING`), which both publishes a real-time event AND dispatches a
+    real Celery email task. Neither `redis://redis:6379` nor a Celery
+    broker is reachable in this sandbox; both calls are already wrapped
+    in `create_notification`'s own best-effort try/except, but the real
+    DNS-resolution timeout on each one costs several real seconds --
+    patched out at the same boundaries those two modules already isolate,
+    same posture as `fake_redis` above for `chat_security`'s own client.
+    """
+
+    class _NoopPublishClient:
+        async def publish(self, channel: str, message: str) -> None:
+            return None
+
+    class _NoopEmailTask:
+        def delay(self, *args, **kwargs) -> None:
+            return None
+
+    monkeypatch.setattr(notification_connection_manager, "_get_redis_client", lambda: _NoopPublishClient())
+    monkeypatch.setattr(notification_service, "send_transactional_email_task", _NoopEmailTask())
 
 
 # ---------------------------------------------------------------------
@@ -354,6 +379,24 @@ CREATE TABLE moderation_log_entries (
 # below failed with a real `NOT NULL constraint failed: moderation_log_entries.actor_role`
 # against the OLD copy of this DDL before this fix.
 
+# Transparency: Notify Users of Moderation Actions addition -- the
+# WebSocket Arabic-filter path now ALSO calls `notification_service.
+# create_notification` after writing the `CHAT_AUTO_BAN` log entry above.
+# Same raw-SQL/JSONB-as-TEXT pattern this codebase already uses for this
+# table everywhere else it's needed.
+_CREATE_NOTIFICATIONS_TABLE_SQL = """
+CREATE TABLE notifications (
+    id VARCHAR(36) PRIMARY KEY,
+    user_id VARCHAR(36) NOT NULL,
+    type VARCHAR(50) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    message TEXT NOT NULL,
+    is_read BOOLEAN NOT NULL DEFAULT 0,
+    payload TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
 
 @pytest_asyncio.fixture
 async def db_session_factory():
@@ -369,6 +412,7 @@ async def db_session_factory():
         await conn.execute(text(_CREATE_CHAT_PARTICIPANTS_TABLE_SQL))
         await conn.execute(text(_CREATE_CHAT_MESSAGES_TABLE_SQL))
         await conn.execute(text(_CREATE_MODERATION_LOG_TABLE_SQL))
+        await conn.execute(text(_CREATE_NOTIFICATIONS_TABLE_SQL))
 
     session_factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
     yield session_factory
@@ -714,6 +758,37 @@ class TestWebSocketFlow:
         async with db_session_factory() as db:
             history = await chat_service.get_message_history(db, room.id)
             assert history == [], "the Arabic message must never be saved to the database"
+
+    async def test_arabic_auto_ban_sends_a_real_notification_to_the_banned_user(
+        self, db_session_factory, chat_client, fake_redis
+    ):
+        """Transparency: Notify Users of Moderation Actions addition --
+        the real, confirmed gap this closes: before this task, the
+        automatic Arabic-filter ban notified nobody outside the
+        in-session `BannedEvent` (lost on reconnect). Reuses the exact
+        same fixed reason text already shown in that close event."""
+        async with db_session_factory() as db:
+            alice = await _make_user(db, full_name="Alice")
+            bob = await _make_user(db, full_name="Bob")
+            room = await chat_service.get_or_create_dm_room(db, alice.id, bob.id)
+
+        token = _mint_token(alice.id)
+        with chat_client.websocket_connect(f"/api/v1/chat/ws/{room.id}?token={token}") as ws:
+            ws.send_text('{"content": "مرحبا يا صديقي"}')
+            ws.receive_json()  # the BannedEvent frame
+            ws.receive()  # the websocket.close frame
+
+        async with db_session_factory() as db:
+            result = await db.execute(
+                text("SELECT user_id, type, message, payload FROM notifications")
+            )
+            rows = result.all()
+            assert len(rows) == 1
+            user_id, type_, message, payload_json = rows[0]
+            assert user_id.replace("-", "") == str(alice.id).replace("-", "")
+            assert type_ == "WARNING"
+            assert message == "Arabic detected. You are banned from chat for 30 minutes."
+            assert '"action": "chat_auto_ban"' in payload_json or "chat_auto_ban" in payload_json
 
     async def test_a_currently_banned_user_is_rejected_on_connect(
         self, db_session_factory, chat_client, fake_redis

@@ -171,6 +171,22 @@ async def _resolve_offenders(
     return offenders
 
 
+async def resolve_offender_for_entry(db: AsyncSession, entry: ModerationLogEntry) -> uuid.UUID | None:
+    """Public, single-entry wrapper around `_resolve_offenders` -- added
+    for the Transparency: Notify Users + Real Appeal Path task, which
+    needs to answer "who was this ONE specific log entry's real
+    offender" (to notify them, and later to verify an appeal submitter
+    IS that real offender) without duplicating this module's own
+    per-action-type resolution rules a second time. Reuses the exact
+    same logic the Repeat-Offender Detection feature already established
+    and tested -- `None` for the same honest reasons `_resolve_offenders`
+    would omit the entry from its bulk mapping (a non-punitive approving
+    `VIDEO_OVERRIDE`, or a target row that's since vanished).
+    """
+    offenders = await _resolve_offenders(db, [entry])
+    return offenders.get(entry.id)
+
+
 async def get_recent_offense_counts(
     db: AsyncSession, *, window_days: int = REPEAT_OFFENDER_LOOKBACK_DAYS
 ) -> dict[uuid.UUID, int]:

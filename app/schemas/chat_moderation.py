@@ -124,6 +124,19 @@ class AdminChatReportDismissRequest(BaseModel):
     notes: str | None = Field(default=None, max_length=2000)
 
 
+class AdminChatReportDeleteMessageRequest(BaseModel):
+    """`DELETE /admin/chat/reports/{report_id}/message` request body --
+    Transparency: Notify Users of Moderation Actions addition. DISCLOSED,
+    REAL GAP this closes: this endpoint previously took NO body at all.
+    Same optional-reason shape/reasoning as `AdminChatReportDismissRequest.
+    notes` -- added so the sender's own notification can carry a real,
+    specific reason beyond the report's own category, not to gate the
+    action on it.
+    """
+
+    notes: str | None = Field(default=None, max_length=2000)
+
+
 class AdminChatReportEscalateBanRequest(BaseModel):
     """`POST /admin/chat/reports/{report_id}/escalate-ban` body."""
 
