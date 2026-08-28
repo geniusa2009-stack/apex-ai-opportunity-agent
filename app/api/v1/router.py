@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.endpoints.admin_activity_log import router as admin_activity_log_router
 from app.api.v1.endpoints.admin_chat_reports import router as admin_chat_reports_router
+from app.api.v1.endpoints.admin_high_risk import router as admin_high_risk_router
 from app.api.v1.endpoints.admin_repeat_offenders import router as admin_repeat_offenders_router
 from app.api.v1.endpoints.moderation_appeals import router as moderation_appeals_router
 from app.api.v1.endpoints.admin_claims import router as admin_claims_router
@@ -254,6 +255,15 @@ api_router.include_router(admin_chat_reports_router)
 # addition to the same moderation subsystem and reads its real,
 # durable audit-log data.
 api_router.include_router(admin_repeat_offenders_router)
+# `admin_high_risk_router` (High-Risk-Content View) -- its one real
+# path, `/admin/high-risk`, is a brand-new top-level literal under
+# `admin/` sharing no segment position with any other `admin/*` route
+# registered above -- no path-template ambiguity, registration order
+# here is provably irrelevant. Placed immediately after
+# `admin_repeat_offenders_router` simply because it's the most recent
+# addition to the same moderation subsystem and reuses its real,
+# already-tested flagged-users data directly.
+api_router.include_router(admin_high_risk_router)
 # `moderation_appeals_router` (Transparency: Notify Users + Real Appeal
 # Path) -- its real paths, `/moderation/appeals*` and `/admin/appeals*`,
 # are both brand-new top-level literals sharing no segment position with
