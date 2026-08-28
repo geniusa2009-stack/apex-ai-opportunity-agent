@@ -16,6 +16,7 @@ real `chat_security.ban_user` call) is faked at the exact same
 """
 
 import datetime as dt
+import json
 import uuid
 
 import pytest
@@ -632,6 +633,49 @@ class TestEscalateBanAction:
         assert body["status"] == "escalated_ban"
         assert body["banned_until_seconds"] == 900
         assert await chat_security.is_user_banned(sender_id) is True
+
+    async def test_escalate_ban_persists_reason_category_in_the_log_entry(
+        self, db_session_factory, client_factory, fake_redis
+    ):
+        """Full Ban-Reason History addition -- DISCLOSED REAL GAP this
+        closes: `reason_summary` (the report's own real, categorized
+        reasons -- `ChatMessageReportEntry.reason`) was previously
+        computed AFTER the log write and used ONLY for the student's
+        notification text, so it was lost from the audit trail the
+        moment the notification was sent. It's now written into the
+        same `CHAT_REPORT_ESCALATE_BAN` log entry's `outcome["reason_category"]`,
+        alongside the moderator's own free-text `notes` -- both survive,
+        neither replaces the other."""
+        async with db_session_factory() as session:
+            sender = await _make_user(session)
+            reporter = await _make_user(session)
+            moderator = await _make_user(session, admin_role=AdminRole.MODERATOR)
+            room = await _make_room_with_participants(session, sender.id, reporter.id)
+            message = await _make_message(session, room_id=room.id, sender_id=sender.id)
+            case, _, _ = await chat_report_service.create_report(
+                session, message=message, reporter_id=reporter.id, reason=ChatReportReason.HARASSMENT, details=None
+            )
+            await session.commit()
+
+        client = client_factory(moderator)
+        response = client.post(
+            f"/api/v1/admin/chat/reports/{case.id}/escalate-ban",
+            json={"notes": "repeat harassment", "duration_seconds": 900},
+        )
+        assert response.status_code == 200
+
+        async with db_session_factory() as session:
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT outcome FROM moderation_log_entries WHERE action = 'chat_report_escalate_ban'"
+                    )
+                )
+            ).one()
+        outcome = json.loads(row.outcome)
+        assert outcome["notes"] == "repeat harassment"
+        assert outcome["reason_category"] is not None
+        assert "harassment" in outcome["reason_category"].lower()
 
     async def test_escalating_twice_is_409(self, db_session_factory, client_factory, fake_redis):
         async with db_session_factory() as session:

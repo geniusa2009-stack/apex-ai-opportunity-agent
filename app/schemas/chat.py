@@ -162,6 +162,22 @@ class BanStatusOut(BaseModel):
     )
 
 
+class AdminUnbanRequest(BaseModel):
+    """Full Ban-Reason History addition -- `DELETE /chat/admin/bans/{user_id}`
+    request body. DISCLOSED REAL GAP this closes: that endpoint previously
+    took NO body at all, so `CHAT_UNBAN`'s own `ModerationLogEntry.outcome`
+    had no reason field and no way to ever get one. Genuinely optional
+    (`| None = None` at the route itself, not just this field) -- a
+    moderator lifting an already-expired-in-practice ban, or acting on an
+    obvious mistake, shouldn't be blocked from unbanning just because they
+    didn't type a sentence first. Same optional-reason shape/reasoning as
+    `AdminChatReportDismissRequest.notes`/`AdminChatReportDeleteMessageRequest.notes`
+    (`app/schemas/chat_moderation.py`) -- reused here rather than inventing
+    a differently-named field for the same concept."""
+
+    reason: str | None = Field(default=None, max_length=2000)
+
+
 class UnbanResponse(BaseModel):
     """Student Dashboard & Admin Control Panel step -- `DELETE
     /chat/admin/bans/{user_id}` ("Unban Early") response. `was_banned`

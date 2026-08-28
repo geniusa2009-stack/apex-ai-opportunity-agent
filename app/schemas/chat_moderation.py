@@ -16,6 +16,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import ChatReportReason
+from app.schemas.moderation_log import ModerationLogEntryOut
 
 
 # ---------------------------------------------------------------------
@@ -149,6 +150,44 @@ class AdminChatReportEscalateBanRequest(BaseModel):
         "the same 1800s (30 min) this codebase already uses for the automatic Arabic-filter ban, "
         "not a separate hardcoded duration a moderator has no way to reason about.",
     )
+
+
+class BanHistoryResponse(BaseModel):
+    """`GET /admin/chat/users/{user_id}/ban-history`'s own response --
+    Full Ban-Reason History addition.
+
+    `items` reuses `ModerationLogEntryOut` verbatim (same shape the
+    Owner-only activity log already returns) rather than a new, narrower
+    per-action schema -- a ban-history row is a real `ModerationLogEntry`
+    row like any other; the caller (`admin-moderation.html`) reads each
+    row's own real `action` (`chat_auto_ban`/`chat_report_escalate_ban`/
+    `chat_unban`) to know which `outcome` fields to expect (`trigger`,
+    `reason_category`, `notes`, `reason`, `duration_seconds` -- see each
+    action's own real call site for which fields it actually writes), the
+    same "outcome is deliberately unstructured, shape varies by action"
+    posture `ModerationLogEntry.outcome`'s own column docstring already
+    establishes -- not a new convention invented for this one endpoint.
+
+    `currently_banned`/`currently_banned_remaining_seconds` are NOT
+    reconstructed from the log rows above -- they're the REAL, LIVE
+    Redis truth (`chat_security.get_ban_remaining_seconds`), the same
+    source `GET /chat/ban-status` itself reads. DISCLOSED DESIGN CALL:
+    since a chat ban is a single Redis key with one TTL (only ONE ban can
+    ever be active for a user at a time -- a new ban simply overwrites
+    the previous key's TTL), "is this user banned right now" already has
+    one unambiguous, authoritative real answer that doesn't need lazy
+    derivation from `created_at + duration_seconds` across possibly
+    several historical rows (which manual `CHAT_UNBAN` rows would also
+    have to be reconciled against) -- reading the real live value once is
+    both simpler and strictly more honest than reconstructing it.
+    """
+
+    items: list[ModerationLogEntryOut]
+    total: int
+    limit: int
+    offset: int
+    currently_banned: bool
+    currently_banned_remaining_seconds: int | None = None
 
 
 class AdminChatReportActionResponse(BaseModel):

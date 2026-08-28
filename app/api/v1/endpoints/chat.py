@@ -10,6 +10,7 @@ from app.models.enums import ModerationAction, ModerationTargetType
 from app.core.config import settings
 from app.models.chat import ChatMessage as ChatMessageRow, ChatParticipant
 from app.schemas.chat import (
+    AdminUnbanRequest,
     BannedEvent,
     BanStatusOut,
     LeaveRoomResponse,
@@ -373,7 +374,11 @@ async def ban_status(current_user: CurrentUser) -> BanStatusOut:
 
 @router.delete("/admin/bans/{user_id}", response_model=UnbanResponse)
 async def admin_unban_user(
-    user_id: uuid.UUID, current_user: CurrentUser, db: DbSession, _: RequireModerationAccess
+    user_id: uuid.UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+    _: RequireModerationAccess,
+    payload: AdminUnbanRequest | None = None,
 ) -> UnbanResponse:
     """Moderator-or-higher (Real Tiered Role System step -- lifting a ban
     early is reversible/non-destructive, same tier as the review-queue
@@ -394,8 +399,18 @@ async def admin_unban_user(
     `RequireAdmin`-gated, same posture as every admin-only route
     elsewhere (`app/api/v1/endpoints/admin_moderation.py`) -- a
     non-admin gets a real `403`, not a silently-ignored request.
+
+    Full Ban-Reason History addition: `payload` is a NEW, genuinely
+    optional request body (this route previously took none at all --
+    see `AdminUnbanRequest`'s own docstring for the confirmed gap this
+    closes). `payload.reason` (when given) is written into the real
+    `CHAT_UNBAN` log entry's `outcome`, not a separate, parallel
+    mechanism -- this is the one place a manual "unban early" reason can
+    ever be recorded, since `chat_security.unban_user` itself has no
+    reason parameter (Redis-only, see that module's own docstring).
     """
     was_banned = await chat_security.unban_user(user_id)
+    reason = payload.reason if payload is not None else None
 
     # Automatic Moderation Activity Log step -- logged regardless of
     # `was_banned` (an admin invoking this action is real and worth
@@ -415,7 +430,7 @@ async def admin_unban_user(
         action=ModerationAction.CHAT_UNBAN,
         target_type=ModerationTargetType.USER,
         target_id=user_id,
-        outcome={"was_banned": was_banned},
+        outcome={"was_banned": was_banned, "reason": reason},
     )
     await db.commit()
 

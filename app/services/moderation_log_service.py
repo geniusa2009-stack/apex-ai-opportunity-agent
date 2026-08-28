@@ -157,3 +157,115 @@ async def list_team_log(
         .offset(offset)
     )
     return [(entry, email, full_name) for entry, email, full_name in result.all()], total
+
+
+# --- Full Ban-Reason History addition ---
+# The three real closed-set actions that make up a user's chat-ban
+# lifecycle, per this task's own Step 1 investigation:
+# `CHAT_AUTO_BAN` (the automatic Arabic-filter ban, no human actor),
+# `CHAT_REPORT_ESCALATE_BAN` (a moderator escalating a reported message),
+# `CHAT_UNBAN` (a moderator manually lifting a ban early). All three
+# already share the SAME `target_type=ModerationTargetType.USER,
+# target_id=<the affected user>` convention (confirmed by reading each
+# real call site in `chat.py`/`admin_chat_reports.py`) -- no new
+# target-shape work was needed to make this queryable by target user.
+_DIRECT_TARGET_BAN_ACTIONS = (
+    ModerationAction.CHAT_AUTO_BAN,
+    ModerationAction.CHAT_UNBAN,
+)
+
+
+async def list_user_ban_history(
+    db: AsyncSession, user_id: uuid.UUID, *, limit: int, offset: int
+) -> tuple[list[LogEntryWithActor], int]:
+    """`GET /admin/chat/users/{user_id}/ban-history`'s own query --
+    DISCLOSED REAL GAP this closes: `list_actor_log` above answers "what
+    did THIS MODERATOR do" (filters on `actor_id`); nothing in this
+    codebase before this task could answer "what happened TO this
+    student" (filtering on the banned user instead).
+
+    CORRECTED DESIGN, disclosed: an earlier draft of this function
+    assumed all three ban-lifecycle actions share the same
+    `target_type=USER, target_id=<banned user>` shape and queried them
+    in one pass. That assumption was checked against the real call site
+    in `admin_chat_reports.py::escalate_chat_report_to_ban` and found
+    false -- `CHAT_REPORT_ESCALATE_BAN` is logged with
+    `target_type=CHAT_MESSAGE_REPORT, target_id=<the report's own id>`
+    (the report being escalated is the target of that action; the
+    banned user only appears inside `outcome["banned_user_id"]`, a
+    plain string). A single `target_id == user_id` filter would
+    therefore silently miss every escalate-to-ban event for a given
+    student. This function now runs two real queries and merges them:
+
+    1. `CHAT_AUTO_BAN` / `CHAT_UNBAN` -- both genuinely target the user
+       (`target_type=USER, target_id=user_id`), so this is a normal,
+       portable, indexable-in-principle SQL filter (same "no dedicated
+       index added yet" call as before -- see below).
+    2. `CHAT_REPORT_ESCALATE_BAN` -- fetched by `action` alone (there is
+       no portable, engine-agnostic way to filter JSON keys across both
+       real Postgres/JSONB in production and the raw-SQL-seeded SQLite
+       used in this codebase's own tests), then filtered in Python on
+       `entry.outcome.get("banned_user_id") == str(user_id)`. This is a
+       real, disclosed cost: it fetches every escalate-ban row in the
+       system before filtering, which is fine at this feature's actual
+       admin-tool read volume but would need a real JSONB-path query
+       (e.g. Postgres `outcome->>'banned_user_id'`) if escalate-ban
+       volume ever grows large enough for this to matter.
+
+    The two result sets are merged, re-sorted by `created_at` descending
+    (SQL `ORDER BY`/`LIMIT`/`OFFSET` can't apply across two independent
+    queries), and paginated in Python -- `total` is the true combined
+    count across both action families, and `limit`/`offset` are applied
+    to the merged, sorted list, not to either query alone.
+
+    Reuses the exact same `LEFT OUTER JOIN` against `User` for the
+    acting moderator's own email/name (still relevant here -- a
+    ban-history row still needs to show WHO applied/lifted each ban,
+    same as the activity log does for WHO performed any other action)
+    -- the banned user's own id is intentionally NOT joined against
+    `User` a second time (the caller already knows exactly which user
+    this is, since they passed `user_id` in).
+
+    No new index was added for either query: `target_id` alone has no
+    index today, and the escalate-ban query has no target-level filter
+    to index at all (it filters on `action`, then in Python). This
+    endpoint's own real usage (moderators looking up ONE specific
+    flagged/reported student at a time, not scanning the whole table)
+    is a low-volume, admin-tool read against a table sized by real
+    moderation events -- the same "acceptable without a dedicated index"
+    judgment call this task's own Step 3 leaves open rather than
+    speculatively adding index churn an actual production volume hasn't
+    justified yet.
+    """
+    direct_filters = (
+        ModerationLogEntry.target_type == ModerationTargetType.USER,
+        ModerationLogEntry.target_id == user_id,
+        ModerationLogEntry.action.in_(_DIRECT_TARGET_BAN_ACTIONS),
+    )
+    direct_result = await db.execute(
+        select(ModerationLogEntry, User.email, User.full_name)
+        .outerjoin(User, User.id == ModerationLogEntry.actor_id)
+        .where(*direct_filters)
+    )
+    direct_rows = list(direct_result.all())
+
+    escalate_result = await db.execute(
+        select(ModerationLogEntry, User.email, User.full_name)
+        .outerjoin(User, User.id == ModerationLogEntry.actor_id)
+        .where(ModerationLogEntry.action == ModerationAction.CHAT_REPORT_ESCALATE_BAN)
+    )
+    target_user_id = str(user_id)
+    escalate_rows = [
+        (entry, email, full_name)
+        for entry, email, full_name in escalate_result.all()
+        if isinstance(entry.outcome, dict) and entry.outcome.get("banned_user_id") == target_user_id
+    ]
+
+    merged: list[LogEntryWithActor] = [
+        (entry, email, full_name) for entry, email, full_name in (*direct_rows, *escalate_rows)
+    ]
+    merged.sort(key=lambda row: row[0].created_at, reverse=True)
+
+    total = len(merged)
+    page = merged[offset : offset + limit]
+    return page, total

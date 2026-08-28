@@ -34,7 +34,7 @@ from sqlalchemy.pool import StaticPool
 from app.api.deps import get_current_user
 from app.db.base import Base
 from app.db.session import get_db
-from app.services import chat_security
+from app.services import chat_security, notification_connection_manager, notification_service
 from app.main import app
 from app.models.badges import Badge, GamificationProfile, UserBadge
 from app.models.enums import AdminRole, StudentVideoStatus
@@ -245,6 +245,33 @@ def fake_redis(monkeypatch):
     redis = _FakeRedis()
     monkeypatch.setattr(chat_security, "_get_redis_client", lambda: redis)
     return redis
+
+
+@pytest.fixture(autouse=True)
+def _fake_notification_broadcast(monkeypatch):
+    """DISCLOSED PRE-EXISTING FIXTURE GAP, found and fixed during Full
+    Ban-Reason History's own full regression run: this file's
+    `test_senior_moderator_can_reject_and_purge` hung indefinitely (same
+    root cause, same fix, as the identical gap already found and fixed
+    in `tests/test_moderation_log.py` -- see that file's own
+    `_fake_notification_broadcast` docstring for the full explanation).
+    `reject_video_and_purge_media` calls `notification_service.create_notification`,
+    which was never mocked here, so every real DNS-resolution timeout
+    against an unreachable Redis/Celery broker ate the run. Copied
+    verbatim from `tests/test_chat_reports.py`'s own fixture, same as
+    the other file.
+    """
+
+    class _NoopPublishClient:
+        async def publish(self, channel: str, message: str) -> None:
+            return None
+
+    class _NoopEmailTask:
+        def delay(self, *args, **kwargs) -> None:
+            return None
+
+    monkeypatch.setattr(notification_connection_manager, "_get_redis_client", lambda: _NoopPublishClient())
+    monkeypatch.setattr(notification_service, "send_transactional_email_task", _NoopEmailTask())
 
 
 async def _make_user(

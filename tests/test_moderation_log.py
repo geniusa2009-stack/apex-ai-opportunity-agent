@@ -34,7 +34,7 @@ from app.models.enums import AdminRole, ModerationAction, ModerationTargetType, 
 from app.models.moderation_log import ModerationLogEntry
 from app.models.student_videos import StudentVideo
 from app.models.user import User
-from app.services import chat_security
+from app.services import chat_security, notification_connection_manager, notification_service
 
 pytestmark = pytest.mark.asyncio
 
@@ -323,6 +323,38 @@ def fake_redis(monkeypatch):
     return redis
 
 
+@pytest.fixture(autouse=True)
+def _fake_notification_broadcast(monkeypatch):
+    """DISCLOSED PRE-EXISTING FIXTURE GAP, found and fixed while
+    verifying Full Ban-Reason History: a real regression run of this
+    file hung indefinitely on `test_reject_and_purge_logs_a_real_entry`
+    (traced with `-x -v`/`timeout` to that exact test). Root cause,
+    confirmed by reading the route: `reject_video_and_purge_media`
+    (a pre-existing endpoint, unrelated to this task's own changes) now
+    calls `notification_service.create_notification`, which publishes a
+    real-time Redis pub/sub event and dispatches a real Celery email
+    task -- neither `redis://redis:6379` nor a Celery broker is reachable
+    in this sandbox, and unlike `tests/test_chat_reports.py` (which
+    already patches these same two boundaries), this file never mocked
+    them, so every real DNS-resolution timeout on each was eating the
+    full run. Identical fixture/posture to `test_chat_reports.py`'s own
+    `_fake_notification_broadcast` -- copied verbatim rather than
+    reinvented, so both files patch the same two call sites the same
+    way.
+    """
+
+    class _NoopPublishClient:
+        async def publish(self, channel: str, message: str) -> None:
+            return None
+
+    class _NoopEmailTask:
+        def delay(self, *args, **kwargs) -> None:
+            return None
+
+    monkeypatch.setattr(notification_connection_manager, "_get_redis_client", lambda: _NoopPublishClient())
+    monkeypatch.setattr(notification_service, "send_transactional_email_task", _NoopEmailTask())
+
+
 async def _fetch_all_log_rows(db_session_factory) -> list[dict]:
     async with db_session_factory() as session:
         rows = (
@@ -454,6 +486,45 @@ class TestAutomaticLogging:
         rows = await _fetch_all_log_rows(db_session_factory)
         assert len(rows) == 1
         assert rows[0]["outcome"]["was_banned"] is False
+
+    async def test_chat_unban_with_a_reason_persists_it(self, db_session_factory, client_factory, fake_redis):
+        """Full Ban-Reason History addition -- `AdminUnbanRequest.reason`
+        (a genuinely optional request body `DELETE /chat/admin/bans/{id}`
+        never had before this task) is written into the real
+        `CHAT_UNBAN` log entry's own `outcome`, not dropped."""
+        async with db_session_factory() as session:
+            moderator = await _make_user(session, admin_role=AdminRole.MODERATOR)
+        target_user_id = uuid.uuid4()
+        await chat_security.ban_user(target_user_id, duration_seconds=900)
+
+        client = client_factory(moderator)
+        response = client.request(
+            "DELETE",
+            f"/api/v1/chat/admin/bans/{target_user_id}",
+            json={"reason": "Appealed via email -- verified false positive."},
+        )
+        assert response.status_code == 200
+        assert response.json()["was_banned"] is True
+
+        rows = await _fetch_all_log_rows(db_session_factory)
+        assert len(rows) == 1
+        assert rows[0]["outcome"]["reason"] == "Appealed via email -- verified false positive."
+
+    async def test_chat_unban_without_a_reason_stores_none(self, db_session_factory, client_factory, fake_redis):
+        """The reason stays genuinely optional -- no body at all (the
+        pre-existing call shape) still works and stores `None`, not an
+        empty string or a validation error."""
+        async with db_session_factory() as session:
+            moderator = await _make_user(session, admin_role=AdminRole.MODERATOR)
+        target_user_id = uuid.uuid4()
+        await chat_security.ban_user(target_user_id, duration_seconds=900)
+
+        client = client_factory(moderator)
+        response = client.delete(f"/api/v1/chat/admin/bans/{target_user_id}")
+        assert response.status_code == 200
+
+        rows = await _fetch_all_log_rows(db_session_factory)
+        assert rows[0]["outcome"]["reason"] is None
 
     async def test_legacy_superuser_actor_role_logs_as_owner(self, db_session_factory, client_factory):
         """A legacy `is_superuser=True` account (no `admin_role` set)
@@ -675,3 +746,142 @@ class TestActivityLogReadEndpoints:
         response = client.get(f"/api/v1/admin/activity-log/{uuid.uuid4()}")
         assert response.status_code == 200
         assert response.json() == {"items": [], "total": 0, "limit": 20, "offset": 0}
+# ---------------------------------------------------------------------
+# Full Ban-Reason History addition -- GET /admin/chat/users/{id}/ban-history.
+# ---------------------------------------------------------------------
+
+
+class TestBanHistoryEndpoint:
+    """Covers the corrected `list_user_ban_history` merge (direct
+    `target_id`-based rows for `CHAT_AUTO_BAN`/`CHAT_UNBAN` PLUS
+    `outcome["banned_user_id"]`-based rows for
+    `CHAT_REPORT_ESCALATE_BAN` -- see that function's own docstring for
+    the disclosed correction this class exists to prove), the live-Redis
+    `currently_banned` fields, Moderator-tier (not Owner-only) access,
+    and the empty-state shape.
+    """
+
+    async def test_moderator_can_read_a_students_full_ban_history(
+        self, db_session_factory, client_factory, fake_redis
+    ):
+        async with db_session_factory() as session:
+            moderator = await _make_user(session, admin_role=AdminRole.MODERATOR)
+            student = await _make_user(session)
+            report_id = uuid.uuid4()
+
+            # A real CHAT_AUTO_BAN -- system-initiated, no actor, targets
+            # the student directly.
+            await _make_log_entry(
+                session,
+                actor_id=moderator.id,
+                actor_role=AdminRole.MODERATOR,
+                action=ModerationAction.CHAT_AUTO_BAN,
+                target_type=ModerationTargetType.USER,
+                target_id=student.id,
+                outcome={"reason": "Arabic filter"},
+                created_at="2026-01-01 00:00:00",
+            )
+            # A real CHAT_REPORT_ESCALATE_BAN -- targets the REPORT, not
+            # the student; the student only appears in outcome. This is
+            # the exact shape the earlier, buggy single-query
+            # implementation would have silently missed.
+            await _make_log_entry(
+                session,
+                actor_id=moderator.id,
+                actor_role=AdminRole.MODERATOR,
+                action=ModerationAction.CHAT_REPORT_ESCALATE_BAN,
+                target_type=ModerationTargetType.CHAT_MESSAGE_REPORT,
+                target_id=report_id,
+                outcome={"banned_user_id": str(student.id), "duration_seconds": 3600, "notes": "Repeated abuse"},
+                created_at="2026-01-02 00:00:00",
+            )
+            # A real CHAT_UNBAN -- targets the student directly.
+            await _make_log_entry(
+                session,
+                actor_id=moderator.id,
+                actor_role=AdminRole.MODERATOR,
+                action=ModerationAction.CHAT_UNBAN,
+                target_type=ModerationTargetType.USER,
+                target_id=student.id,
+                outcome={"was_banned": True, "reason": "Appeal approved"},
+                created_at="2026-01-03 00:00:00",
+            )
+            # A decoy: an escalate-ban row for a DIFFERENT student, must
+            # not leak into this student's history.
+            await _make_log_entry(
+                session,
+                actor_id=moderator.id,
+                actor_role=AdminRole.MODERATOR,
+                action=ModerationAction.CHAT_REPORT_ESCALATE_BAN,
+                target_type=ModerationTargetType.CHAT_MESSAGE_REPORT,
+                target_id=uuid.uuid4(),
+                outcome={"banned_user_id": str(uuid.uuid4()), "duration_seconds": 900, "notes": "Other student"},
+                created_at="2026-01-02 12:00:00",
+            )
+
+        client = client_factory(moderator)
+        response = client.get(f"/api/v1/admin/chat/users/{student.id}/ban-history")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["total"] == 3
+        actions = [item["action"] for item in body["items"]]
+        # Newest first.
+        assert actions == ["chat_unban", "chat_report_escalate_ban", "chat_auto_ban"]
+        escalate_item = body["items"][1]
+        assert escalate_item["target_type"] == "chat_message_report"
+        assert escalate_item["target_id"] == str(report_id)
+        assert escalate_item["outcome"]["banned_user_id"] == str(student.id)
+
+    async def test_currently_banned_reflects_real_live_redis_state(
+        self, db_session_factory, client_factory, fake_redis
+    ):
+        async with db_session_factory() as session:
+            moderator = await _make_user(session, admin_role=AdminRole.MODERATOR)
+            student = await _make_user(session)
+            await _make_log_entry(
+                session, actor_id=moderator.id, actor_role=AdminRole.MODERATOR,
+                action=ModerationAction.CHAT_AUTO_BAN, target_type=ModerationTargetType.USER,
+                target_id=student.id, outcome={"reason": "Arabic filter"},
+            )
+
+        client = client_factory(moderator)
+
+        # No live Redis ban key -- not currently banned, even though a
+        # historical CHAT_AUTO_BAN row exists (matches this endpoint's
+        # own disclosed "live Redis truth, not derived from log rows"
+        # design).
+        not_banned = client.get(f"/api/v1/admin/chat/users/{student.id}/ban-history")
+        assert not_banned.json()["currently_banned"] is False
+        assert not_banned.json()["currently_banned_remaining_seconds"] is None
+
+        await chat_security.ban_user(student.id, duration_seconds=1800)
+        banned = client.get(f"/api/v1/admin/chat/users/{student.id}/ban-history")
+        assert banned.json()["currently_banned"] is True
+        remaining = banned.json()["currently_banned_remaining_seconds"]
+        assert remaining is not None and 0 < remaining <= 1800
+
+    async def test_moderator_tier_can_access_ban_history(self, db_session_factory, client_factory, fake_redis):
+        """DISCLOSED DESIGN CALL: gated `RequireModerationAccess`, not
+        Owner-only -- parity with `offender_recent_action_count`/
+        `GET /admin/flagged-users`, already Moderator-tier. Contrast
+        with `TestActivityLogReadEndpoints` above, which IS Owner-only."""
+        async with db_session_factory() as session:
+            moderator = await _make_user(session, admin_role=AdminRole.MODERATOR)
+            student = await _make_user(session)
+
+        client = client_factory(moderator)
+        response = client.get(f"/api/v1/admin/chat/users/{student.id}/ban-history")
+        assert response.status_code == 200
+
+    async def test_ban_history_empty_for_a_student_with_no_bans(self, db_session_factory, client_factory, fake_redis):
+        async with db_session_factory() as session:
+            moderator = await _make_user(session, admin_role=AdminRole.MODERATOR)
+            student = await _make_user(session)
+
+        client = client_factory(moderator)
+        response = client.get(f"/api/v1/admin/chat/users/{student.id}/ban-history")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["items"] == []
+        assert body["total"] == 0
+        assert body["currently_banned"] is False
