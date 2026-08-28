@@ -190,6 +190,42 @@ class TestBanService:
         await chat_security.ban_user(user_id)
         assert await chat_security.get_ban_remaining_seconds(user_id) == 1800
 
+    # -------------------------------------------------------------
+    # Manual Timed Bans addition -- real service-layer bounds
+    # enforcement (Step 1.2's own confirmed gap: previously NO
+    # minimum/maximum was enforced anywhere below the Pydantic schema
+    # layer). Step 4.1's own explicit ask: "a ban applied at the
+    # minimum bound, at the maximum bound, an out-of-bounds request
+    # correctly rejected, and the real Redis TTL/expiry behavior
+    # matching the chosen duration exactly" -- covered here at the
+    # service layer (the HTTP-layer 422 rejection is covered
+    # separately in tests/test_moderation_log.py::TestManualBan,
+    # since that's a Pydantic/route-level concern, not this service's).
+    # -------------------------------------------------------------
+    async def test_ban_user_at_the_minimum_bound_sets_the_exact_real_ttl(self, fake_redis):
+        user_id = uuid.uuid4()
+        await chat_security.ban_user(user_id, duration_seconds=chat_security.BAN_DURATION_MIN_SECONDS)
+        assert await chat_security.get_ban_remaining_seconds(user_id) == chat_security.BAN_DURATION_MIN_SECONDS
+
+    async def test_ban_user_at_the_maximum_bound_sets_the_exact_real_ttl(self, fake_redis):
+        user_id = uuid.uuid4()
+        await chat_security.ban_user(user_id, duration_seconds=chat_security.BAN_DURATION_MAX_SECONDS)
+        assert await chat_security.get_ban_remaining_seconds(user_id) == chat_security.BAN_DURATION_MAX_SECONDS
+
+    async def test_ban_user_below_the_minimum_bound_raises(self, fake_redis):
+        user_id = uuid.uuid4()
+        with pytest.raises(ValueError):
+            await chat_security.ban_user(user_id, duration_seconds=chat_security.BAN_DURATION_MIN_SECONDS - 1)
+        # Real, not just an exception -- confirm nothing was actually
+        # written to Redis before the bounds check raised.
+        assert await chat_security.is_user_banned(user_id) is False
+
+    async def test_ban_user_above_the_maximum_bound_raises(self, fake_redis):
+        user_id = uuid.uuid4()
+        with pytest.raises(ValueError):
+            await chat_security.ban_user(user_id, duration_seconds=chat_security.BAN_DURATION_MAX_SECONDS + 1)
+        assert await chat_security.is_user_banned(user_id) is False
+
 
 # ---------------------------------------------------------------------
 # Component 3: ConnectionManager (pure, in-memory -- fake socket

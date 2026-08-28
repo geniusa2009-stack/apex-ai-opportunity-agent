@@ -677,6 +677,36 @@ class TestEscalateBanAction:
         assert outcome["reason_category"] is not None
         assert "harassment" in outcome["reason_category"].lower()
 
+    async def test_escalate_ban_duration_out_of_bounds_is_422(self, db_session_factory, client_factory, fake_redis):
+        """Manual Timed Bans addition -- `duration_seconds` already had
+        real `ge`/`le` bounds before this task (now named constants,
+        `BAN_DURATION_MIN_SECONDS`/`BAN_DURATION_MAX_SECONDS`,
+        `chat_security.py`), but no test proved the rejection actually
+        happens. Confirmed here at both edges."""
+        async with db_session_factory() as session:
+            sender = await _make_user(session)
+            reporter = await _make_user(session)
+            moderator = await _make_user(session, admin_role=AdminRole.MODERATOR)
+            room = await _make_room_with_participants(session, sender.id, reporter.id)
+            message = await _make_message(session, room_id=room.id, sender_id=sender.id)
+            case, _, _ = await chat_report_service.create_report(
+                session, message=message, reporter_id=reporter.id, reason=ChatReportReason.HARASSMENT, details=None
+            )
+            await session.commit()
+
+        client = client_factory(moderator)
+        too_short = client.post(
+            f"/api/v1/admin/chat/reports/{case.id}/escalate-ban", json={"duration_seconds": 59}
+        )
+        assert too_short.status_code == 422
+        assert await chat_security.is_user_banned(sender.id) is False
+
+        too_long = client.post(
+            f"/api/v1/admin/chat/reports/{case.id}/escalate-ban", json={"duration_seconds": 86401}
+        )
+        assert too_long.status_code == 422
+        assert await chat_security.is_user_banned(sender.id) is False
+
     async def test_escalating_twice_is_409(self, db_session_factory, client_factory, fake_redis):
         async with db_session_factory() as session:
             sender = await _make_user(session)

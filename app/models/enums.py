@@ -548,6 +548,18 @@ class ModerationAction(str, enum.Enum):
     APPEAL_UPHELD = "appeal_upheld"
     APPEAL_DENIED = "appeal_denied"
 
+    # --- Manual Timed Bans addition (migration 0043) ---
+    # A real, distinct gap confirmed during this task's own Step 1.3
+    # investigation: before this task, the ONLY way to ban a chat user
+    # was the automatic Arabic-filter trigger or escalating an existing
+    # chat-message report -- there was no direct, moderator-initiated
+    # "ban this user for this long, for this reason" action with no
+    # report behind it. `target_type=USER`/`target_id=<banned user>`,
+    # same direct-target convention `CHAT_UNBAN`/`CHAT_AUTO_BAN` already
+    # use (no `outcome` JSON extraction needed to recover the real
+    # target) -- see `moderation_log_service._DIRECT_TARGET_BAN_ACTIONS`.
+    CHAT_MANUAL_BAN = "chat_manual_ban"
+
 
 class ModerationTargetType(str, enum.Enum):
     """What kind of real row a `ModerationLogEntry.target_id` refers to

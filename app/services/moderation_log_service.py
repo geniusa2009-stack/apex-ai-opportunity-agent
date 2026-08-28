@@ -172,6 +172,13 @@ async def list_team_log(
 _DIRECT_TARGET_BAN_ACTIONS = (
     ModerationAction.CHAT_AUTO_BAN,
     ModerationAction.CHAT_UNBAN,
+    # Manual Timed Bans addition -- CHAT_MANUAL_BAN targets the banned
+    # user directly (target_type=USER/target_id=<banned user>), same
+    # shape as the two actions above, so it belongs in this direct-match
+    # tuple, not the separate CHAT_REPORT_ESCALATE_BAN query below (that
+    # one targets the REPORT, not the user -- see this function's own
+    # docstring for why those two are handled differently).
+    ModerationAction.CHAT_MANUAL_BAN,
 )
 
 

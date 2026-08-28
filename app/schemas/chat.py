@@ -22,6 +22,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.services.chat_security import BAN_DURATION_MAX_SECONDS, BAN_DURATION_MIN_SECONDS
+
 
 # ---------------------------------------------------------------------
 # REST: rooms / participants / history / ban status
@@ -190,6 +192,57 @@ class UnbanResponse(BaseModel):
     success: bool = True
     user_id: uuid.UUID
     was_banned: bool
+
+
+class AdminManualBanRequest(BaseModel):
+    """Manual Timed Bans addition -- `POST /chat/admin/bans/{user_id}`
+    request body. DISCLOSED REAL GAP this closes (Step 1.3): before this
+    task, the ONLY way a chat ban was ever applied was the automatic
+    Arabic-filter trigger or escalating an existing chat-message report
+    -- there was no direct, report-free "ban this user" action anywhere
+    (not from the ban-history view, not from the flagged-users roster).
+
+    `reason` is REQUIRED here (`str`, not `str | None` -- unlike
+    `AdminUnbanRequest.reason`, which stays optional). Deliberate,
+    disclosed asymmetry: an unban is inherently a return to the normal,
+    unrestricted state and can be a defensible snap judgment call; a
+    manual ban with no report behind it is the one real ban path in this
+    system with NO other corroborating signal at all (an auto-ban has
+    the Arabic filter's own trigger; an escalate-ban has the report's
+    real categorized reasons) -- the moderator's own stated reason is
+    the ONLY evidence this action's audit trail will ever contain, so it
+    cannot be silently blank.
+
+    `duration_seconds` reuses the EXACT SAME real bounds
+    (`BAN_DURATION_MIN_SECONDS`/`BAN_DURATION_MAX_SECONDS`,
+    `chat_security.py`) `AdminChatReportEscalateBanRequest.duration_seconds`
+    already used -- one real source of truth for "how long can any chat
+    ban possibly be," not two schemas that could quietly drift apart.
+    """
+
+    reason: str = Field(min_length=1, max_length=2000)
+    duration_seconds: int = Field(
+        default=1800,
+        ge=BAN_DURATION_MIN_SECONDS,
+        le=BAN_DURATION_MAX_SECONDS,
+        description="Real Redis TTL passed straight to chat_security.ban_user -- same bounds "
+        "and same 1800s (30 min) default as the escalate-ban request, not a separately "
+        "hardcoded/differently-bounded duration.",
+    )
+
+
+class ManualBanResponse(BaseModel):
+    """`POST /chat/admin/bans/{user_id}` response. Mirrors
+    `AdminChatReportActionResponse`'s own `banned_until_seconds` field
+    name/shape (`app/schemas/chat_moderation.py`) even though this isn't
+    a report action -- same real meaning ("how long, in seconds, from
+    now"), so the frontend can render both with one shared helper rather
+    than two subtly different response shapes for the same real concept.
+    """
+
+    success: bool = True
+    user_id: uuid.UUID
+    banned_until_seconds: int
 
 
 # ---------------------------------------------------------------------

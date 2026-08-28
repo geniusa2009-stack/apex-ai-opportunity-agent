@@ -885,3 +885,195 @@ class TestBanHistoryEndpoint:
         assert body["items"] == []
         assert body["total"] == 0
         assert body["currently_banned"] is False
+# ---------------------------------------------------------------------
+# Manual Timed Bans addition -- POST /chat/admin/bans/{user_id}.
+# ---------------------------------------------------------------------
+
+
+class TestManualBan:
+    """Covers the new direct, report-free ban action: real bounds
+    (minimum/maximum, exact Redis TTL), the mandatory reason, real log
+    persistence, Moderator-tier access (this task's own deliberate
+    deviation from the suggested Senior-Moderator default -- see
+    `admin_manual_ban_user`'s own docstring for the reasoning), the
+    404-on-nonexistent-user check, notification dispatch, and that the
+    new action correctly surfaces in the ban-history endpoint built in
+    the prior phase.
+    """
+
+    async def test_manual_ban_at_the_minimum_bound_sets_the_exact_real_ttl(
+        self, db_session_factory, client_factory, fake_redis
+    ):
+        async with db_session_factory() as session:
+            moderator = await _make_user(session, admin_role=AdminRole.MODERATOR)
+            student = await _make_user(session)
+
+        client = client_factory(moderator)
+        response = client.post(
+            f"/api/v1/chat/admin/bans/{student.id}",
+            json={"reason": "Repeated off-topic spam.", "duration_seconds": 60},
+        )
+        assert response.status_code == 200
+        assert response.json()["banned_until_seconds"] == 60
+        assert await fake_redis.ttl(f"chat:ban:{student.id}") == 60
+
+    async def test_manual_ban_at_the_maximum_bound_sets_the_exact_real_ttl(
+        self, db_session_factory, client_factory, fake_redis
+    ):
+        async with db_session_factory() as session:
+            moderator = await _make_user(session, admin_role=AdminRole.MODERATOR)
+            student = await _make_user(session)
+
+        client = client_factory(moderator)
+        response = client.post(
+            f"/api/v1/chat/admin/bans/{student.id}",
+            json={"reason": "Severe first offense.", "duration_seconds": 86400},
+        )
+        assert response.status_code == 200
+        assert response.json()["banned_until_seconds"] == 86400
+        assert await fake_redis.ttl(f"chat:ban:{student.id}") == 86400
+
+    async def test_manual_ban_below_the_minimum_bound_is_422(self, db_session_factory, client_factory, fake_redis):
+        async with db_session_factory() as session:
+            moderator = await _make_user(session, admin_role=AdminRole.MODERATOR)
+            student = await _make_user(session)
+
+        client = client_factory(moderator)
+        response = client.post(
+            f"/api/v1/chat/admin/bans/{student.id}",
+            json={"reason": "Too short.", "duration_seconds": 59},
+        )
+        assert response.status_code == 422
+        assert await fake_redis.ttl(f"chat:ban:{student.id}") == -2
+
+    async def test_manual_ban_above_the_maximum_bound_is_422(self, db_session_factory, client_factory, fake_redis):
+        async with db_session_factory() as session:
+            moderator = await _make_user(session, admin_role=AdminRole.MODERATOR)
+            student = await _make_user(session)
+
+        client = client_factory(moderator)
+        response = client.post(
+            f"/api/v1/chat/admin/bans/{student.id}",
+            json={"reason": "Too long.", "duration_seconds": 86401},
+        )
+        assert response.status_code == 422
+        assert await fake_redis.ttl(f"chat:ban:{student.id}") == -2
+
+    async def test_manual_ban_requires_a_reason(self, db_session_factory, client_factory, fake_redis):
+        """Unlike AdminUnbanRequest.reason (optional), AdminManualBanRequest.reason
+        is mandatory -- see that schema's own docstring for why (no report
+        backs this action, so the moderator's stated reason is the only
+        evidence the audit trail will ever contain)."""
+        async with db_session_factory() as session:
+            moderator = await _make_user(session, admin_role=AdminRole.MODERATOR)
+            student = await _make_user(session)
+
+        client = client_factory(moderator)
+        response = client.post(f"/api/v1/chat/admin/bans/{student.id}", json={"duration_seconds": 1800})
+        assert response.status_code == 422
+
+        response2 = client.post(f"/api/v1/chat/admin/bans/{student.id}", json={"reason": "", "duration_seconds": 1800})
+        assert response2.status_code == 422
+
+    async def test_manual_ban_logs_a_real_entry_with_reason_and_duration(
+        self, db_session_factory, client_factory, fake_redis
+    ):
+        async with db_session_factory() as session:
+            moderator = await _make_user(session, admin_role=AdminRole.MODERATOR)
+            student = await _make_user(session)
+
+        client = client_factory(moderator)
+        response = client.post(
+            f"/api/v1/chat/admin/bans/{student.id}",
+            json={"reason": "Coordinated spam across multiple rooms.", "duration_seconds": 3600},
+        )
+        assert response.status_code == 200
+
+        rows = await _fetch_all_log_rows(db_session_factory)
+        assert len(rows) == 1
+        entry = rows[0]
+        assert entry["actor_id"] == moderator.id.hex
+        assert entry["actor_role"] == "moderator"
+        assert entry["action"] == "chat_manual_ban"
+        assert entry["target_type"] == "user"
+        assert entry["target_id"] == student.id.hex
+        assert entry["outcome"]["reason"] == "Coordinated spam across multiple rooms."
+        assert entry["outcome"]["duration_seconds"] == 3600
+
+    async def test_manual_ban_plain_student_gets_403(self, db_session_factory, client_factory, fake_redis):
+        async with db_session_factory() as session:
+            student = await _make_user(session)
+            target = await _make_user(session)
+
+        client = client_factory(student)
+        response = client.post(
+            f"/api/v1/chat/admin/bans/{target.id}", json={"reason": "n/a", "duration_seconds": 1800}
+        )
+        assert response.status_code == 403
+
+    async def test_manual_ban_nonexistent_user_is_404(self, db_session_factory, client_factory, fake_redis):
+        async with db_session_factory() as session:
+            moderator = await _make_user(session, admin_role=AdminRole.MODERATOR)
+
+        client = client_factory(moderator)
+        response = client.post(
+            f"/api/v1/chat/admin/bans/{uuid.uuid4()}", json={"reason": "n/a", "duration_seconds": 1800}
+        )
+        assert response.status_code == 404
+        assert (await _fetch_all_log_rows(db_session_factory)) == []
+
+    async def test_manual_ban_sends_a_real_notification(self, db_session_factory, client_factory, fake_redis):
+        """Uses the autouse `_fake_notification_broadcast` fixture above
+        (no real Redis/Celery) -- the REAL DB row `create_notification`
+        writes is what's actually asserted here."""
+        async with db_session_factory() as session:
+            moderator = await _make_user(session, admin_role=AdminRole.MODERATOR)
+            student = await _make_user(session)
+
+        client = client_factory(moderator)
+        response = client.post(
+            f"/api/v1/chat/admin/bans/{student.id}",
+            json={"reason": "Harassment in DMs.", "duration_seconds": 1800},
+        )
+        assert response.status_code == 200
+
+        async with db_session_factory() as session:
+            rows = (
+                await session.execute(
+                    text("SELECT user_id, type, message FROM notifications")
+                )
+            ).all()
+        assert len(rows) == 1
+        assert rows[0].user_id == student.id.hex
+        assert rows[0].type == "WARNING"
+        assert "Harassment in DMs." in rows[0].message
+
+    async def test_manual_ban_appears_correctly_in_ban_history(self, db_session_factory, client_factory, fake_redis):
+        """Step 3.4 -- the prior phase's ban-history endpoint must
+        surface a manually-chosen duration, verified against the real
+        updated code (CHAT_MANUAL_BAN added to
+        `moderation_log_service._DIRECT_TARGET_BAN_ACTIONS`), not
+        assumed."""
+        async with db_session_factory() as session:
+            moderator = await _make_user(session, admin_role=AdminRole.MODERATOR)
+            student = await _make_user(session)
+
+        client = client_factory(moderator)
+        ban_response = client.post(
+            f"/api/v1/chat/admin/bans/{student.id}",
+            json={"reason": "Manual timed ban test.", "duration_seconds": 7200},
+        )
+        assert ban_response.status_code == 200
+
+        history = client.get(f"/api/v1/admin/chat/users/{student.id}/ban-history")
+        assert history.status_code == 200
+        body = history.json()
+        assert body["total"] == 1
+        item = body["items"][0]
+        assert item["action"] == "chat_manual_ban"
+        assert item["target_type"] == "user"
+        assert item["target_id"] == str(student.id)
+        assert item["outcome"]["reason"] == "Manual timed ban test."
+        assert item["outcome"]["duration_seconds"] == 7200
+        assert body["currently_banned"] is True
+        assert body["currently_banned_remaining_seconds"] == 7200

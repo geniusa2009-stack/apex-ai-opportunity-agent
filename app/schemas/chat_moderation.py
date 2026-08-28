@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import ChatReportReason
 from app.schemas.moderation_log import ModerationLogEntryOut
+from app.services.chat_security import BAN_DURATION_MAX_SECONDS, BAN_DURATION_MIN_SECONDS
 
 
 # ---------------------------------------------------------------------
@@ -144,11 +145,14 @@ class AdminChatReportEscalateBanRequest(BaseModel):
     notes: str | None = Field(default=None, max_length=2000)
     duration_seconds: int = Field(
         default=1800,
-        ge=60,
-        le=86400,
+        ge=BAN_DURATION_MIN_SECONDS,
+        le=BAN_DURATION_MAX_SECONDS,
         description="Real Redis TTL passed straight to chat_security.ban_user -- defaults to "
         "the same 1800s (30 min) this codebase already uses for the automatic Arabic-filter ban, "
-        "not a separate hardcoded duration a moderator has no way to reason about.",
+        "not a separate hardcoded duration a moderator has no way to reason about. Manual Timed "
+        "Bans addition: bounds are now named constants (BAN_DURATION_MIN_SECONDS/"
+        "BAN_DURATION_MAX_SECONDS, chat_security.py), the SAME ones AdminManualBanRequest "
+        "(app/schemas/chat.py) reuses -- previously raw 60/86400 literals here.",
     )
 
 

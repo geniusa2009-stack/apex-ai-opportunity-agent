@@ -57,6 +57,42 @@ _ARABIC_CHAR_PATTERN = re.compile("[؀-ۿ]")
 
 _BAN_KEY_PREFIX = "chat:ban:"
 
+# Manual Timed Bans addition -- real, named bounds for ANY chat ban
+# duration, reused by every real caller (the escalate-ban schema,
+# `AdminChatReportEscalateBanRequest.duration_seconds`, already used
+# these exact numbers as raw Pydantic `ge`/`le` literals before this
+# task; the new direct manual-ban schema, `AdminManualBanRequest`,
+# reuses them too -- ONE real source of truth, not two schemas that
+# could quietly drift apart). Enforced HERE too, not just at the two
+# schemas' own Pydantic boundary -- Step 1.2's own confirmed finding:
+# before this task, `ban_user` itself accepted an arbitrary
+# `duration_seconds` with no floor or ceiling at all; a future caller
+# that built its own request path (or a bug in a schema) could still
+# have hit Redis with a nonsensical TTL. This is real defense-in-depth,
+# not redundant with the schema-level `ge`/`le` -- the schema gives a
+# clean `422` at the API boundary before any DB/Redis work happens; this
+# is the last real line of defense for anything that calls `ban_user`
+# directly (as `chat.py`'s own websocket auto-ban handler already does).
+#
+# Bounds reasoning, for a peer-moderated student chat platform:
+# - MIN (60s / 1 minute): below this a ban is not a real intervention --
+#   Redis TTL granularity and ordinary network/reconnect latency mean a
+#   sub-minute ban could expire before it even interrupts anything, and
+#   there is no real moderation scenario on this platform ("cool off for
+#   a few seconds") that a minimum this low would serve.
+# - MAX (86400s / 24 hours): long enough to be a genuine deterrent for a
+#   first serious offense, while deliberately NOT letting one moderator
+#   unilaterally impose an effectively-permanent ban with a single click
+#   -- repeat/escalating misconduct is meant to surface through the
+#   existing Repeat-Offender Detection roster (`GET /admin/flagged-users`)
+#   for a considered, human decision, not accumulate via one moderator
+#   silently re-applying an ever-longer single ban. Also matches this
+#   service's own established "self-expiring, no cleanup job needed"
+#   design (`ban_user`'s own docstring) -- even an unreviewed 24h ban
+#   self-corrects.
+BAN_DURATION_MIN_SECONDS = 60
+BAN_DURATION_MAX_SECONDS = 86400
+
 _redis_client: aioredis.Redis | None = None
 
 
@@ -93,7 +129,21 @@ async def ban_user(user_id: uuid.UUID | str, duration_seconds: int = 1800) -> No
     than existence/TTL (see `is_user_banned`/`get_ban_remaining_seconds`
     below), so it's just `"1"` -- a placeholder value, not meaningful
     data.
+
+    Manual Timed Bans addition: real bounds enforcement, see
+    `BAN_DURATION_MIN_SECONDS`/`BAN_DURATION_MAX_SECONDS`'s own comment
+    above for the reasoning. The default (1800s) is deliberately left
+    unvalidated-by-construction against a *variable* -- it's a literal
+    within bounds, not user input -- but every caller that passes its
+    own `duration_seconds` (both real HTTP paths, and the Arabic-filter
+    auto-ban's own fixed constant) is checked here regardless of what
+    validation, if any, ran upstream.
     """
+    if not (BAN_DURATION_MIN_SECONDS <= duration_seconds <= BAN_DURATION_MAX_SECONDS):
+        raise ValueError(
+            f"duration_seconds must be between {BAN_DURATION_MIN_SECONDS} and "
+            f"{BAN_DURATION_MAX_SECONDS} (got {duration_seconds})"
+        )
     client = _get_redis_client()
     await client.set(f"{_BAN_KEY_PREFIX}{user_id}", "1", ex=duration_seconds)
 
