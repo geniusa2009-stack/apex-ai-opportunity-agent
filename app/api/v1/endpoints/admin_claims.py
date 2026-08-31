@@ -66,6 +66,7 @@ from app.api.deps import CurrentUser, DbSession, RequireModerationAccess, effect
 from app.models.chat_moderation import ChatMessageReport
 from app.models.enums import AdminRole, ModerationTargetType
 from app.models.moderation_appeal import ModerationAppeal
+from app.models.opportunity import Opportunity
 from app.models.student_videos import StudentVideo
 from app.schemas.moderation_claims import ModerationClaimOut
 from app.services import moderation_claim_service
@@ -89,7 +90,8 @@ router = APIRouter(tags=["admin-claims"])
 # applies to a reported chat message with zero new code beyond this one
 # dict entry.
 _CLAIMABLE_MODELS: dict[
-    ModerationTargetType, type[StudentVideo] | type[ChatMessageReport] | type[ModerationAppeal]
+    ModerationTargetType,
+    type[StudentVideo] | type[ChatMessageReport] | type[ModerationAppeal] | type[Opportunity],
 ] = {
     ModerationTargetType.STUDENT_VIDEO: StudentVideo,
     ModerationTargetType.CHAT_MESSAGE_REPORT: ChatMessageReport,
@@ -99,6 +101,14 @@ _CLAIMABLE_MODELS: dict[
     # `app/models/moderation_appeal.py`'s own module docstring for why
     # `ModerationAppeal` satisfies the same structural Protocol).
     ModerationTargetType.MODERATION_APPEAL: ModerationAppeal,
+    # Review of Aggregated Opportunities Before Publish addition --
+    # FOURTH real entry, confirming this extension point yet again: zero
+    # new claim endpoints, zero schema changes, just this one line (see
+    # `app/models/opportunity.py`'s own `claimed_by`/`claimed_at` column
+    # docstrings for why `Opportunity` satisfies the same structural
+    # Protocol, and `admin_opportunities.py`'s own module docstring for
+    # the Step 3 "does this reuse the claim system" reasoning).
+    ModerationTargetType.OPPORTUNITY: Opportunity,
 }
 
 

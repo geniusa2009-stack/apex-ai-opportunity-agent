@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.endpoints.admin_activity_log import router as admin_activity_log_router
 from app.api.v1.endpoints.admin_chat_reports import router as admin_chat_reports_router
 from app.api.v1.endpoints.admin_high_risk import router as admin_high_risk_router
+from app.api.v1.endpoints.admin_opportunities import router as admin_opportunities_router
 from app.api.v1.endpoints.admin_repeat_offenders import router as admin_repeat_offenders_router
 from app.api.v1.endpoints.moderation_appeals import router as moderation_appeals_router
 from app.api.v1.endpoints.admin_claims import router as admin_claims_router
@@ -264,6 +265,12 @@ api_router.include_router(admin_repeat_offenders_router)
 # addition to the same moderation subsystem and reuses its real,
 # already-tested flagged-users data directly.
 api_router.include_router(admin_high_risk_router)
+# `admin_opportunities_router` (Review of Aggregated Opportunities Before
+# Publish) -- included right after `admin_high_risk_router` simply
+# because it's the most recent addition, same "no real ordering
+# significance" posture every prior addition to this list has already
+# disclosed.
+api_router.include_router(admin_opportunities_router)
 # `moderation_appeals_router` (Transparency: Notify Users + Real Appeal
 # Path) -- its real paths, `/moderation/appeals*` and `/admin/appeals*`,
 # are both brand-new top-level literals sharing no segment position with

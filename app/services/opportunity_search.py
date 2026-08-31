@@ -4,6 +4,7 @@ from sqlalchemy import ColumnElement, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.models.enums import OpportunityReviewStatus
 from app.models.opportunity import Opportunity
 from app.schemas.opportunity import OpportunityOut, OpportunitySearchResult
 from app.services.ai import ai_gateway
@@ -71,7 +72,12 @@ async def semantic_search(
     result = await db.execute(
         select(Opportunity, similarity.label("similarity_score"))
         .where(
-            Opportunity.is_verified.is_(True),
+            # Review of Aggregated Opportunities Before Publish addition:
+            # the real pre-publish gate, not `is_verified` (which now
+            # only reflects the AI verification task's own legitimacy
+            # judgment -- see `admin_opportunities.py`'s own module
+            # docstring for the full reasoning).
+            Opportunity.review_status == OpportunityReviewStatus.PUBLISHED.value,
             Opportunity.embedding.is_not(None),
             similarity >= threshold,
             *(extra_filters or []),

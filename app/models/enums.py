@@ -10,6 +10,38 @@ class OpportunityType(str, enum.Enum):
     COURSE = "course"
 
 
+class OpportunityReviewStatus(str, enum.Enum):
+    """Human pre-publish review state of an aggregated/scraped
+    `Opportunity` row (Review of Aggregated Opportunities Before Publish
+    step).
+
+    Step 1 investigation, confirmed real gap: before this step, nothing
+    in this codebase gave a human moderator a checkpoint before a
+    scraped opportunity went live -- `is_verified` (see that column's
+    own docstring) was flipped straight to `True` by the AI verification
+    task alone the moment its confidence score cleared a threshold, with
+    no review queue, no approve/reject action, and no way for a human to
+    intervene before students could see it.
+
+    `PENDING_REVIEW` is the real default for every NEW opportunity row
+    (both the pre-existing Scrapy pipeline's rows and the aggregator's
+    rows -- see `Opportunity.review_status`'s own column docstring for
+    the migration's exact backfill of ALREADY-live existing rows, which
+    are explicitly NOT retroactively hidden by this change).
+    `PUBLISHED`/`REJECTED` are the two real outcomes of a Moderator-or-
+    higher's explicit decision (`POST /admin/opportunities/{id}/approve`
+    or `.../reject`) -- see `app/api/v1/endpoints/admin_opportunities.py`.
+    Same plain-String-column-backed-by-Python-enum posture as
+    `StudentVideoStatus` (a workflow/lifecycle state, not a fixed
+    classification vocabulary like `OpportunityType`), enforced at the
+    Pydantic layer rather than a native Postgres ENUM TYPE.
+    """
+
+    PENDING_REVIEW = "pending_review"
+    PUBLISHED = "published"
+    REJECTED = "rejected"
+
+
 class BookmarkStatus(str, enum.Enum):
     """Where a user is in their journey with a saved opportunity.
 
@@ -560,6 +592,22 @@ class ModerationAction(str, enum.Enum):
     # target) -- see `moderation_log_service._DIRECT_TARGET_BAN_ACTIONS`.
     CHAT_MANUAL_BAN = "chat_manual_ban"
 
+    # --- Review of Aggregated Opportunities Before Publish addition
+    # (migration 0044) --- A real, distinct gap confirmed during this
+    # task's own Step 1 investigation: before this task, an `Opportunity`
+    # row had no human-loggable moderation decision at all -- the AI
+    # verification task alone decided visibility, and nothing wrote a
+    # `ModerationLogEntry` for it. `target_type=OPPORTUNITY`/
+    # `target_id=<opportunity id>`, same direct-target convention
+    # `VIDEO_OVERRIDE` already uses (no `outcome` JSON extraction needed
+    # to recover the real target -- see
+    # `moderation_log_service._DIRECT_TARGET_BAN_ACTIONS`'s own docstring
+    # for why that tuple is unrelated to this pair: these two actions
+    # target a `ModerationTargetType.OPPORTUNITY` row directly, not a
+    # user, so they were never candidates for that ban-specific set).
+    OPPORTUNITY_APPROVE = "opportunity_approve"
+    OPPORTUNITY_REJECT = "opportunity_reject"
+
 
 class ModerationTargetType(str, enum.Enum):
     """What kind of real row a `ModerationLogEntry.target_id` refers to
@@ -595,6 +643,19 @@ class ModerationTargetType(str, enum.Enum):
     # so there is no separate per-submission entry table the way chat
     # reports needed one for multiple reporters).
     MODERATION_APPEAL = "moderation_appeal"
+
+    # --- Review of Aggregated Opportunities Before Publish addition
+    # (migration 0044) --- The pending-review `Opportunity` row itself is
+    # the case a moderator opens/claims/approves-or-rejects -- same real
+    # fit as `STUDENT_VIDEO`/`CHAT_MESSAGE_REPORT` above (a genuine
+    # human-review queue where two moderators working the same item at
+    # once is a real, avoidable duplicate-work risk), confirmed via this
+    # step's own Step 3 "does this reuse the claim system" investigation
+    # (see `app/api/v1/endpoints/admin_opportunities.py`'s own module
+    # docstring for the full reasoning) -- reused via the SAME
+    # `_CLAIMABLE_MODELS` extension point `MODERATION_APPEAL` above
+    # already proved out, zero new claim endpoints needed.
+    OPPORTUNITY = "opportunity"
 
 
 class ChatReportReason(str, enum.Enum):

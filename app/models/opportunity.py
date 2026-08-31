@@ -9,7 +9,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
-from app.models.enums import AcademicLevel, Gender, OpportunityType
+from app.models.enums import AcademicLevel, Gender, OpportunityReviewStatus, OpportunityType
 from app.models.mixins import TimestampMixin
 
 if TYPE_CHECKING:
@@ -214,6 +214,52 @@ class Opportunity(Base, TimestampMixin):
     # search. No ANN index (ivfflat/hnsw) yet -- added in a later migration
     # once there's real data volume to tune it against.
     embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
+
+    # --- Review of Aggregated Opportunities Before Publish addition
+    # (migration 0044) ---
+    # The real, new pre-publish gate -- see `OpportunityReviewStatus`'s
+    # own docstring (app/models/enums.py) for the full Step 1 "no human
+    # checkpoint existed" investigation. `is_verified` above keeps its
+    # own, narrower, pre-existing meaning (the AI verification task's
+    # own legitimacy judgment) and is now purely informational to the
+    # human reviewer -- THIS column is what actually gates public
+    # visibility (see `app/api/v1/endpoints/opportunities.py::
+    # list_opportunities`/`get_opportunity`, `app/services/
+    # opportunity_search.py::semantic_search`, and `app/services/
+    # recommendation.py`'s "similar opportunities" query -- the four
+    # real browsing-surface query sites this migration updates).
+    #
+    # `server_default="pending_review"` -- every NEW row (from either the
+    # pre-existing Scrapy pipeline or the aggregator) starts unpublished
+    # by default, per this step's own literal ask. Migration 0044 itself
+    # additionally backfills every row that was ALREADY `is_verified=True`
+    # at migration time to `PUBLISHED` explicitly (a one-time `UPDATE`,
+    # not this column default) -- an already-live opportunity a student
+    # could already see is not silently hidden by this change; only
+    # brand-new rows created after this migration are subject to the new
+    # gate. Plain `String` column (not a native Postgres enum type), same
+    # posture as `StudentVideoStatus`-backed columns elsewhere in this
+    # codebase -- see the enum's own docstring for the full reasoning.
+    review_status: Mapped[OpportunityReviewStatus] = mapped_column(
+        String(20),
+        nullable=False,
+        default=OpportunityReviewStatus.PENDING_REVIEW.value,
+        server_default=OpportunityReviewStatus.PENDING_REVIEW.value,
+        index=True,
+    )
+
+    # Claim System reuse (Step 3 decision, see `admin_opportunities.py`'s
+    # own module docstring) -- identical shape/semantics to
+    # `StudentVideo.claimed_by`/`.claimed_at` (`ondelete="SET NULL"`,
+    # `claimed_at` deliberately left non-null after a SET NULL since
+    # every real read site treats `claimed_by IS NULL` alone as
+    # sufficient for "unclaimed" -- see `moderation_claim_service.
+    # get_effective_claim`). Satisfies `moderation_claim_service.
+    # _Claimable`'s structural Protocol with zero new claim-service code.
+    claimed_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    claimed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     source: Mapped["Source"] = relationship(back_populates="opportunities", lazy="selectin")
     bookmarks: Mapped[list["UserBookmark"]] = relationship(

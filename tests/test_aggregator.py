@@ -256,7 +256,10 @@ CREATE TABLE opportunities (
     max_age INTEGER,
     target_gender VARCHAR(10),
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    review_status VARCHAR(20) NOT NULL DEFAULT 'published',
+    claimed_by VARCHAR(36),
+    claimed_at DATETIME
 )
 """
 

@@ -4,7 +4,13 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
-from app.models.enums import AcademicLevel, Gender, OpportunityType, SourceType
+from app.models.enums import (
+    AcademicLevel,
+    Gender,
+    OpportunityReviewStatus,
+    OpportunityType,
+    SourceType,
+)
 
 T = TypeVar("T")
 
@@ -52,6 +58,13 @@ class OpportunityOut(BaseModel):
     country: str | None
     is_verified: bool
     ai_confidence_score: float | None
+    # Review of Aggregated Opportunities Before Publish addition -- the
+    # real pre-publish gate. See `OpportunityReviewStatus`'s own
+    # docstring (app/models/enums.py) for why this is now what actually
+    # controls visibility, not `is_verified` above (which keeps its own,
+    # narrower, purely-informational meaning: the AI verification task's
+    # legitimacy judgment).
+    review_status: OpportunityReviewStatus
     # Hybrid Opportunity Aggregation Engine additions.
     is_local_egypt: bool
     target_age_group: str | None
@@ -167,3 +180,47 @@ class OpportunityCreate(BaseModel):
         "`Source.base_url` is a real NOT NULL column (app/models/source.py); needed "
         "so `upsert_opportunity` can get-or-create the right `Source` row.",
     )
+
+
+# =============================================================================
+# Review of Aggregated Opportunities Before Publish
+# =============================================================================
+
+
+class AdminOpportunityReviewOut(OpportunityOut):
+    """`GET /admin/opportunities/review-queue` item shape -- `OpportunityOut`
+    plus the Claim System fields every other admin review-queue schema in
+    this codebase already exposes (`AdminVideoReviewOut.claimed_by`/
+    `.claimed_by_name`/`.claimed_at`), so a Moderator sees who (if anyone)
+    is already working this item before duplicating the effort. Claim
+    state is resolved through `moderation_claim_service.get_effective_claim`
+    (an expired claim renders as unclaimed here), same as every other
+    claimable queue.
+    """
+
+    claimed_by: UUID | None = None
+    claimed_by_name: str | None = None
+    claimed_at: datetime | None = None
+
+
+class AdminOpportunityDecisionRequest(BaseModel):
+    """`POST /admin/opportunities/{id}/approve` and `.../reject` request
+    body. `notes` is optional on both -- unlike a video/chat-ban
+    rejection, there is no submitting student to notify (an aggregated
+    `Opportunity` has no "owner" user -- it comes from a `Source`/the
+    scraper, not a person -- confirmed via a full read of
+    `app/models/opportunity.py` before deciding this), so `notes` here is
+    purely an audit-trail note for the `ModerationLogEntry` outcome, not
+    user-facing copy."""
+
+    notes: str | None = Field(default=None, max_length=2000)
+
+
+class AdminOpportunityDecisionResponse(BaseModel):
+    """Response for both the approve and reject actions -- same
+    `{success, opportunity_id, new_status}` envelope shape
+    `AdminOverrideResponse` already established for videos."""
+
+    success: bool
+    opportunity_id: UUID
+    new_status: OpportunityReviewStatus

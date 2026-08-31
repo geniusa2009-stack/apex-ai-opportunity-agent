@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.enums import OpportunityReviewStatus
 from app.models.opportunity import Opportunity
 
 logger = logging.getLogger(__name__)
@@ -89,7 +90,10 @@ async def get_similar_opportunities(
         select(Opportunity, similarity.label("similarity_score"))
         .where(
             Opportunity.id != opportunity_id,
-            Opportunity.is_verified.is_(True),
+            # Review of Aggregated Opportunities Before Publish addition:
+            # the real pre-publish gate, not `is_verified` (see
+            # `admin_opportunities.py`'s own module docstring).
+            Opportunity.review_status == OpportunityReviewStatus.PUBLISHED.value,
             Opportunity.embedding.is_not(None),
         )
         .order_by(distance.asc())

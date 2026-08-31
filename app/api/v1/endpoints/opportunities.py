@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUserOptional
 from app.db.session import get_db
-from app.models.enums import OpportunityType
+from app.models.enums import OpportunityReviewStatus, OpportunityType
 from app.models.opportunity import Opportunity
 from app.models.user import User
 from app.schemas.opportunity import (
@@ -80,10 +80,16 @@ async def list_opportunities(
     current_user: CurrentUserOptional,
     db: AsyncSession = Depends(get_db),
     type: OpportunityType | None = Query(default=None, description="Filter by opportunity type."),
-    is_verified: bool = Query(
+    published: bool = Query(
         default=True,
-        description="Only verified opportunities by default. Set to false to "
-        "see the review queue (flagged/unprocessed rows) instead.",
+        description="Only published opportunities by default (the real "
+        "pre-publish review gate -- see OpportunityReviewStatus). Set to "
+        "false to see everything NOT published (pending-review and "
+        "rejected together). Renamed from the pre-existing `is_verified` "
+        "param -- that column now reflects only the AI verification "
+        "task's own legitimacy judgment, no longer what gates visibility; "
+        "the tiered GET /admin/opportunities/review-queue endpoint is the "
+        "real way to see the pending-review queue specifically.",
     ),
     country: str | None = Query(default=None, description="Filter by country (exact match)."),
     eligible_only: bool = Query(
@@ -98,7 +104,10 @@ async def list_opportunities(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ) -> PaginatedResponse[OpportunityOut]:
-    filters = [Opportunity.is_verified.is_(is_verified)]
+    if published:
+        filters = [Opportunity.review_status == OpportunityReviewStatus.PUBLISHED.value]
+    else:
+        filters = [Opportunity.review_status != OpportunityReviewStatus.PUBLISHED.value]
     if type is not None:
         filters.append(Opportunity.type == type)
     if country is not None:
@@ -129,7 +138,7 @@ async def get_opportunity(
     opportunity_id: UUID, db: AsyncSession = Depends(get_db)
 ) -> Opportunity:
     opportunity = await db.get(Opportunity, opportunity_id)
-    if opportunity is None:
+    if opportunity is None or opportunity.review_status != OpportunityReviewStatus.PUBLISHED.value:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Opportunity not found")
     return opportunity
 
