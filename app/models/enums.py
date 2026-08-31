@@ -608,6 +608,20 @@ class ModerationAction(str, enum.Enum):
     OPPORTUNITY_APPROVE = "opportunity_approve"
     OPPORTUNITY_REJECT = "opportunity_reject"
 
+    # --- Export Moderation Log addition (migration 0045) ---
+    # A real, distinct gap confirmed during this task's own Step 3.3
+    # investigation: before this task, an Owner exporting the whole
+    # team's log to a file was itself unlogged -- the one action this
+    # entire feature exists to make auditable was, ironically, not
+    # itself audited. An export has no single natural "target row" the
+    # way a video/ban/opportunity decision does (it reads a date range,
+    # it doesn't mutate one record), so this reuses the existing `USER`
+    # target type with `target_id=<the exporting Owner's own id>` -- the
+    # same direct-target, no-outcome-extraction-needed convention
+    # `CHAT_UNBAN`/`CHAT_AUTO_BAN`/`CHAT_MANUAL_BAN` already established
+    # for actions whose real subject is a user account.
+    ACTIVITY_LOG_EXPORT = "activity_log_export"
+
 
 class ModerationTargetType(str, enum.Enum):
     """What kind of real row a `ModerationLogEntry.target_id` refers to
