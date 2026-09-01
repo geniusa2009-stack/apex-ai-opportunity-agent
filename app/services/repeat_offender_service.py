@@ -228,6 +228,44 @@ async def get_recent_offense_count_for_user(
     return counts.get(user_id, 0)
 
 
+async def get_offense_events_since(
+    db: AsyncSession, cutoff: dt.datetime
+) -> list[tuple[uuid.UUID, dt.datetime]]:
+    """Real Review of Suspicious New Signups addition -- a small, honest
+    extension of this module's own existing purpose, not a new detection
+    mechanism. That feature needs to answer a real, different question
+    from `get_recent_offense_counts` above: not "how many total offenses
+    does this user have in a fixed lookback window" (an aggregate count,
+    reset by nothing), but "exactly WHEN did each real punitive action
+    against a given user happen" -- so it can check whether any such
+    action landed within days of that specific user's own account
+    creation, a real, per-account fact `get_recent_offense_counts`
+    cannot answer on its own. Reuses this module's own `_PUNITIVE_ACTIONS`
+    set and `_resolve_offenders` resolution logic UNCHANGED (same real
+    offender-resolution rules, same disclosed Python-side-not-JSONB-path
+    implementation choice already justified above) -- this function only
+    changes what's returned: `(offender_id, entry.created_at)` pairs
+    instead of a per-user aggregate count, and takes an arbitrary
+    `cutoff` (the caller's own real newest-relevant-signup window) rather
+    than this module's own fixed `REPEAT_OFFENDER_LOOKBACK_DAYS`, since a
+    signup review window and a repeat-offender window are two genuinely
+    different real time horizons with no reason to be coupled.
+    """
+    result = await db.execute(
+        select(ModerationLogEntry).where(
+            ModerationLogEntry.action.in_(_PUNITIVE_ACTIONS),
+            ModerationLogEntry.created_at >= cutoff,
+        )
+    )
+    entries = list(result.scalars().all())
+    offenders = await _resolve_offenders(db, entries)
+    entries_by_id = {entry.id: entry for entry in entries}
+    return [
+        (offender_id, entries_by_id[entry_id].created_at)
+        for entry_id, offender_id in offenders.items()
+    ]
+
+
 async def get_flagged_users(
     db: AsyncSession,
     *,

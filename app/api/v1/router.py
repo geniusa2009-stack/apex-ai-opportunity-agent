@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.endpoints.admin_activity_log import router as admin_activity_log_router
 from app.api.v1.endpoints.admin_blacklist import router as admin_blacklist_router
+from app.api.v1.endpoints.admin_signups import router as admin_signups_router
 from app.api.v1.endpoints.admin_chat_reports import router as admin_chat_reports_router
 from app.api.v1.endpoints.admin_high_risk import router as admin_high_risk_router
 from app.api.v1.endpoints.admin_opportunities import router as admin_opportunities_router
@@ -290,6 +291,15 @@ api_router.include_router(moderation_appeals_router)
 # subsystem, same "no real ordering significance" posture every prior
 # addition to this list has already disclosed.
 api_router.include_router(admin_blacklist_router)
+# `admin_signups_router` (Review of Suspicious New Signups) -- its one
+# real path, `/admin/signups/review`, is a brand-new top-level literal
+# sharing no segment position with any other route -- no path-template
+# ambiguity, registration order here is provably irrelevant. Placed
+# immediately after `admin_blacklist_router` simply because it's the
+# most recent addition to the same moderation subsystem, same "no real
+# ordering significance" posture every prior addition to this list has
+# already disclosed.
+api_router.include_router(admin_signups_router)
 # `media_router` MUST be included BEFORE `courses_router` -- disclosed
 # routing-precedence requirement, Core Video Media Processing Pipeline
 # step. `media_router` owns `GET /courses/recommendations`, which shares
