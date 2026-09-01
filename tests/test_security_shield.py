@@ -51,6 +51,8 @@ from sqlalchemy.pool import StaticPool
 from app.api.deps import get_current_user
 from app.api.dependencies.rate_limiter import MAX_UPLOADS_PER_ROLLING_WINDOW
 from app.api.v1.endpoints import student_videos as student_videos_module
+from app.db.base import Base
+from app.models.blacklist import BlacklistedPattern
 from app.core.file_validator import (
     ALLOWED_THUMBNAIL_EXTENSIONS,
     MAX_THUMBNAIL_SIZE_BYTES,
@@ -317,11 +319,31 @@ CREATE TABLE student_videos (
 
 @pytest_asyncio.fixture
 async def db_session_factory():
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", poolclass=StaticPool)
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        poolclass=StaticPool,
+        # Same real, confirmed fix applied to `test_chat.py`'s equivalent
+        # fixture -- `StaticPool` pins one single shared in-memory
+        # connection, so the default rollback-on-checkin reset serves no
+        # purpose here and only exposes this fixture to a real
+        # `asyncio.CancelledError`-during-reset race under concurrent
+        # async use.
+        pool_reset_on_return=None,
+    )
     async with engine.begin() as conn:
         await conn.exec_driver_sql(_CREATE_USERS_TABLE_SQL)
         await conn.exec_driver_sql(_CREATE_USER_BOOKMARKS_TABLE_SQL)
         await conn.exec_driver_sql(_CREATE_STUDENT_VIDEOS_TABLE_SQL)
+        # General Content Blacklist / Pattern Auto-Trigger addition --
+        # this fixture's own real upload tests go through the actual
+        # `upload_student_video` endpoint, which now calls
+        # `blacklist_service.check_content` on `title`/`description`
+        # unconditionally on every upload (proactively caught as a real
+        # fixture gap: these tests failed with `no such table:
+        # blacklisted_patterns` before this addition). Same
+        # `Base.metadata.create_all` plain-types-no-JSONB pattern as
+        # `test_chat.py`'s own fixture.
+        await conn.run_sync(Base.metadata.create_all, tables=[BlacklistedPattern.__table__])
 
     session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     yield session_factory

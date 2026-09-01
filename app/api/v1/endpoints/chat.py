@@ -31,6 +31,7 @@ from app.schemas.chat import (
 )
 from app.schemas.chat_moderation import ChatMessageReportRequest, ChatMessageReportResponse
 from app.services import (
+    blacklist_service,
     chat_group_service,
     chat_report_service,
     chat_security,
@@ -681,6 +682,39 @@ async def chat_websocket(websocket: WebSocket, room_id: uuid.UUID, db: DbSession
                 )
                 await websocket.close(code=4429, reason="Arabic detected. Banned for 30 minutes.")
                 return
+
+            # --- General Content Blacklist / Pattern Auto-Trigger addition
+            # ---
+            # Runs AFTER the pre-existing Arabic filter (untouched above),
+            # BEFORE the message is ever saved/broadcast. Deliberately
+            # does NOT ban -- rejects just this one message and lets the
+            # student keep chatting (see `blacklist_service.check_content`'s
+            # own module docstring for the full "reject, don't ban"
+            # reasoning). The WebSocket connection itself is NOT closed
+            # here (unlike the Arabic-filter branch above) -- a single
+            # blacklist hit on one message is not the same category of
+            # violation as the hard English-only rule, so there is no
+            # reason to also interrupt the student's whole session.
+            blacklist_match = await blacklist_service.check_content(db, incoming.content)
+            if blacklist_match is not None:
+                blacklist_service.log_trigger(
+                    db,
+                    submitting_user_id=user.id,
+                    match=blacklist_match,
+                    content_type="chat_message",
+                    content_snippet=incoming.content,
+                )
+                await db.commit()
+                # Honest but non-revealing -- tells the student what
+                # happened without echoing back the exact matched word/
+                # pattern, which would hand a would-be evader a live
+                # oracle for probing the blacklist one message at a time.
+                await websocket.send_json(
+                    ErrorEvent(
+                        reason="This message can't be sent -- it contains content that isn't allowed here."
+                    ).model_dump(mode="json")
+                )
+                continue
 
             # --- Step 5: save + broadcast valid English messages ---
             message = await chat_service.save_message(db, room_id, user.id, incoming.content)

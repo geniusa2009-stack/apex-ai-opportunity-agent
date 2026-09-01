@@ -29,6 +29,7 @@ against this process's own configured secret is the correct way to
 exercise it as a genuine boundary rather than a bypassed one.
 """
 
+import json
 import uuid
 from datetime import datetime, timezone
 
@@ -41,11 +42,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import settings
+from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
+from app.models.blacklist import BlacklistedPattern
 from app.models.chat import ChatMessage
 from app.models.user import User
-from app.services import chat_security, chat_service, notification_connection_manager, notification_service
+from app.services import blacklist_service, chat_security, chat_service, notification_connection_manager, notification_service
 from app.services.chat_connection_manager import ConnectionManager
 
 # Deliberately NOT a module-level `pytestmark = pytest.mark.asyncio` --
@@ -440,6 +443,29 @@ async def db_session_factory():
         "sqlite+aiosqlite:///:memory:",
         poolclass=StaticPool,
         connect_args={"check_same_thread": False},
+        # Real, confirmed fix for a genuine pre-existing race: this
+        # fixture's `StaticPool` pins exactly ONE shared DBAPI connection
+        # for the whole in-memory SQLite engine, by design (that single
+        # connection IS the database -- SQLite `:memory:` has no
+        # persistent storage behind it). SQLAlchemy's default
+        # `pool_reset_on_return="rollback"` issues a rollback every time
+        # a connection is checked back into the pool; with this test's
+        # two CONCURRENT WebSocket connections (`alice_ws`/`bob_ws`, each
+        # driven by its own TestClient/anyio portal), that rollback can
+        # be hit by a real `asyncio.CancelledError` mid-flight (confirmed
+        # via direct reproduction: the exact same test, unchanged,
+        # passed twice and failed once in three consecutive runs before
+        # this fix, with `no such table: chat_messages` on the failure --
+        # SQLAlchemy treats a failed reset as an invalidated connection
+        # and opens a brand-new one on the next checkout, which for
+        # `:memory:` SQLite is silently a fresh, empty database). Since
+        # `StaticPool` never actually returns this connection to a
+        # separate pool of alternates -- there is only ever the one --
+        # resetting on checkin serves no purpose here and only exposes
+        # this fixture to that race. Disabling it removes the race
+        # without weakening test isolation (each test still gets its own
+        # fresh `engine`/connection via this fixture running per-test).
+        pool_reset_on_return=None,
     )
     async with engine.begin() as conn:
         await conn.execute(text(_CREATE_USERS_TABLE_SQL))
@@ -449,6 +475,12 @@ async def db_session_factory():
         await conn.execute(text(_CREATE_CHAT_MESSAGES_TABLE_SQL))
         await conn.execute(text(_CREATE_MODERATION_LOG_TABLE_SQL))
         await conn.execute(text(_CREATE_NOTIFICATIONS_TABLE_SQL))
+        # General Content Blacklist / Pattern Auto-Trigger addition --
+        # same "plain types, no JSONB" shape as `ModerationAppeal`'s own
+        # table, so `Base.metadata.create_all` compiles fine against
+        # SQLite (unlike the JSONB-bearing tables above, which need raw
+        # SQL -- see this fixture's own `CREATE TABLE` blocks).
+        await conn.run_sync(Base.metadata.create_all, tables=[BlacklistedPattern.__table__])
 
     session_factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
     yield session_factory
@@ -795,6 +827,79 @@ class TestWebSocketFlow:
             history = await chat_service.get_message_history(db, room.id)
             assert history == [], "the Arabic message must never be saved to the database"
 
+
+    async def test_blacklisted_word_rejects_the_message_without_banning_or_closing(
+        self, db_session_factory, chat_client
+    ):
+        """General Content Blacklist / Pattern Auto-Trigger addition --
+        deliberately different from the Arabic-filter test right below:
+        a blacklist hit rejects just the one message (an `ErrorEvent`,
+        the connection stays OPEN, the sender is NOT banned) rather than
+        closing the connection the way an Arabic violation does -- see
+        `blacklist_service.check_content`'s own module docstring for the
+        full "reject, don't ban" reasoning this asserts on."""
+        async with db_session_factory() as db:
+            alice = await _make_user(db, full_name="Alice")
+            bob = await _make_user(db, full_name="Bob")
+            room = await chat_service.get_or_create_dm_room(db, alice.id, bob.id)
+            db.add(BlacklistedPattern(pattern="badword", is_regex=False))
+            await db.commit()
+
+        token = _mint_token(alice.id)
+        with chat_client.websocket_connect(f"/api/v1/chat/ws/{room.id}?token={token}") as ws:
+            ws.send_text('{"content": "you are such a badword honestly"}')
+            error_event = ws.receive_json()
+            assert error_event["type"] == "error"
+            assert "isn't allowed" in error_event["reason"]
+            assert "badword" not in error_event["reason"], (
+                "the honest but non-revealing message must never echo back the real matched word"
+            )
+
+            # The connection is still open and usable -- send a clean
+            # message right after, on the SAME connection.
+            ws.send_text('{"content": "sorry, let me rephrase that"}')
+            message_event = ws.receive_json()
+            assert message_event["type"] == "message"
+            assert message_event["content"] == "sorry, let me rephrase that"
+
+        assert await chat_security.is_user_banned(alice.id) is False
+
+        async with db_session_factory() as db:
+            history = await chat_service.get_message_history(db, room.id)
+            assert len(history) == 1
+            assert history[0].content == "sorry, let me rephrase that", (
+                "the blacklisted message must never be saved to the database"
+            )
+            log_result = await db.execute(text("SELECT action, target_id, outcome FROM moderation_log_entries"))
+            rows = log_result.all()
+            assert len(rows) == 1
+            action, target_id, outcome = rows[0]
+            assert action == "blacklist_triggered"
+            assert target_id == alice.id.hex
+            outcome_data = json.loads(outcome)
+            assert outcome_data["matched_pattern"] == "badword"
+            assert outcome_data["content_type"] == "chat_message"
+
+    async def test_a_blacklisted_substring_inside_a_longer_word_does_not_falsely_trigger(
+        self, db_session_factory, chat_client
+    ):
+        """Word-boundary matching (the DEFAULT, non-regex mode) -- a
+        pattern like "ass" must not silently reject an ordinary message
+        containing "class"/"assignment", the exact false-positive this
+        design deliberately avoids (see `BlacklistedPattern`'s own
+        docstring)."""
+        async with db_session_factory() as db:
+            alice = await _make_user(db, full_name="Alice")
+            bob = await _make_user(db, full_name="Bob")
+            room = await chat_service.get_or_create_dm_room(db, alice.id, bob.id)
+            db.add(BlacklistedPattern(pattern="ass", is_regex=False))
+            await db.commit()
+
+        token = _mint_token(alice.id)
+        with chat_client.websocket_connect(f"/api/v1/chat/ws/{room.id}?token={token}") as ws:
+            ws.send_text('{"content": "See you in class for the assignment"}')
+            event = ws.receive_json()
+            assert event["type"] == "message", "a substring match on 'ass' inside 'class'/'assignment' must not trigger"
     async def test_arabic_auto_ban_sends_a_real_notification_to_the_banned_user(
         self, db_session_factory, chat_client, fake_redis
     ):

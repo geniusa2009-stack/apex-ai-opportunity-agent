@@ -11,7 +11,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from app.core.config import settings
 from app.models.guilds import Guild, GuildComment, GuildPost, GuildQuest
-from app.services import coach_service
+from app.services import blacklist_service, coach_service
 
 logger = logging.getLogger(__name__)
 
@@ -286,6 +286,20 @@ async def create_post(
     """
     await _get_guild_or_404(db, guild_id)
 
+    # General Content Blacklist / Pattern Auto-Trigger addition -- runs
+    # BEFORE the existing Gemini safety/PII check below, deliberately:
+    # a fast, deterministic, team-editable word-list check should catch
+    # an obvious blacklisted term without spending a real LLM call on
+    # content that's going to be rejected either way.
+    blacklist_match = await blacklist_service.check_content(db, content)
+    if blacklist_match is not None:
+        blacklist_service.log_trigger(
+            db, submitting_user_id=user_id, match=blacklist_match,
+            content_type="guild_post", content_snippet=content,
+        )
+        await db.commit()
+        raise ContentRejectedError("This post can't be published -- it contains content that isn't allowed here.")
+
     moderation = await _moderate_content(content)
     if not moderation.is_safe:
         raise ContentRejectedError(
@@ -343,6 +357,20 @@ async def submit_comment_with_rewrite(
     in this project.
     """
     await _get_post_or_404(db, post_id)
+
+    # General Content Blacklist / Pattern Auto-Trigger addition -- same
+    # "runs before the Gemini check" reasoning as `create_post` above,
+    # applied to both the comment's own `content` and (when present) its
+    # `suggested_rewrite`.
+    for field_name, field_value in (("comment", content), ("rewrite", suggested_rewrite)):
+        blacklist_match = await blacklist_service.check_content(db, field_value)
+        if blacklist_match is not None:
+            blacklist_service.log_trigger(
+                db, submitting_user_id=user_id, match=blacklist_match,
+                content_type=f"guild_{field_name}", content_snippet=field_value or "",
+            )
+            await db.commit()
+            raise ContentRejectedError(f"This {field_name} can't be published -- it contains content that isn't allowed here.")
 
     moderation = await _moderate_content(content)
     if not moderation.is_safe:

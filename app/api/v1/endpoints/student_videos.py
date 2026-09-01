@@ -47,6 +47,7 @@ from app.core.file_validator import validate_thumbnail_upload, validate_video_up
 from app.models.enums import StudentVideoStatus
 from app.models.student_videos import StudentVideo
 from app.schemas.opportunity import PaginatedResponse
+from app.services import blacklist_service
 from app.schemas.student_videos import (
     StudentVideoMyUploadOut,
     StudentVideoOut,
@@ -169,6 +170,31 @@ async def upload_student_video(
     as before, just now applying to the READ+WRITE phase rather than the
     validation phase itself.
     """
+    # General Content Blacklist / Pattern Auto-Trigger addition -- runs
+    # FIRST, before any file bytes are even validated/read: a pure text
+    # check against `title`/`description`, the cheapest possible check
+    # in this whole handler, so a blacklisted title fails fast without
+    # ever touching the (potentially large) video upload. Checks BOTH
+    # fields independently (a blacklist hit in either one blocks the
+    # whole upload) -- `check_content` itself already treats a `None`
+    # `description` as "no match", so this is safe when no description
+    # was supplied.
+    for field_name, field_value in (("title", title), ("description", description)):
+        blacklist_match = await blacklist_service.check_content(db, field_value)
+        if blacklist_match is not None:
+            blacklist_service.log_trigger(
+                db,
+                submitting_user_id=current_user.id,
+                match=blacklist_match,
+                content_type=f"student_video_{field_name}",
+                content_snippet=field_value or "",
+            )
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"This video's {field_name} can't be published -- it contains content that isn't allowed here.",
+            )
+
     if thumbnail is not None:
         validate_thumbnail_upload(thumbnail)
     validate_video_upload(video)

@@ -622,6 +622,25 @@ class ModerationAction(str, enum.Enum):
     # for actions whose real subject is a user account.
     ACTIVITY_LOG_EXPORT = "activity_log_export"
 
+    # --- General Content Blacklist / Pattern Auto-Trigger addition
+    # (migration 0046) --- A real, distinct gap confirmed during this
+    # task's own Step 1 investigation: no blacklist/pattern-list storage
+    # existed anywhere in this codebase, and `chat_security.
+    # contains_arabic` (the one existing precedent for automated content
+    # filtering) is a single hardcoded regex whose trigger response is a
+    # real 30-minute ban -- calibrated to one specific hard platform
+    # rule, not a general-purpose response. This member's own trigger
+    # deliberately does NOT ban anyone (see `blacklist_service.
+    # check_content`'s own module docstring for the full reasoning) --
+    # it REJECTS the offending content (a 422), the same real precedent
+    # `guild_service._moderate_content` already established for guild
+    # posts/comments. `target_type=USER`/`target_id=<the submitting
+    # user's own id>` -- same direct-target convention `CHAT_AUTO_BAN`/
+    # `CHAT_UNBAN`/`CHAT_MANUAL_BAN` already established (there is no
+    # other real "case" row to target -- the rejected content itself is
+    # never persisted).
+    BLACKLIST_TRIGGERED = "blacklist_triggered"
+
 
 class ModerationTargetType(str, enum.Enum):
     """What kind of real row a `ModerationLogEntry.target_id` refers to

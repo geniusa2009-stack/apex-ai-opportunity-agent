@@ -1,12 +1,13 @@
 import logging
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import Select, func, select
 
 from app.api.deps import CurrentUser, DbSession
 from app.models.enums import AcademicLevel, UserRole
 from app.models.user import User
 from app.schemas.user import UserOut, UserProfileUpdate
+from app.services import blacklist_service
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,30 @@ async def update_my_profile(
     # like `{"major": "Physics"}` would silently null out every other
     # field the caller didn't mention.
     updates = payload.model_dump(exclude_unset=True)
+
+    # General Content Blacklist / Pattern Auto-Trigger addition -- `bio`
+    # is the one free-text field on this profile that becomes visible to
+    # OTHER students (via `GET /users/search`'s full-text directory
+    # search, which indexes and returns it) -- every other field on
+    # `UserProfileUpdate` (major, skills, etc.) is structured/short
+    # metadata, not the kind of free-text field this task's own Step 1.2
+    # is about. Only checked when `bio` is actually part of THIS PATCH
+    # (`exclude_unset` already narrows `updates` to fields the caller
+    # sent), matching this endpoint's own existing partial-update
+    # posture.
+    if "bio" in updates:
+        blacklist_match = await blacklist_service.check_content(db, updates["bio"])
+        if blacklist_match is not None:
+            blacklist_service.log_trigger(
+                db, submitting_user_id=current_user.id, match=blacklist_match,
+                content_type="profile_bio", content_snippet=updates["bio"],
+            )
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="This bio can't be saved -- it contains content that isn't allowed here.",
+            )
+
     for field, value in updates.items():
         setattr(current_user, field, value)
 
