@@ -64,6 +64,7 @@ from fastapi import APIRouter, HTTPException, status
 
 from app.api.deps import CurrentUser, DbSession, RequireModerationAccess, effective_admin_role
 from app.models.chat_moderation import ChatMessageReport
+from app.models.guild_moderation import GuildContentReport
 from app.models.enums import AdminRole, ModerationTargetType
 from app.models.moderation_appeal import ModerationAppeal
 from app.models.opportunity import Opportunity
@@ -91,7 +92,7 @@ router = APIRouter(tags=["admin-claims"])
 # dict entry.
 _CLAIMABLE_MODELS: dict[
     ModerationTargetType,
-    type[StudentVideo] | type[ChatMessageReport] | type[ModerationAppeal] | type[Opportunity],
+    type[StudentVideo] | type[ChatMessageReport] | type[ModerationAppeal] | type[Opportunity] | type[GuildContentReport],
 ] = {
     ModerationTargetType.STUDENT_VIDEO: StudentVideo,
     ModerationTargetType.CHAT_MESSAGE_REPORT: ChatMessageReport,
@@ -109,6 +110,12 @@ _CLAIMABLE_MODELS: dict[
     # Protocol, and `admin_opportunities.py`'s own module docstring for
     # the Step 3 "does this reuse the claim system" reasoning).
     ModerationTargetType.OPPORTUNITY: Opportunity,
+    # Review of Guild Content addition -- FIFTH real entry, confirming
+    # this extension point yet again: zero new claim endpoints, zero
+    # schema changes, just this one line (see
+    # `app/models/guild_moderation.py`'s own module docstring for why
+    # `GuildContentReport` satisfies the same structural Protocol).
+    ModerationTargetType.GUILD_CONTENT_REPORT: GuildContentReport,
 }
 
 

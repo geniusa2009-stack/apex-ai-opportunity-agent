@@ -24,6 +24,7 @@ from app.models.expat_survival import ExpatSurvival
 from app.models.features import Certificate, LessonStudyAid, MentorshipRelation
 from app.models.focus_room import FocusSession
 from app.models.gamification import StudentAccountability
+from app.models.guild_moderation import GuildContentReport, GuildContentReportEntry
 from app.models.guilds import Guild, GuildComment, GuildPost, GuildQuest
 from app.models.live_session import LiveSession
 from app.models.moderation_appeal import ModerationAppeal
@@ -57,6 +58,8 @@ __all__ = [
     "Guild",
     "GuildPost",
     "GuildComment",
+    "GuildContentReport",
+    "GuildContentReportEntry",
     "GuildQuest",
     "ParentPitch",
     "DecisionMatrix",

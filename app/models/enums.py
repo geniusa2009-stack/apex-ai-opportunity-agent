@@ -641,6 +641,19 @@ class ModerationAction(str, enum.Enum):
     # never persisted).
     BLACKLIST_TRIGGERED = "blacklist_triggered"
 
+    # --- Review of Guild Content addition (migration 0047) ---
+    # Guild content already has two real, automatic checks (a Gemini
+    # safety/PII filter and the general blacklist above) -- neither
+    # produces anything a human can act on, since both simply REJECT
+    # the content before it is ever persisted. This step's real,
+    # genuinely new gap was that no user could report a specific,
+    # already-PUBLISHED post/comment (mirroring the real chat-message
+    # report system) -- these two actions resolve that new report
+    # queue, same "dismiss vs. destructive delete" shape
+    # `CHAT_REPORT_DISMISS`/`CHAT_MESSAGE_DELETE` already established.
+    GUILD_REPORT_DISMISS = "guild_report_dismiss"
+    GUILD_CONTENT_DELETE = "guild_content_delete"
+
 
 class ModerationTargetType(str, enum.Enum):
     """What kind of real row a `ModerationLogEntry.target_id` refers to
@@ -689,6 +702,13 @@ class ModerationTargetType(str, enum.Enum):
     # `_CLAIMABLE_MODELS` extension point `MODERATION_APPEAL` above
     # already proved out, zero new claim endpoints needed.
     OPPORTUNITY = "opportunity"
+
+    # --- Review of Guild Content addition (migration 0047) ---
+    # The reportable CASE (`GuildContentReport`, one open row per
+    # reported post/comment) -- same "the case, not the individual
+    # submission" shape `CHAT_MESSAGE_REPORT` already established,
+    # reused via the SAME `_CLAIMABLE_MODELS` extension point.
+    GUILD_CONTENT_REPORT = "guild_content_report"
 
 
 class ChatReportReason(str, enum.Enum):

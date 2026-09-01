@@ -102,6 +102,11 @@ _PUNITIVE_ACTIONS: set[ModerationAction] = {
     ModerationAction.CHAT_MESSAGE_DELETE,
     ModerationAction.CHAT_REPORT_ESCALATE_BAN,
     ModerationAction.CHAT_AUTO_BAN,
+    # Review of Guild Content addition -- a real, permanent removal of
+    # a guild post/comment after a human-reviewed report, same
+    # "content deletion is punitive against its real author" bucket
+    # `CHAT_MESSAGE_DELETE` is already in.
+    ModerationAction.GUILD_CONTENT_DELETE,
 }
 
 
@@ -140,6 +145,14 @@ async def _resolve_offenders(
             banned_id = entry.outcome.get("banned_user_id")
             if banned_id:
                 offenders[entry.id] = uuid.UUID(banned_id)
+        elif entry.action == ModerationAction.GUILD_CONTENT_DELETE:
+            # Same "row is already gone by the time the log entry is
+            # written, so the offender was captured into `outcome` at
+            # write time" posture as `CHAT_MESSAGE_DELETE` above -- see
+            # `admin_guild_reports.py::delete_reported_guild_content`.
+            author_id = entry.outcome.get("author_id")
+            if author_id:
+                offenders[entry.id] = uuid.UUID(author_id)
         elif entry.action == ModerationAction.VIDEO_REJECT_AND_PURGE:
             video_join_ids.add(entry.target_id)
         elif entry.action == ModerationAction.VIDEO_OVERRIDE:

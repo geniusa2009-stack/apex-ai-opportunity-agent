@@ -4,7 +4,9 @@ import uuid
 from fastapi import APIRouter, HTTPException, status
 
 from app.api.deps import CurrentUser, DbSession
-from app.models.guilds import GuildPost
+from app.models.guild_moderation import TARGET_TYPE_COMMENT, TARGET_TYPE_POST
+from app.models.guilds import GuildComment, GuildPost
+from app.schemas.guild_moderation import GuildContentReportRequest, GuildContentReportResponse
 from app.schemas.guilds import (
     CommentCreateRequest,
     CommentSubmitOut,
@@ -14,7 +16,7 @@ from app.schemas.guilds import (
     PostOut,
     QuestOut,
 )
-from app.services import guild_service
+from app.services import guild_report_service, guild_service
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +102,91 @@ async def submit_comment(
         rewrite_feedback=result.rewrite_feedback,
         tokens_earned=result.tokens_earned,
         tokens_balance=result.tokens_balance,
+    )
+
+
+
+# --- Review of Guild Content addition -- the genuinely new user-facing
+# report actions this codebase had no equivalent of before for guild
+# content (see `app/models/guild_moderation.py`'s own module docstring
+# for the full Step 1/2 investigation: the Gemini safety/PII check and
+# the general blacklist already cover content BEFORE it's published;
+# this is the real, distinct gap for content that's already live). 400
+# for a self-report, real 409 for a duplicate report on the caller's own
+# currently-open case -- same posture as `chat.py::report_message`. ---
+@router.post(
+    "/posts/{post_id}/report", response_model=GuildContentReportResponse, status_code=status.HTTP_201_CREATED
+)
+async def report_post(
+    post_id: uuid.UUID, payload: GuildContentReportRequest, current_user: CurrentUser, db: DbSession
+) -> GuildContentReportResponse:
+    post = await db.get(GuildPost, post_id)
+    if post is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
+
+    try:
+        case, entry, total = await guild_report_service.create_report(
+            db,
+            target_type=TARGET_TYPE_POST,
+            target_id=post.id,
+            author_id=post.user_id,
+            reporter_id=current_user.id,
+            reason=payload.reason,
+            details=payload.details,
+        )
+    except guild_report_service.SelfReportError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except guild_report_service.DuplicateReportError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    await db.commit()
+    await db.refresh(entry)
+
+    return GuildContentReportResponse(
+        report_id=case.id, target_type=TARGET_TYPE_POST, target_id=post.id,
+        reason=entry.reason, created_at=entry.created_at, total_reports=total,
+    )
+
+
+@router.post(
+    "/posts/{post_id}/comments/{comment_id}/report",
+    response_model=GuildContentReportResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def report_comment(
+    post_id: uuid.UUID, comment_id: uuid.UUID, payload: GuildContentReportRequest, current_user: CurrentUser, db: DbSession
+) -> GuildContentReportResponse:
+    comment = await db.get(GuildComment, comment_id)
+    if comment is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Comment not found")
+
+    # Same "the path's own post_id is trusted scope, a comment belonging
+    # to a DIFFERENT post must not be reportable through a mismatched
+    # URL" posture as `chat.py::report_message`'s own room_id check.
+    if comment.post_id != post_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Comment not found")
+
+    try:
+        case, entry, total = await guild_report_service.create_report(
+            db,
+            target_type=TARGET_TYPE_COMMENT,
+            target_id=comment.id,
+            author_id=comment.user_id,
+            reporter_id=current_user.id,
+            reason=payload.reason,
+            details=payload.details,
+        )
+    except guild_report_service.SelfReportError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except guild_report_service.DuplicateReportError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    await db.commit()
+    await db.refresh(entry)
+
+    return GuildContentReportResponse(
+        report_id=case.id, target_type=TARGET_TYPE_COMMENT, target_id=comment.id,
+        reason=entry.reason, created_at=entry.created_at, total_reports=total,
     )
 
 
