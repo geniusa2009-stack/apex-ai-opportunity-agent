@@ -30,6 +30,7 @@ from app.models.live_session import LiveSession
 from app.models.moderation_appeal import ModerationAppeal
 from app.models.notification import Notification
 from app.models.onboarding import OnboardingChecklistProgress
+from app.models.shift import ShiftAssignment
 from app.models.opportunity import Opportunity
 from app.models.parent_pitch import ParentPitch
 from app.models.courses import Course, CourseModule, Lesson, LessonProgress, UserEnrollment
@@ -89,4 +90,5 @@ __all__ = [
     "LiveSession",
     "ModerationAppeal",
     "OnboardingChecklistProgress",
+    "ShiftAssignment",
 ]
