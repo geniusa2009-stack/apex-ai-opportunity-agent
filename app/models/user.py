@@ -1,7 +1,9 @@
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, Float, Integer, String, Text
+import datetime as dt
+
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import ARRAY, TSVECTOR, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -277,6 +279,24 @@ class User(Base, TimestampMixin):
         ),
         nullable=True,
     )
+
+    # `role_granted_at` -- New-Volunteer Onboarding Checklist addition
+    # (migration 0048). Real, disclosed gap Step 1 confirmed: nothing in
+    # `assign_admin_role` (app/api/v1/endpoints/admin_roles.py) ever
+    # recorded WHEN a tier was granted -- `TimestampMixin.updated_at`
+    # (below) is NOT a substitute; it flips on ANY user-row update
+    # (profile edits, any other admin action touching this row), not
+    # specifically a role grant, so it cannot reliably answer "is this a
+    # new volunteer." Set to `func.now()` the moment `admin_role` moves
+    # from `None` to a real tier (a genuine first-time grant, not a
+    # lateral MODERATOR<->SENIOR_MODERATOR change) and cleared back to
+    # `None` on revocation -- see `assign_admin_role`'s own docstring for
+    # the full reasoning, including why this also drives the onboarding
+    # checklist's real reset-on-fresh-grant behavior. `None` for every
+    # `is_superuser=True` legacy Owner who never passed through this real
+    # endpoint -- an honest, not fabricated, absence of a real grant
+    # event for those accounts.
+    role_granted_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # lazy="selectin" issues a second batched query instead of a lazy-load,
     # which is the safe pattern under asyncio (a plain lazy="select" would

@@ -27,14 +27,16 @@ FastAPI/Starlette path-template ambiguity, registration order is
 provably irrelevant.
 """
 
+import datetime as dt
 import logging
 import uuid
 
 from fastapi import APIRouter, HTTPException, status
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select
 
 from app.api.deps import CurrentUser, DbSession, RequireOwner
 from app.models.enums import AdminRole
+from app.models.onboarding import OnboardingChecklistProgress
 from app.models.user import User
 from app.schemas.admin_roles import (
     AdminRoleAssignRequest,
@@ -90,6 +92,29 @@ async def assign_admin_role(
     target_user = await db.get(User, user_id)
     if target_user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    # New-Volunteer Onboarding Checklist addition -- a real, FIRST-TIME
+    # grant (no elevated `admin_role` before this call) is the one real
+    # "this is a new volunteer" event: stamp `role_granted_at` and reset
+    # any stale onboarding progress so their checklist starts fresh. A
+    # LATERAL change between two elevated tiers (MODERATOR <->
+    # SENIOR_MODERATOR) deliberately does NOT reset either -- that
+    # person is not a new volunteer, just re-tiered, and re-forcing them
+    # through onboarding again would be real, unwarranted busywork this
+    # step was never asked to create. A revocation (`new_role=None`)
+    # clears `role_granted_at` back to `None` -- honestly reflecting
+    # "this person does not currently hold a real grant" -- but leaves
+    # any existing progress rows alone (harmless: the next real grant,
+    # if any, resets them anyway; there is no real reason to race a
+    # delete against a revocation that a re-grant will supersede).
+    was_ungranted = target_user.admin_role is None
+    if was_ungranted and payload.new_role is not None:
+        target_user.role_granted_at = dt.datetime.now(dt.timezone.utc)
+        await db.execute(
+            delete(OnboardingChecklistProgress).where(OnboardingChecklistProgress.user_id == target_user.id)
+        )
+    elif payload.new_role is None:
+        target_user.role_granted_at = None
 
     target_user.admin_role = payload.new_role
     db.add(target_user)

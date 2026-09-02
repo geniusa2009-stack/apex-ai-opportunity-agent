@@ -38,6 +38,7 @@ from app.services import chat_security, notification_connection_manager, notific
 from app.main import app
 from app.models.badges import Badge, GamificationProfile, UserBadge
 from app.models.enums import AdminRole, StudentVideoStatus
+from app.models.onboarding import OnboardingChecklistProgress
 from app.models.student_videos import StudentVideo
 from app.models.user import User
 
@@ -66,6 +67,7 @@ CREATE TABLE users (
     search_vector TEXT,
     role VARCHAR(20) NOT NULL DEFAULT 'student',
     admin_role VARCHAR(20),
+    role_granted_at DATETIME,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 )
@@ -205,7 +207,19 @@ async def db_session_factory():
         await conn.execute(text(_CREATE_MODERATION_LOG_TABLE_SQL))
         await conn.run_sync(
             Base.metadata.create_all,
-            tables=[GamificationProfile.__table__, Badge.__table__, UserBadge.__table__],
+            tables=[
+                GamificationProfile.__table__,
+                Badge.__table__,
+                UserBadge.__table__,
+                # New-Volunteer Onboarding Checklist addition -- a
+                # first-time grant via `assign_admin_role` now also
+                # deletes any stale `OnboardingChecklistProgress` rows
+                # for the target user (real reset-on-fresh-grant
+                # behavior); the table must exist for that DELETE not
+                # to 500 with "no such table" even though this suite's
+                # own tests never populate it.
+                OnboardingChecklistProgress.__table__,
+            ],
         )
 
     session_factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)

@@ -63,6 +63,7 @@ from app.api.v1.endpoints.multi_agent_interview import router as multi_agent_int
 from app.api.v1.endpoints.media_router import router as media_router
 from app.api.v1.endpoints.mentorship import router as mentorship_router
 from app.api.v1.endpoints.notifications import router as notifications_router
+from app.api.v1.endpoints.onboarding import router as onboarding_router
 from app.api.v1.endpoints.parent_guide import router as parent_guide_router
 from app.api.v1.endpoints.parent_pitch import router as parent_pitch_router
 from app.api.v1.endpoints.planner import router as planner_router
@@ -307,6 +308,15 @@ api_router.include_router(admin_signups_router)
 # already registered, so there is no path-template ambiguity
 # regardless of registration order.
 api_router.include_router(admin_guild_reports_router)
+# `onboarding_router` (New-Volunteer Onboarding Checklist) -- its real
+# paths, `/me/onboarding*` and `/admin/onboarding/team`, are brand-new
+# top-level literals sharing no segment position with any other route
+# already registered (no other router owns a literal `me/onboarding` or
+# `admin/onboarding` prefix) -- no path-template ambiguity, registration
+# order here is provably irrelevant. Placed immediately after
+# `admin_guild_reports_router` simply because it's the most recent
+# addition to the same moderation subsystem.
+api_router.include_router(onboarding_router)
 # `media_router` MUST be included BEFORE `courses_router` -- disclosed
 # routing-precedence requirement, Core Video Media Processing Pipeline
 # step. `media_router` owns `GET /courses/recommendations`, which shares

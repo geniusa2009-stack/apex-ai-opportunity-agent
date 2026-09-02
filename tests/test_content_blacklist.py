@@ -42,7 +42,7 @@ CREATE TABLE users (
     phone VARCHAR(50), degree_level VARCHAR(100), major VARCHAR(255), gpa FLOAT, graduation_year INTEGER,
     skills TEXT, target_country VARCHAR(120), age_group VARCHAR(50), age INTEGER, academic_level VARCHAR(20),
     gender VARCHAR(10), bio TEXT, search_vector TEXT, role VARCHAR(20) NOT NULL DEFAULT 'student',
-    admin_role VARCHAR(20), created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    admin_role VARCHAR(20), role_granted_at DATETIME, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 )
 """
