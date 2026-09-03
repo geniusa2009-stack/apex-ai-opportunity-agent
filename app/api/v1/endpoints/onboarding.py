@@ -36,6 +36,7 @@ from sqlalchemy import delete, select
 from app.api.deps import CurrentUser, DbSession, RequireModerationAccess, RequireOwner
 from app.models.enums import AdminRole
 from app.models.onboarding import ONBOARDING_STEP_KEYS, ONBOARDING_STEPS, OnboardingChecklistProgress
+from app.models.practice_case import PRACTICE_CASE_KEYS, PracticeCaseAttempt
 from app.models.user import User
 from app.schemas.onboarding import (
     AdminOnboardingMemberOut,
@@ -61,6 +62,9 @@ def _build_steps(completed_keys: set[str], completed_at_by_key: dict[str, object
     ]
 
 
+_PRACTICE_STEP_KEY = "complete_practice_cases"
+
+
 async def _load_progress(db: DbSession, user_id: uuid.UUID) -> tuple[set[str], dict[str, object]]:
     result = await db.execute(
         select(OnboardingChecklistProgress).where(OnboardingChecklistProgress.user_id == user_id)
@@ -68,6 +72,34 @@ async def _load_progress(db: DbSession, user_id: uuid.UUID) -> tuple[set[str], d
     rows = result.scalars().all()
     completed_keys = {row.step_key for row in rows}
     completed_at_by_key = {row.step_key: row.completed_at for row in rows}
+
+    # Training / Practice Mode for New Volunteers addition -- the sixth
+    # step is server-computed from real `PracticeCaseAttempt` rows, NOT
+    # from `OnboardingChecklistProgress` like the other five (see
+    # `ONBOARDING_STEPS`'s own docstring on this key). "Completed" means
+    # a real attempt row exists for EVERY case in the real practice-case
+    # bank -- full exposure to all three real case types, not partial
+    # credit for trying just one.
+    practice_result = await db.execute(
+        select(PracticeCaseAttempt.case_key).where(PracticeCaseAttempt.user_id == user_id)
+    )
+    attempted_keys = {row[0] for row in practice_result.all()}
+    if PRACTICE_CASE_KEYS and PRACTICE_CASE_KEYS.issubset(attempted_keys):
+        completed_keys.add(_PRACTICE_STEP_KEY)
+        # Real, honest "when" for this step is the LATEST practice
+        # attempt's own real timestamp (i.e. the moment the volunteer
+        # genuinely finished the last remaining case) -- not a
+        # fabricated "now," and not silently absent.
+        latest_result = await db.execute(
+            select(PracticeCaseAttempt.acted_at)
+            .where(PracticeCaseAttempt.user_id == user_id)
+            .order_by(PracticeCaseAttempt.acted_at.desc())
+            .limit(1)
+        )
+        latest_at = latest_result.scalar_one_or_none()
+        if latest_at is not None:
+            completed_at_by_key[_PRACTICE_STEP_KEY] = latest_at
+
     return completed_keys, completed_at_by_key
 
 
@@ -108,6 +140,16 @@ async def complete_my_onboarding_step(
     of view)."""
     if step_key not in ONBOARDING_STEP_KEYS:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown onboarding step")
+    # Training / Practice Mode for New Volunteers addition -- this one
+    # real step is server-computed from real `PracticeCaseAttempt` rows
+    # (see `_load_progress` above), never self-reportable -- a real
+    # signal already exists, so accepting a client's own unverified
+    # assertion here would be a real regression, not a shortcut.
+    if step_key == _PRACTICE_STEP_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This step completes automatically once you finish every case in the training sandbox -- it cannot be marked directly.",
+        )
 
     existing = await db.execute(
         select(OnboardingChecklistProgress).where(
@@ -136,6 +178,11 @@ async def uncomplete_my_onboarding_step(
     an already-incomplete step is a harmless no-op, not a 404/409."""
     if step_key not in ONBOARDING_STEP_KEYS:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown onboarding step")
+    if step_key == _PRACTICE_STEP_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This step is computed automatically from your real practice-sandbox progress -- it cannot be un-marked directly.",
+        )
 
     await db.execute(
         delete(OnboardingChecklistProgress).where(

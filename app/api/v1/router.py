@@ -68,6 +68,7 @@ from app.api.v1.endpoints.media_router import router as media_router
 from app.api.v1.endpoints.mentorship import router as mentorship_router
 from app.api.v1.endpoints.notifications import router as notifications_router
 from app.api.v1.endpoints.onboarding import router as onboarding_router
+from app.api.v1.endpoints.practice_cases import router as practice_cases_router
 from app.api.v1.endpoints.admin_shifts import router as admin_shifts_router
 from app.api.v1.endpoints.parent_guide import router as parent_guide_router
 from app.api.v1.endpoints.parent_pitch import router as parent_pitch_router
@@ -360,6 +361,15 @@ api_router.include_router(admin_guild_reports_router)
 # `admin_guild_reports_router` simply because it's the most recent
 # addition to the same moderation subsystem.
 api_router.include_router(onboarding_router)
+# `practice_cases_router` (Training / Practice Mode for New Volunteers)
+# -- its real paths, `/me/practice*`, are brand-new top-level literals
+# sharing no segment position with any other router already registered
+# (no other router owns a literal `me/practice` prefix) -- no path-
+# template ambiguity, registration order is provably irrelevant.
+# Placed immediately after `onboarding_router` since this feature's own
+# sixth onboarding step hooks directly into it (see `app/models/
+# onboarding.py`'s own docstring on `complete_practice_cases`).
+api_router.include_router(practice_cases_router)
 # `admin_shifts_router` (Volunteer Coverage / Shift Schedule) -- its
 # real paths, `/admin/shifts*`, are brand-new top-level literals
 # sharing no segment position with any other router already

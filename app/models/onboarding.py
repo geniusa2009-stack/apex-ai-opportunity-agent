@@ -96,6 +96,25 @@ ONBOARDING_STEPS: tuple[OnboardingStep, ...] = (
         order=5,
         label="Know how to escalate a serious case (chat ban, content deletion) to someone with a higher tier if you don't have it yourself",
     ),
+    # Training / Practice Mode for New Volunteers addition -- SIXTH real
+    # step, deliberately DIFFERENT in kind from the five above: those
+    # are self-reported ("the volunteer marks it done themselves," per
+    # this module's own docstring, because this codebase has no real
+    # signal to verify them by). This one has a REAL, verifiable signal
+    # instead (a real `PracticeCaseAttempt` row exists per practice
+    # case, see `app/models/practice_case.py`) -- so, unlike the other
+    # five, it is SERVER-COMPUTED, not self-reportable. Both
+    # `complete_my_onboarding_step`/`uncomplete_my_onboarding_step`
+    # (app/api/v1/endpoints/onboarding.py) explicitly reject a direct
+    # self-report attempt on this specific key: using a fabricated
+    # client-asserted signal when a real one already exists would be a
+    # real regression from this codebase's own established honesty
+    # discipline, not a shortcut.
+    OnboardingStep(
+        key="complete_practice_cases",
+        order=6,
+        label="Complete every case in the training sandbox before acting on real cases",
+    ),
 )
 
 ONBOARDING_STEP_KEYS: frozenset[str] = frozenset(step.key for step in ONBOARDING_STEPS)

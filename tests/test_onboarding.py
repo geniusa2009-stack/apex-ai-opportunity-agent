@@ -23,6 +23,7 @@ from app.db.session import get_db
 from app.main import app
 from app.models.enums import AdminRole
 from app.models.onboarding import ONBOARDING_STEPS, OnboardingChecklistProgress
+from app.models.practice_case import PRACTICE_ACTIONS_BY_CASE_TYPE, PRACTICE_CASES, PracticeCaseAttempt
 from app.models.user import User
 
 pytestmark = pytest.mark.asyncio
@@ -79,7 +80,10 @@ async def db_session_factory():
     async with engine.begin() as conn:
         await conn.execute(text(_CREATE_USERS_TABLE_SQL))
         await conn.execute(text(_CREATE_USER_BOOKMARKS_TABLE_SQL))
-        await conn.run_sync(Base.metadata.create_all, tables=[OnboardingChecklistProgress.__table__])
+        await conn.run_sync(
+            Base.metadata.create_all,
+            tables=[OnboardingChecklistProgress.__table__, PracticeCaseAttempt.__table__],
+        )
 
     session_factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
     yield session_factory
@@ -299,11 +303,25 @@ class TestOwnOnboardingChecklist:
         assert response.status_code == 404
 
     async def test_all_completed_true_once_every_step_marked(self, db_session_factory, client_factory):
+        """Training / Practice Mode for New Volunteers addition: the
+        real sixth step (`complete_practice_cases`) can never be marked
+        via this endpoint (it 400s -- see the dedicated rejection test
+        below), so genuinely reaching `all_completed=True` now also
+        needs a real practice attempt recorded for every real case in
+        the real practice-case bank, exactly mirroring what a real
+        volunteer would actually do. `tests/test_practice_cases.py`
+        owns the full behavioral coverage of the practice endpoints
+        themselves; this test only needs the real end state to prove
+        the two features' real integration."""
         async with db_session_factory() as session:
             moderator = await _make_user(session, admin_role=AdminRole.MODERATOR)
         client = client_factory(moderator)
         for step in ONBOARDING_STEPS:
             client.post(f"/api/v1/me/onboarding/{step.key}/complete")
+        for case in PRACTICE_CASES:
+            action = PRACTICE_ACTIONS_BY_CASE_TYPE[case.case_type][0]
+            resp = client.post(f"/api/v1/me/practice/{case.key}/act", json={"action": action})
+            assert resp.status_code == 200
         response = client.get("/api/v1/me/onboarding")
         assert response.json()["all_completed"] is True
 
@@ -323,6 +341,27 @@ class TestOwnOnboardingChecklist:
         checklist_a = client_a.get("/api/v1/me/onboarding").json()
         marked = next(s for s in checklist_a["steps"] if s["key"] == step_key)
         assert marked["completed"] is False
+
+    async def test_practice_step_cannot_be_self_marked_or_unmarked(self, db_session_factory, client_factory):
+        """Training / Practice Mode for New Volunteers addition: the
+        real sixth step is server-computed from real `PracticeCaseAttempt`
+        rows -- a direct self-report attempt on it is a real, honest
+        400, never silently accepted (see `onboarding.py`'s own
+        rejection in `complete_my_onboarding_step`/
+        `uncomplete_my_onboarding_step`)."""
+        async with db_session_factory() as session:
+            moderator = await _make_user(session, admin_role=AdminRole.MODERATOR)
+        client = client_factory(moderator)
+
+        complete_resp = client.post("/api/v1/me/onboarding/complete_practice_cases/complete")
+        assert complete_resp.status_code == 400
+
+        uncomplete_resp = client.delete("/api/v1/me/onboarding/complete_practice_cases/complete")
+        assert uncomplete_resp.status_code == 400
+
+        checklist = client.get("/api/v1/me/onboarding").json()
+        practice_step = next(s for s in checklist["steps"] if s["key"] == "complete_practice_cases")
+        assert practice_step["completed"] is False
 
 
 # ---------------------------------------------------------------------
