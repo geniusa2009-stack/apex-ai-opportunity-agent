@@ -14,6 +14,7 @@ from app.models.analytics import VideoPlaybackLog
 from app.models.application_tracker import ApplicationTracker
 from app.models.badges import Badge, GamificationProfile, UserBadge
 from app.models.bookmark import UserBookmark
+from app.models.canned_response import CannedResponse
 from app.models.budget_planner import BudgetPlanner
 from app.models.career_compass import CareerCompassResult
 from app.models.chat import ChatMessage, ChatParticipant, ChatRoom
@@ -47,6 +48,7 @@ __all__ = [
     "Source",
     "Opportunity",
     "UserBookmark",
+    "CannedResponse",
     "Alumnus",
     "AgentAlert",
     "UserHistory",

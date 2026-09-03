@@ -8,6 +8,7 @@ from app.api.v1.endpoints.admin_guild_reports import router as admin_guild_repor
 from app.api.v1.endpoints.admin_signups import router as admin_signups_router
 from app.api.v1.endpoints.admin_chat_reports import router as admin_chat_reports_router
 from app.api.v1.endpoints.admin_high_risk import router as admin_high_risk_router
+from app.api.v1.endpoints.admin_canned_responses import router as admin_canned_responses_router
 from app.api.v1.endpoints.admin_escalations import router as admin_escalations_router
 from app.api.v1.endpoints.admin_opportunities import router as admin_opportunities_router
 from app.api.v1.endpoints.admin_repeat_offenders import router as admin_repeat_offenders_router
@@ -246,6 +247,12 @@ api_router.include_router(admin_claims_router)
 # immediately after `admin_claims_router` since both are the same
 # `{item_type}/{item_id}` dispatch pattern.
 api_router.include_router(admin_escalations_router)
+# `admin_canned_responses_router` (Canned Responses / Templates) -- its
+# real paths, `/admin/canned-responses*`, are brand-new top-level
+# literals sharing no segment position with any other router already
+# registered -- no path-template ambiguity, registration order is
+# provably irrelevant.
+api_router.include_router(admin_canned_responses_router)
 # `admin_stats_router` (Phase 5 -- Contribution Stats + The 3 Views) --
 # `/admin/team/summary` diverges from the EXISTING `/admin/team`
 # (`admin_roles_router`, above) at the THIRD path segment (`/admin/team`
