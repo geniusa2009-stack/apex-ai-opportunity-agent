@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.db.session import AsyncSessionLocal, engine
 from app.models import Opportunity
 from app.models.enums import AcademicLevel, Gender
+from app.services import entity_relationship_service
 from app.services.ai import ai_gateway
 
 logger = logging.getLogger(__name__)
@@ -168,6 +169,25 @@ async def _verify_new_opportunities(limit: int) -> dict:
                         verification.target_academic_levels, opportunity.id
                     )
                     verified += 1
+
+                    # Simplified Knowledge Graph addition (Deliverable 2)
+                    # -- real, incremental edge population, bounded to
+                    # this one freshly-verified opportunity's own real
+                    # source_id/country matches. See
+                    # `entity_relationship_service`'s own module
+                    # docstring for the full design/scale reasoning.
+                    # Best-effort: a real failure here must never
+                    # discard an otherwise-successful verification.
+                    try:
+                        await entity_relationship_service.sync_relationships_for_opportunity(
+                            session, opportunity
+                        )
+                    except Exception:
+                        logger.exception(
+                            "entity_relationship_service sync failed for opportunity %s "
+                            "-- verification itself still succeeded",
+                            opportunity.id,
+                        )
                 else:
                     # Flagging mechanism: leave is_verified=False but record the
                     # score. That alone moves the row out of the "pending"

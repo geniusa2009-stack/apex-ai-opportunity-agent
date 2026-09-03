@@ -109,3 +109,62 @@ async def get_similar_opportunities(
         )
         for opportunity, score in result.all()
     ]
+
+
+# --- Simplified Knowledge Graph addition (Deliverable 2) ---
+class RelatedOpportunity(BaseModel):
+    """One real opportunity related to the queried one, via a real,
+    explicit `entity_relationships` edge -- not a similarity score."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    title: str
+    short_description: str | None = Field(
+        description="The related opportunity's description, truncated to "
+        f"{_SHORT_DESCRIPTION_MAX_CHARS} characters (at a word boundary)."
+    )
+    relationship_type: str = Field(
+        description="Why these two opportunities are related: "
+        "'same_organization' (same real Source) or 'same_country'."
+    )
+
+
+async def get_related_opportunities(
+    db: AsyncSession, opportunity_id: UUID, limit: int = 10
+) -> list[RelatedOpportunity]:
+    """Real, simple query over the real `entity_relationships` table
+    (Deliverable 2) -- no similarity math, just the real edges this
+    opportunity already has, joined to the real, currently-published
+    opportunity on the other end of each edge.
+
+    Raises `RecommendationSourceNotFoundError` if `opportunity_id`
+    doesn't exist -- same real 404 contract as
+    `get_similar_opportunities` above.
+    """
+    from app.models.entity_relationship import EntityRelationship
+
+    source = await db.get(Opportunity, opportunity_id)
+    if source is None:
+        raise RecommendationSourceNotFoundError(f"Opportunity {opportunity_id} not found")
+
+    result = await db.execute(
+        select(Opportunity, EntityRelationship.relationship_type)
+        .join(EntityRelationship, EntityRelationship.related_opportunity_id == Opportunity.id)
+        .where(
+            EntityRelationship.opportunity_id == opportunity_id,
+            Opportunity.review_status == OpportunityReviewStatus.PUBLISHED.value,
+        )
+        .order_by(EntityRelationship.created_at.asc())
+        .limit(limit)
+    )
+
+    return [
+        RelatedOpportunity(
+            id=opportunity.id,
+            title=opportunity.title,
+            short_description=_truncate(opportunity.description),
+            relationship_type=relationship_type,
+        )
+        for opportunity, relationship_type in result.all()
+    ]

@@ -808,3 +808,20 @@ class ChatReportReason(str, enum.Enum):
     HARASSMENT = "harassment"
     INAPPROPRIATE_CONTENT = "inappropriate_content"
     OTHER = "other"
+
+
+class RelationshipType(str, enum.Enum):
+    """A real, explainable kind of edge in the simplified opportunity
+    knowledge graph (Deliverable 2, `app/models/entity_relationship.py`).
+
+    Deliberately only the two relationship kinds this deliverable's own
+    Step 2 asks be derived from data this codebase ALREADY has (an
+    `Opportunity`'s existing `source_id`/`country` columns) -- not an
+    open-ended free-text relationship label, and not an invented
+    NLP-extracted relationship. A future, genuinely new relationship
+    kind (e.g. a human-curated "spinoff of") is a real, additive new
+    enum value here, not a schema change.
+    """
+
+    SAME_ORGANIZATION = "same_organization"
+    SAME_COUNTRY = "same_country"

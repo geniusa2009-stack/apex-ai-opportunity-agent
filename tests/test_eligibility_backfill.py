@@ -134,6 +134,16 @@ CREATE TABLE opportunities (
 )
 """
 
+_CREATE_ENTITY_RELATIONSHIPS_TABLE_SQL = """
+CREATE TABLE entity_relationships (
+    id VARCHAR(36) PRIMARY KEY,
+    opportunity_id VARCHAR(36) NOT NULL,
+    related_opportunity_id VARCHAR(36) NOT NULL,
+    relationship_type VARCHAR(30) NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
 _CREATE_USER_BOOKMARKS_TABLE_SQL = """
 CREATE TABLE user_bookmarks (
     id VARCHAR(36) PRIMARY KEY,
@@ -157,6 +167,7 @@ async def db_session_factory():
         await conn.execute(text(_CREATE_SOURCES_TABLE_SQL))
         await conn.execute(text(_CREATE_OPPORTUNITIES_TABLE_SQL))
         await conn.execute(text(_CREATE_USER_BOOKMARKS_TABLE_SQL))
+        await conn.execute(text(_CREATE_ENTITY_RELATIONSHIPS_TABLE_SQL))
 
     session_factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
     yield session_factory

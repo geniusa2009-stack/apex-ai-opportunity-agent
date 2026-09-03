@@ -21,6 +21,7 @@ from app.models.case_note import CaseNote
 from app.models.chat import ChatMessage, ChatParticipant, ChatRoom
 from app.models.chat_moderation import ChatMessageReport, ChatMessageReportEntry
 from app.models.dangerous_action_confirmation import DangerousActionConfirmation
+from app.models.entity_relationship import EntityRelationship
 from app.models.practice_case import PracticeCaseAttempt
 from app.models.deadline_alert import DeadlineAlert
 from app.models.decision_matrix import DecisionMatrix
@@ -55,6 +56,7 @@ __all__ = [
     "CaseNote",
     "DangerousActionConfirmation",
     "PracticeCaseAttempt",
+    "EntityRelationship",
     "Alumnus",
     "AgentAlert",
     "UserHistory",

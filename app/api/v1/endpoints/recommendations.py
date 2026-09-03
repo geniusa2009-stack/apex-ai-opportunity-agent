@@ -8,7 +8,9 @@ from app.db.session import get_db
 from app.services.recommendation import (
     RecommendationSourceNotEmbeddedError,
     RecommendationSourceNotFoundError,
+    RelatedOpportunity,
     SimilarOpportunity,
+    get_related_opportunities,
     get_similar_opportunities,
 )
 
@@ -49,3 +51,26 @@ async def recommend_similar_opportunities(
             detail="This opportunity has no embedding yet, so recommendations "
             "can't be computed for it.",
         )
+
+
+@router.get("/{opportunity_id}/related", response_model=list[RelatedOpportunity])
+async def recommend_related_opportunities(
+    opportunity_id: UUID,
+    limit: int = Query(default=10, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+) -> list[RelatedOpportunity]:
+    """Simplified Knowledge Graph addition (Deliverable 2). Real edges
+    from the real `entity_relationships` table -- other opportunities
+    from the same real organization/country as `opportunity_id`, most
+    recently-linked first. Registered as a real, distinct path segment
+    (`/related`) after the existing `/{opportunity_id}` route -- no
+    routing-precedence conflict, since that route has no further path
+    segment of its own.
+
+    Public, same posture as `GET /{opportunity_id}` above: a plain
+    table read, no external call, no per-user cost.
+    """
+    try:
+        return await get_related_opportunities(db, opportunity_id, limit=limit)
+    except RecommendationSourceNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Opportunity not found")
