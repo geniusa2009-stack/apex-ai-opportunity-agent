@@ -98,6 +98,22 @@ CREATE TABLE moderation_log_entries (
 )
 """
 
+_CREATE_DANGEROUS_ACTION_CONFIRMATIONS_TABLE_SQL = """
+CREATE TABLE dangerous_action_confirmations (
+    id VARCHAR(36) PRIMARY KEY,
+    action VARCHAR(30) NOT NULL,
+    item_type VARCHAR(30) NOT NULL,
+    item_id VARCHAR(36) NOT NULL,
+    notes TEXT,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    is_override BOOLEAN NOT NULL DEFAULT 0,
+    requested_by VARCHAR(36),
+    requested_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    executed_by VARCHAR(36),
+    executed_at DATETIME
+)
+"""
+
 _CREATE_NOTIFICATIONS_TABLE_SQL = """
 CREATE TABLE notifications (
     id VARCHAR(36) PRIMARY KEY,
@@ -123,6 +139,7 @@ async def db_session_factory():
         await conn.execute(text(_CREATE_USERS_TABLE_SQL))
         await conn.execute(text(_CREATE_USER_BOOKMARKS_TABLE_SQL))
         await conn.execute(text(_CREATE_MODERATION_LOG_TABLE_SQL))
+        await conn.execute(text(_CREATE_DANGEROUS_ACTION_CONFIRMATIONS_TABLE_SQL))
         await conn.execute(text(_CREATE_NOTIFICATIONS_TABLE_SQL))
         await conn.run_sync(
             Base.metadata.create_all,
@@ -574,8 +591,14 @@ class TestDeleteReportedGuildContent:
 
         client = client_factory(senior)
         resp = client.request("DELETE", f"/api/v1/admin/guild/reports/{case.id}/content", json={"notes": "clear violation"})
-        assert resp.status_code == 200
-        assert resp.json()["status"] == "content_deleted"
+        assert resp.status_code == 202
+        confirmation_id = resp.json()["confirmation_id"]
+
+        async with db_session_factory() as db:
+            second_senior = await _make_user(db, admin_role=AdminRole.SENIOR_MODERATOR, full_name="Second Senior")
+        approver_client = client_factory(second_senior)
+        approve_resp = approver_client.post(f"/api/v1/admin/moderation/dangerous-actions/{confirmation_id}/approve")
+        assert approve_resp.status_code == 200
 
         async with db_session_factory() as db:
             deleted_post = await db.get(GuildPost, post.id)
@@ -605,7 +628,14 @@ class TestDeleteReportedGuildContent:
 
         client = client_factory(senior)
         resp = client.delete(f"/api/v1/admin/guild/reports/{case.id}/content")
-        assert resp.status_code == 200
+        assert resp.status_code == 202
+        confirmation_id = resp.json()["confirmation_id"]
+
+        async with db_session_factory() as db:
+            second_senior = await _make_user(db, admin_role=AdminRole.SENIOR_MODERATOR, full_name="Second Senior")
+        approver_client = client_factory(second_senior)
+        approve_resp = approver_client.post(f"/api/v1/admin/moderation/dangerous-actions/{confirmation_id}/approve")
+        assert approve_resp.status_code == 200
 
         async with db_session_factory() as db:
             assert await db.get(GuildComment, comment.id) is None
@@ -627,9 +657,22 @@ class TestDeleteReportedGuildContent:
 
         client = client_factory(senior)
         first = client.delete(f"/api/v1/admin/guild/reports/{case.id}/content")
-        assert first.status_code == 200
-        second = client.delete(f"/api/v1/admin/guild/reports/{case.id}/content")
-        assert second.status_code == 409
+        assert first.status_code == 202
+        confirmation_id = first.json()["confirmation_id"]
+
+        async with db_session_factory() as db:
+            second_senior = await _make_user(db, admin_role=AdminRole.SENIOR_MODERATOR, full_name="Second Senior")
+        approver_client = client_factory(second_senior)
+        approve_resp = approver_client.post(f"/api/v1/admin/moderation/dangerous-actions/{confirmation_id}/approve")
+        assert approve_resp.status_code == 200
+
+        # Real Two-Person Confirmation for Dangerous Actions addition:
+        # the case is only actually resolved (content_deleted) once the
+        # second approval runs -- so the honest 409-on-already-resolved
+        # check is now exercised by a THIRD delete call, after approval,
+        # not the second.
+        third = client.delete(f"/api/v1/admin/guild/reports/{case.id}/content")
+        assert third.status_code == 409
 
 
 # ---------------------------------------------------------------------

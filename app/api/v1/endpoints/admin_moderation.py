@@ -85,6 +85,7 @@ from app.api.deps import (
 from app.models.enums import ModerationAction, ModerationTargetType, StudentVideoStatus
 from app.models.student_videos import StudentVideo
 from app.models.user import User
+from app.schemas.dangerous_actions import DangerousActionPendingResponse
 from app.schemas.opportunity import PaginatedResponse
 from app.schemas.student_videos import (
     AdminDeleteVideoRequest,
@@ -95,6 +96,7 @@ from app.schemas.student_videos import (
     AIFeedback,
 )
 from app.services import (
+    dangerous_action_service,
     gamification_service,
     moderation_claim_service,
     moderation_log_service,
@@ -417,120 +419,62 @@ async def override_video_decision(
     )
 
 
-@router.delete("/admin/videos/{video_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/admin/videos/{video_id}", response_model=DangerousActionPendingResponse, status_code=status.HTTP_202_ACCEPTED)
 async def delete_video_permanently(
     video_id: uuid.UUID,
     current_user: CurrentUser,
     db: DbSession,
     _: RequireSeniorModerationAccess,
     payload: AdminDeleteVideoRequest | None = None,
-) -> None:
-    """Senior-Moderator-or-higher (Real Tiered Role System step -- this
-    action triggers real, irreversible R2/storage deletion on top of the
-    row delete itself, which `AdminRole.MODERATOR`'s own docstring
-    explains is deliberately out of scope for the entry tier). Permanently
-    deletes ANY student's `StudentVideo` row --
-    see this module's own docstring for why this is a NEW, separate
-    endpoint from `override_video_decision`, not a side effect of
-    rejecting a video. No ownership check (same posture as
-    `override_video_decision`): by definition, ANY admin may delete ANY
-    student's video, already fully handled by `RequireAdmin`.
-
-    Cloud Garbage Collection (IPFS Unpinning & R2 Deletion): captures
-    `video.hls_master_url`/`video.thumbnail_url` BEFORE deleting the row,
-    then dispatches `task_delete_orphaned_media` (`app/workers/
-    cleanup_tasks.py`) fire-and-forget ONLY AFTER a successful commit --
-    same disclosed ordering reasoning as `student_videos.py`'s own
-    `delete_student_video` (its docstring has the fuller version): a
-    confirmed DB delete is the correct trigger for "the storage may now
-    be cleaned up," not the other way around, and the Celery dispatch
-    remains non-blocking regardless of which side of the commit it sits
-    on. `StudentVideo` has no IPFS CID columns (see the Student Video
-    Pinata -> Cloudflare R2 Migration step) -- only R2 urls are ever
-    passed here; `ipfs_cids` is intentionally never populated by this
-    endpoint.
-
-    404s for a video that doesn't exist -- same posture as every other
-    `{video_id}`-parameterized route in this router and in
-    `student_videos.py`.
-
-    Transparency: Notify Users addition -- `payload` is a NEW, genuinely
-    optional request body (this route previously took none at all); its
-    `notes` becomes the real reason surfaced in the student's own
-    notification below. `payload=None` (a caller sends no body at all)
-    is handled the same as an empty `AdminDeleteVideoRequest()` -- kept
-    backward-compatible with any existing caller that never sent one.
+) -> DangerousActionPendingResponse:
+    """Senior-Moderator-or-higher. Real Two-Person Confirmation for
+    Dangerous Actions addition (migration 0054) -- THIS ROUTE NO LONGER
+    EXECUTES THE DELETE DIRECTLY. See `app/models/
+    dangerous_action_confirmation.py`'s own module docstring, STEP 3, for
+    the full "why" -- this permanently-destructive action now requires a
+    real second Senior-Moderator-or-Owner approval (`POST /admin/
+    moderation/dangerous-actions/{confirmation_id}/approve`) or a
+    deliberate Owner override (`POST /admin/moderation/{item_type}/
+    {item_id}/dangerous-actions/{action}/override`) before it actually
+    runs. Calling this route creates (or, if one is already pending,
+    idempotently returns) a real `DangerousActionConfirmation` row -- the
+    video is NOT deleted by this call alone. The real deletion logic
+    itself (R2 cleanup, `ModerationLogEntry`, notification) is
+    UNCHANGED, just moved to `dangerous_action_service.
+    _execute_video_delete`, run only once a second approval or override
+    actually happens.
     """
     video = await db.get(StudentVideo, video_id)
     if video is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student video not found")
 
-    r2_urls = [url for url in (video.hls_master_url, video.thumbnail_url) if url]
-    # Captured BEFORE `db.delete(video)` below -- the row (and its `.id`)
-    # is about to be deleted; the log entry needs `target_id` recorded
-    # while the object is still a live, attached instance.
-    deleted_video_id = video.id
-    deleted_student_id = video.student_id
-    deleted_video_title = video.title
     notes = payload.notes if payload is not None else None
-
-    await db.delete(video)
-
-    # Automatic Moderation Activity Log step -- same "same transaction,
-    # not best-effort" posture as `override_video_decision` above. NEXT
-    # ADMIN ACTION: see that call site's own comment.
-    log_entry = moderation_log_service.log_action(
+    confirmation, _created = await dangerous_action_service.request_confirmation(
         db,
-        actor_id=current_user.id,
-        actor_role=effective_admin_role(current_user),
         action=ModerationAction.VIDEO_DELETE,
-        target_type=ModerationTargetType.STUDENT_VIDEO,
-        target_id=deleted_video_id,
-        outcome={
-            "video_deleted": True,
-            "student_id": str(deleted_student_id),
-            "r2_urls_purged": r2_urls,
-            "notes": notes,
-        },
+        item_type=ModerationTargetType.STUDENT_VIDEO,
+        item_id=video_id,
+        notes=notes,
+        requester=current_user,
+        requester_role=effective_admin_role(current_user),
     )
-
     await db.commit()
-
-    if r2_urls:
-        task_delete_orphaned_media.delay(r2_urls=r2_urls)
-
-    # Transparency: Notify Users of Moderation Actions addition -- a real,
-    # confirmed gap: this endpoint notified nobody before this task.
-    # `can_be_restored` is NOT included in this payload -- see
-    # `moderation_appeal_service`'s own module docstring for why
-    # `VIDEO_DELETE` can never be reversed even if an appeal is upheld;
-    # that honest fact is surfaced on the appeal itself once filed, not
-    # promised or denied prematurely in the notification.
-    try:
-        reason_text = notes or "No additional reason was provided by the reviewing moderator."
-        await notification_service.create_notification(
-            db,
-            deleted_student_id,
-            "WARNING",
-            "Your video was permanently removed",
-            f'Your video "{deleted_video_title}" was permanently removed by an admin. Reason: {reason_text}',
-            payload={
-                "type": "moderation_action",
-                "log_entry_id": str(log_entry.id),
-                "action": ModerationAction.VIDEO_DELETE.value,
-                "appealable": True,
-            },
-        )
-    except Exception:
-        logger.exception(
-            "Notifications: failed to notify student %s of video %s permanent delete",
-            deleted_student_id, deleted_video_id,
-        )
+    await db.refresh(confirmation)
+    return DangerousActionPendingResponse(
+        confirmation_id=confirmation.id,
+        action=confirmation.action,
+        item_type=confirmation.item_type,
+        item_id=confirmation.item_id,
+        status=confirmation.status,
+        requested_by=confirmation.requested_by,
+        requested_at=confirmation.requested_at,
+    )
 
 
 @router.post(
     "/admin/videos/{video_id}/reject-and-purge-media",
-    response_model=AdminOverrideResponse,
+    response_model=DangerousActionPendingResponse,
+    status_code=status.HTTP_202_ACCEPTED,
 )
 async def reject_video_and_purge_media(
     video_id: uuid.UUID,
@@ -538,112 +482,36 @@ async def reject_video_and_purge_media(
     current_user: CurrentUser,
     db: DbSession,
     _: RequireSeniorModerationAccess,
-) -> AdminOverrideResponse:
-    """Senior-Moderator-or-higher (Real Tiered Role System step -- same
-    "triggers irreversible storage deletion" reasoning as
-    `delete_video_permanently` above). Student Dashboard & Admin Control Panel step's own
-    literal "Reject & Delete" action: "Updates the DB to REJECTED, and
-    critically, triggers the existing `task_delete_orphaned_media` to
-    unpin from IPFS / delete from R2, ensuring zero storage bloat."
-
-    DELIBERATELY DISTINCT from both existing mutations on this router:
-    - `override_video_decision` (`target_status=REJECTED`) sets the same
-      status but NEVER touches storage -- by design, since a REJECTED
-      video's own media must stay retrievable for the moderation
-      queue's preview modal (see this module's own docstring on why
-      `DELETE /admin/videos/{video_id}` had to be added as a SEPARATE
-      endpoint rather than folded into that one, for the identical
-      reason).
-    - `delete_video_permanently` purges storage but also deletes the
-      ROW itself -- this action keeps the row (REJECTED, with the
-      admin's own notes attached) as a permanent moderation record,
-      purging only the underlying media, per this step's own literal
-      "Updates the DB to REJECTED" wording (not "deletes the record").
-
-    DISCLOSED NECESSARY ADDITION beyond the ask's own literal wording:
-    after dispatching cleanup, `hls_master_url`/`thumbnail_url` are set
-    to `None` on the row. Leaving the old R2 URLs in place after their
-    underlying objects have just been deleted would mean this row
-    silently starts pointing at storage that no longer exists -- a
-    dangling reference the ask's own "ensuring zero storage bloat"
-    goal implies should be cleaned up structurally, not just in the
-    object store. `admin_override`/`admin_notes` are set exactly like
-    `override_video_decision`'s own REJECTED path.
-
-    No "already REJECTED" guard the way `override_video_decision` guards
-    its APPROVED-XP-award branch -- this action is idempotent-ish by
-    nature (calling it twice on an already-purged video simply finds
-    `r2_urls` empty the second time and dispatches nothing).
-
-    Transparency: Notify Users addition -- DOES now notify the student
-    (the paragraph above describing "no notification is sent" was this
-    endpoint's ORIGINAL posture, confirmed stale during this task's own
-    Step 1 investigation and corrected below). `can_be_restored=False`
-    in the appeal payload -- see `moderation_appeal_service`'s own module
-    docstring for why a purged video's media can never actually come
-    back even if an appeal is later upheld.
+) -> DangerousActionPendingResponse:
+    """Senior-Moderator-or-higher. Real Two-Person Confirmation for
+    Dangerous Actions addition (migration 0054) -- same "no longer
+    executes directly" change as `delete_video_permanently` immediately
+    above; see that route's own docstring and `app/models/
+    dangerous_action_confirmation.py`'s module docstring for the full
+    reasoning. The real reject-and-purge logic itself is UNCHANGED, just
+    moved to `dangerous_action_service._execute_video_reject_and_purge`.
     """
     video = await db.get(StudentVideo, video_id)
     if video is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student video not found")
 
-    r2_urls = [url for url in (video.hls_master_url, video.thumbnail_url) if url]
-
-    video.status = StudentVideoStatus.REJECTED.value
-    video.admin_override = True
-    video.admin_notes = payload.notes
-    video.hls_master_url = None
-    video.thumbnail_url = None
-
-    db.add(video)
-
-    # Automatic Moderation Activity Log step -- same "same transaction,
-    # not best-effort" posture as `override_video_decision` above. NEXT
-    # ADMIN ACTION: see that call site's own comment.
-    log_entry = moderation_log_service.log_action(
+    confirmation, _created = await dangerous_action_service.request_confirmation(
         db,
-        actor_id=current_user.id,
-        actor_role=effective_admin_role(current_user),
         action=ModerationAction.VIDEO_REJECT_AND_PURGE,
-        target_type=ModerationTargetType.STUDENT_VIDEO,
-        target_id=video.id,
-        outcome={"new_status": video.status, "r2_urls_purged": r2_urls},
+        item_type=ModerationTargetType.STUDENT_VIDEO,
+        item_id=video_id,
+        notes=payload.notes,
+        requester=current_user,
+        requester_role=effective_admin_role(current_user),
     )
-
     await db.commit()
-    await db.refresh(video)
-
-    if r2_urls:
-        task_delete_orphaned_media.delay(r2_urls=r2_urls)
-
-    # Transparency: Notify Users of Moderation Actions addition -- see
-    # this endpoint's own updated docstring above for why this is a
-    # genuinely new, real gap being closed here, not an existing behavior
-    # being preserved. `appealable: True` / not `can_be_restored` (that
-    # honest "media is gone either way" fact lives on the appeal itself
-    # once filed, not duplicated into every notification payload).
-    try:
-        reason_text = payload.notes or "No additional reason was provided by the reviewing moderator."
-        await notification_service.create_notification(
-            db,
-            video.student_id,
-            "WARNING",
-            "Your video was rejected and its media removed",
-            f'Your video "{video.title}" was reviewed, rejected, and its media file permanently removed. '
-            f"Reason: {reason_text}",
-            payload={
-                "type": "moderation_action",
-                "log_entry_id": str(log_entry.id),
-                "action": ModerationAction.VIDEO_REJECT_AND_PURGE.value,
-                "appealable": True,
-            },
-        )
-    except Exception:
-        logger.exception(
-            "Notifications: failed to notify student %s of video %s reject-and-purge",
-            video.student_id, video_id,
-        )
-
-    return AdminOverrideResponse(
-        success=True, video_id=video.id, new_status=StudentVideoStatus(video.status)
+    await db.refresh(confirmation)
+    return DangerousActionPendingResponse(
+        confirmation_id=confirmation.id,
+        action=confirmation.action,
+        item_type=confirmation.item_type,
+        item_id=confirmation.item_id,
+        status=confirmation.status,
+        requested_by=confirmation.requested_by,
+        requested_at=confirmation.requested_at,
     )

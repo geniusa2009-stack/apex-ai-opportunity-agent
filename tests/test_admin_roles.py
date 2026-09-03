@@ -189,6 +189,22 @@ CREATE TABLE moderation_log_entries (
 )
 """
 
+_CREATE_DANGEROUS_ACTION_CONFIRMATIONS_TABLE_SQL = """
+CREATE TABLE dangerous_action_confirmations (
+    id VARCHAR(36) PRIMARY KEY,
+    action VARCHAR(30) NOT NULL,
+    item_type VARCHAR(30) NOT NULL,
+    item_id VARCHAR(36) NOT NULL,
+    notes TEXT,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    is_override BOOLEAN NOT NULL DEFAULT 0,
+    requested_by VARCHAR(36),
+    requested_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    executed_by VARCHAR(36),
+    executed_at DATETIME
+)
+"""
+
 
 @pytest_asyncio.fixture
 async def db_session_factory():
@@ -205,6 +221,7 @@ async def db_session_factory():
         await conn.execute(text(_CREATE_OPPORTUNITIES_TABLE_SQL))
         await conn.execute(text(_CREATE_NOTIFICATIONS_TABLE_SQL))
         await conn.execute(text(_CREATE_MODERATION_LOG_TABLE_SQL))
+        await conn.execute(text(_CREATE_DANGEROUS_ACTION_CONFIRMATIONS_TABLE_SQL))
         await conn.run_sync(
             Base.metadata.create_all,
             tables=[
@@ -492,22 +509,45 @@ class TestSeniorModerationAccessTier:
         assert response.status_code == 403
 
     async def test_senior_moderator_can_permanently_delete(self, db_session_factory, client_factory):
+        """Real Two-Person Confirmation for Dangerous Actions addition:
+        `DELETE /admin/videos/{id}` no longer executes on a single
+        Senior Moderator's own call -- it creates a real pending
+        confirmation (202), and the video only actually disappears once
+        a SECOND, distinct Senior-Moderator-or-higher approves it via
+        `POST /admin/moderation/dangerous-actions/{confirmation_id}/approve`.
+        See `app/models/dangerous_action_confirmation.py`'s own module
+        docstring for the full reasoning."""
         async with db_session_factory() as session:
             senior = await _make_user(session, admin_role=AdminRole.SENIOR_MODERATOR)
+            second_senior = await _make_user(session, admin_role=AdminRole.SENIOR_MODERATOR)
             uploader = await _make_user(session)
             video = await _make_video(session, student_id=uploader.id, status=StudentVideoStatus.REJECTED.value)
 
         client = client_factory(senior)
         response = client.delete(f"/api/v1/admin/videos/{video.id}")
-        assert response.status_code == 204
+        assert response.status_code == 202
+        confirmation_id = response.json()["confirmation_id"]
+
+        async with db_session_factory() as session:
+            still_there = await session.get(StudentVideo, video.id)
+            assert still_there is not None
+
+        approver_client = client_factory(second_senior)
+        approve_response = approver_client.post(
+            f"/api/v1/admin/moderation/dangerous-actions/{confirmation_id}/approve"
+        )
+        assert approve_response.status_code == 200
 
         async with db_session_factory() as session:
             gone = await session.get(StudentVideo, video.id)
             assert gone is None
 
     async def test_senior_moderator_can_reject_and_purge(self, db_session_factory, client_factory):
+        """Real Two-Person Confirmation for Dangerous Actions addition --
+        same two-step reasoning as the permanent-delete test above."""
         async with db_session_factory() as session:
             senior = await _make_user(session, admin_role=AdminRole.SENIOR_MODERATOR)
+            second_senior = await _make_user(session, admin_role=AdminRole.SENIOR_MODERATOR)
             uploader = await _make_user(session)
             video = await _make_video(session, student_id=uploader.id, status=StudentVideoStatus.FAILED.value)
 
@@ -515,8 +555,18 @@ class TestSeniorModerationAccessTier:
         response = client.post(
             f"/api/v1/admin/videos/{video.id}/reject-and-purge-media", json={"notes": "spam"}
         )
-        assert response.status_code == 200
-        assert response.json()["new_status"] == "rejected"
+        assert response.status_code == 202
+        confirmation_id = response.json()["confirmation_id"]
+
+        approver_client = client_factory(second_senior)
+        approve_response = approver_client.post(
+            f"/api/v1/admin/moderation/dangerous-actions/{confirmation_id}/approve"
+        )
+        assert approve_response.status_code == 200
+
+        async with db_session_factory() as session:
+            video_row = await session.get(StudentVideo, video.id)
+            assert video_row.status == "rejected"
 
 
 # ---------------------------------------------------------------------

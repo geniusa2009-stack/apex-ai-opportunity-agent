@@ -174,6 +174,22 @@ CREATE TABLE moderation_log_entries (
 )
 """
 
+_CREATE_DANGEROUS_ACTION_CONFIRMATIONS_TABLE_SQL = """
+CREATE TABLE dangerous_action_confirmations (
+    id VARCHAR(36) PRIMARY KEY,
+    action VARCHAR(30) NOT NULL,
+    item_type VARCHAR(30) NOT NULL,
+    item_id VARCHAR(36) NOT NULL,
+    notes TEXT,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    is_override BOOLEAN NOT NULL DEFAULT 0,
+    requested_by VARCHAR(36),
+    requested_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    executed_by VARCHAR(36),
+    executed_at DATETIME
+)
+"""
+
 
 @pytest_asyncio.fixture
 async def db_session_factory():
@@ -190,6 +206,7 @@ async def db_session_factory():
         await conn.execute(text(_CREATE_OPPORTUNITIES_TABLE_SQL))
         await conn.execute(text(_CREATE_NOTIFICATIONS_TABLE_SQL))
         await conn.execute(text(_CREATE_MODERATION_LOG_TABLE_SQL))
+        await conn.execute(text(_CREATE_DANGEROUS_ACTION_CONFIRMATIONS_TABLE_SQL))
         await conn.run_sync(
             Base.metadata.create_all,
             tables=[GamificationProfile.__table__, Badge.__table__, UserBadge.__table__],
@@ -414,25 +431,47 @@ class TestAutomaticLogging:
         assert entry["outcome"]["notes"] == "looks fine"
 
     async def test_video_delete_logs_a_real_entry(self, db_session_factory, client_factory):
+        """Real Two-Person Confirmation for Dangerous Actions addition:
+        `VIDEO_DELETE` is now written at APPROVAL time (by the second,
+        distinct Senior Moderator), not at the original request -- the
+        real flow now writes THREE entries total (`dangerous_action_
+        requested`, `video_delete`, `dangerous_action_approved`), and
+        this test finds the `video_delete` one specifically among them,
+        confirming its shape is byte-for-byte unchanged from before this
+        task."""
         async with db_session_factory() as session:
             senior = await _make_user(session, admin_role=AdminRole.SENIOR_MODERATOR)
+            second_senior = await _make_user(session, admin_role=AdminRole.SENIOR_MODERATOR)
             uploader = await _make_user(session)
             video = await _make_video(session, student_id=uploader.id, status=StudentVideoStatus.REJECTED.value)
 
         client = client_factory(senior)
         response = client.delete(f"/api/v1/admin/videos/{video.id}")
-        assert response.status_code == 204
+        assert response.status_code == 202
+        confirmation_id = response.json()["confirmation_id"]
+
+        approver_client = client_factory(second_senior)
+        approve_response = approver_client.post(
+            f"/api/v1/admin/moderation/dangerous-actions/{confirmation_id}/approve"
+        )
+        assert approve_response.status_code == 200
 
         rows = await _fetch_all_log_rows(db_session_factory)
-        assert len(rows) == 1
-        entry = rows[0]
-        assert entry["actor_id"] == senior.id.hex
+        assert len(rows) == 3
+        entry = next(r for r in rows if r["action"] == "video_delete")
+        assert entry["actor_id"] == second_senior.id.hex
         assert entry["actor_role"] == "senior_moderator"
-        assert entry["action"] == "video_delete"
         assert entry["target_type"] == "student_video"
         assert entry["target_id"] == video.id.hex
         assert entry["outcome"]["video_deleted"] is True
         assert entry["outcome"]["student_id"] == str(uploader.id)
+
+        requested_entry = next(r for r in rows if r["action"] == "dangerous_action_requested")
+        assert requested_entry["actor_id"] == senior.id.hex
+
+        approved_entry = next(r for r in rows if r["action"] == "dangerous_action_approved")
+        assert approved_entry["actor_id"] == second_senior.id.hex
+        assert approved_entry["outcome"]["requested_by"] == str(senior.id)
 
     async def test_reject_and_purge_logs_a_real_entry(self, db_session_factory, client_factory):
         async with db_session_factory() as session:
@@ -444,13 +483,21 @@ class TestAutomaticLogging:
         response = client.post(
             f"/api/v1/admin/videos/{video.id}/reject-and-purge-media", json={"notes": "spam"}
         )
-        assert response.status_code == 200
+        assert response.status_code == 202
+        confirmation_id = response.json()["confirmation_id"]
+
+        async with db_session_factory() as session:
+            second_senior = await _make_user(session, admin_role=AdminRole.SENIOR_MODERATOR)
+        approver_client = client_factory(second_senior)
+        approve_response = approver_client.post(
+            f"/api/v1/admin/moderation/dangerous-actions/{confirmation_id}/approve"
+        )
+        assert approve_response.status_code == 200
 
         rows = await _fetch_all_log_rows(db_session_factory)
-        assert len(rows) == 1
-        entry = rows[0]
+        assert len(rows) == 3
+        entry = next(r for r in rows if r["action"] == "video_reject_and_purge")
         assert entry["actor_role"] == "senior_moderator"
-        assert entry["action"] == "video_reject_and_purge"
         assert entry["target_id"] == video.id.hex
         assert entry["outcome"]["new_status"] == "rejected"
 
@@ -595,22 +642,44 @@ class TestRoleAtTimeOfAction:
 
         # Act again, now as SENIOR_MODERATOR, on a DIFFERENT video (a
         # senior-only action, to also prove the new tier is honored for
-        # real, not just remembered from before promotion).
+        # real, not just remembered from before promotion). Real
+        # Two-Person Confirmation for Dangerous Actions addition:
+        # `DELETE /admin/videos/{id}` now only REQUESTS the delete (the
+        # real single-actor action the promoted volunteer performs
+        # themselves) -- a second, distinct Senior Moderator must
+        # approve before `video_delete` itself is written, so this
+        # test's own "role at time of action" check now looks at the
+        # `dangerous_action_requested` entry (the promoted volunteer's
+        # own real action), not `video_delete` (which would instead
+        # capture the SECOND approver's role -- a different person
+        # entirely, self-approval being forbidden by this feature's own
+        # central rule).
         async with db_session_factory() as session:
             video_two = await _make_video(session, student_id=uploader.id, status=StudentVideoStatus.FAILED.value)
+            second_senior = await _make_user(session, admin_role=AdminRole.SENIOR_MODERATOR)
         client2 = client_factory(volunteer)
         resp2 = client2.delete(f"/api/v1/admin/videos/{video_two.id}")
-        assert resp2.status_code == 204
+        assert resp2.status_code == 202
+        confirmation_id = resp2.json()["confirmation_id"]
+
+        approver_client = client_factory(second_senior)
+        approve_resp = approver_client.post(
+            f"/api/v1/admin/moderation/dangerous-actions/{confirmation_id}/approve"
+        )
+        assert approve_resp.status_code == 200
 
         rows = await _fetch_all_log_rows(db_session_factory)
-        assert len(rows) == 2
+        assert len(rows) == 4
         by_action = {r["action"]: r for r in rows}
         # The FIRST action's own log entry must still say "moderator" --
         # this is the crux of this step's own "capture it at
         # time-of-action... the historical record shouldn't drift"
         # requirement.
         assert by_action["video_override"]["actor_role"] == "moderator"
+        assert by_action["dangerous_action_requested"]["actor_role"] == "senior_moderator"
+        assert by_action["dangerous_action_requested"]["actor_id"] == volunteer.id.hex
         assert by_action["video_delete"]["actor_role"] == "senior_moderator"
+        assert by_action["video_delete"]["actor_id"] == second_senior.id.hex
 
 
 # ---------------------------------------------------------------------

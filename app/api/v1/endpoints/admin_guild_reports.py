@@ -65,8 +65,15 @@ from app.schemas.guild_moderation import (
     AdminGuildReportEntryOut,
     AdminGuildReportOut,
 )
+from app.schemas.dangerous_actions import DangerousActionPendingResponse
 from app.schemas.opportunity import PaginatedResponse
-from app.services import moderation_claim_service, moderation_log_service, notification_service, repeat_offender_service
+from app.services import (
+    dangerous_action_service,
+    moderation_claim_service,
+    moderation_log_service,
+    notification_service,
+    repeat_offender_service,
+)
 from sqlalchemy import func, select
 
 logger = logging.getLogger(__name__)
@@ -245,86 +252,48 @@ async def dismiss_guild_report(
     return AdminGuildReportActionResponse(success=True, report_id=report.id, status=report.status)
 
 
-@router.delete("/admin/guild/reports/{report_id}/content", response_model=AdminGuildReportActionResponse)
+@router.delete("/admin/guild/reports/{report_id}/content", response_model=DangerousActionPendingResponse, status_code=status.HTTP_202_ACCEPTED)
 async def delete_reported_guild_content(
     report_id: uuid.UUID,
     current_user: CurrentUser,
     db: DbSession,
     _: RequireSeniorModerationAccess,
     payload: AdminGuildReportDeleteContentRequest | None = None,
-) -> AdminGuildReportActionResponse:
-    """Senior-Moderator-or-higher (irreversible -- see module docstring).
-    Permanently deletes the real `GuildPost`/`GuildComment` row this case
-    reports, then resolves the case itself. Same cascade-ordering
-    discipline as `delete_reported_message`: the case is resolved BEFORE
-    the content is deleted, so its own resolution record survives (the
-    content row has no cascading FK back to this report table -- unlike
-    `ChatMessageReport.message_id`, `GuildContentReport.target_id` is
-    deliberately not a FK at all, so no cascade risk exists here, but the
-    same before-not-after ordering is kept for consistency and so a
-    `GuildComment`'s own `ondelete="CASCADE"` from a deleted `GuildPost`
-    can never race this handler's own writes).
+) -> DangerousActionPendingResponse:
+    """Senior-Moderator-or-higher. Real Two-Person Confirmation for
+    Dangerous Actions addition (migration 0054) -- THIS ROUTE NO LONGER
+    DELETES THE CONTENT DIRECTLY. See `app/models/
+    dangerous_action_confirmation.py`'s own module docstring, STEP 3,
+    for the full "why". Calling this route creates (or, if one is
+    already pending, idempotently returns) a real
+    `DangerousActionConfirmation` row -- the post/comment is NOT deleted
+    by this call alone; a real second Senior-Moderator-or-Owner approval
+    or a deliberate Owner override is required. The real deletion logic
+    itself (cascade-safe resolve-before-delete ordering,
+    `ModerationLogEntry`, notification) is UNCHANGED, just moved to
+    `dangerous_action_service._execute_guild_content_delete`.
     """
     report = await _get_report_or_404(db, report_id)
     _require_open(report)
 
-    content_out, author_id = await _load_content(db, report.target_type, report.target_id)
-    if content_out is None or author_id is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reported content no longer exists")
-
     notes = payload.notes if payload is not None else None
-
-    report.status = REPORT_STATUS_CONTENT_DELETED
-    report.resolved_by = current_user.id
-    db.add(report)
-
-    log_entry = moderation_log_service.log_action(
+    confirmation, _created = await dangerous_action_service.request_confirmation(
         db,
-        actor_id=current_user.id,
-        actor_role=effective_admin_role(current_user),
         action=ModerationAction.GUILD_CONTENT_DELETE,
-        target_type=ModerationTargetType.GUILD_CONTENT_REPORT,
-        target_id=report.id,
-        outcome={
-            "content_target_type": report.target_type,
-            "content_target_id": str(report.target_id),
-            "author_id": str(author_id),
-            "notes": notes,
-        },
+        item_type=ModerationTargetType.GUILD_CONTENT_REPORT,
+        item_id=report_id,
+        notes=notes,
+        requester=current_user,
+        requester_role=effective_admin_role(current_user),
     )
-
-    reason_summary = await _summarize_report_reasons(db, report_id)
-
-    if report.target_type == TARGET_TYPE_POST:
-        row = await db.get(GuildPost, report.target_id)
-    else:
-        row = await db.get(GuildComment, report.target_id)
-    if row is not None:
-        await db.delete(row)
-
     await db.commit()
-    await db.refresh(report)
-
-    try:
-        extra = f" Additional note: {notes}" if notes else ""
-        content_label = "post" if report.target_type == TARGET_TYPE_POST else "comment"
-        await notification_service.create_notification(
-            db,
-            author_id,
-            "WARNING",
-            f"Your guild {content_label} was removed",
-            f"A guild {content_label} you posted was removed after being reported for {reason_summary}.{extra}",
-            payload={
-                "type": "moderation_action",
-                "log_entry_id": str(log_entry.id),
-                "action": ModerationAction.GUILD_CONTENT_DELETE.value,
-                "appealable": True,
-            },
-        )
-    except Exception:
-        logger.exception(
-            "Notifications: failed to notify user %s of guild %s %s deletion",
-            author_id, report.target_type, report.target_id,
-        )
-
-    return AdminGuildReportActionResponse(success=True, report_id=report.id, status=report.status)
+    await db.refresh(confirmation)
+    return DangerousActionPendingResponse(
+        confirmation_id=confirmation.id,
+        action=confirmation.action,
+        item_type=confirmation.item_type,
+        item_id=confirmation.item_id,
+        status=confirmation.status,
+        requested_by=confirmation.requested_by,
+        requested_at=confirmation.requested_at,
+    )

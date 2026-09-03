@@ -89,10 +89,12 @@ from app.schemas.chat_moderation import (
     AdminChatReportOut,
     BanHistoryResponse,
 )
+from app.schemas.dangerous_actions import DangerousActionPendingResponse
 from app.schemas.moderation_log import ModerationLogEntryOut
 from app.schemas.opportunity import PaginatedResponse
 from app.services import (
     chat_security,
+    dangerous_action_service,
     moderation_claim_service,
     moderation_log_service,
     notification_service,
@@ -281,89 +283,51 @@ async def dismiss_chat_report(
     return AdminChatReportActionResponse(success=True, report_id=report.id, status=report.status)
 
 
-@router.delete("/admin/chat/reports/{report_id}/message", response_model=AdminChatReportActionResponse)
+@router.delete("/admin/chat/reports/{report_id}/message", response_model=DangerousActionPendingResponse, status_code=status.HTTP_202_ACCEPTED)
 async def delete_reported_message(
     report_id: uuid.UUID,
     current_user: CurrentUser,
     db: DbSession,
     _: RequireSeniorModerationAccess,
     payload: AdminChatReportDeleteMessageRequest | None = None,
-) -> AdminChatReportActionResponse:
-    """Senior-Moderator-or-higher (irreversible -- see module docstring).
-    Permanently deletes the real `ChatMessage` row this case reports,
-    then resolves the case itself. `ChatMessageReport.message_id`'s own
-    `ondelete="CASCADE"` would ALSO delete this (and any other open/past)
-    report row for the same message if the message were deleted first --
-    disclosed necessary ordering: this handler resolves the CASE (status,
-    resolved_by/at) BEFORE deleting the message, so the case's own
-    resolution record survives as real history instead of cascading away
-    with the message it was about.
-
-    Transparency: Notify Users addition -- `payload` is a NEW, genuinely
-    optional request body (this route previously took none at all).
+) -> DangerousActionPendingResponse:
+    """Senior-Moderator-or-higher. Real Two-Person Confirmation for
+    Dangerous Actions addition (migration 0054) -- THIS ROUTE NO LONGER
+    DELETES THE MESSAGE DIRECTLY. See `app/models/
+    dangerous_action_confirmation.py`'s own module docstring, STEP 3,
+    for the full "why". Calling this route creates (or, if one is
+    already pending, idempotently returns) a real
+    `DangerousActionConfirmation` row -- the message is NOT deleted by
+    this call alone; a real second Senior-Moderator-or-Owner approval or
+    a deliberate Owner override is required. The real deletion logic
+    itself (cascade-safe resolve-before-delete ordering,
+    `ModerationLogEntry`, notification) is UNCHANGED, just moved to
+    `dangerous_action_service._execute_chat_message_delete`.
     """
     report = await _get_report_or_404(db, report_id)
     _require_open(report)
 
-    message = await db.get(ChatMessage, report.message_id)
-    if message is None:
-        # Disclosed edge case: the message was already removed through
-        # some other path (shouldn't happen under this endpoint's own
-        # cascade-ordering discipline, but a defensive 404 is more honest
-        # than silently "succeeding" at deleting something already gone).
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reported message no longer exists")
-
-    deleted_message_id = message.id
-    deleted_sender_id = message.sender_id
     notes = payload.notes if payload is not None else None
-
-    report.status = REPORT_STATUS_MESSAGE_DELETED
-    report.resolved_by = current_user.id
-    db.add(report)
-
-    log_entry = moderation_log_service.log_action(
+    confirmation, _created = await dangerous_action_service.request_confirmation(
         db,
-        actor_id=current_user.id,
-        actor_role=effective_admin_role(current_user),
         action=ModerationAction.CHAT_MESSAGE_DELETE,
-        target_type=ModerationTargetType.CHAT_MESSAGE_REPORT,
-        target_id=report.id,
-        outcome={"message_id": str(deleted_message_id), "sender_id": str(deleted_sender_id), "notes": notes},
+        item_type=ModerationTargetType.CHAT_MESSAGE_REPORT,
+        item_id=report_id,
+        notes=notes,
+        requester=current_user,
+        requester_role=effective_admin_role(current_user),
     )
-
-    reason_summary = await _summarize_report_reasons(db, report_id)
-
-    await db.delete(message)
     await db.commit()
-    await db.refresh(report)
-
-    # Transparency: Notify Users of Moderation Actions addition -- a real,
-    # confirmed gap: this endpoint notified nobody before this task.
-    # `can_be_restored` deliberately not promised here -- the message row
-    # is already hard-deleted; see `moderation_appeal_service`'s own
-    # module docstring.
-    try:
-        extra = f" Additional note: {notes}" if notes else ""
-        await notification_service.create_notification(
-            db,
-            deleted_sender_id,
-            "WARNING",
-            "Your message was removed",
-            f"A message you sent was removed after being reported for {reason_summary}.{extra}",
-            payload={
-                "type": "moderation_action",
-                "log_entry_id": str(log_entry.id),
-                "action": ModerationAction.CHAT_MESSAGE_DELETE.value,
-                "appealable": True,
-            },
-        )
-    except Exception:
-        logger.exception(
-            "Notifications: failed to notify user %s of chat message %s deletion",
-            deleted_sender_id, deleted_message_id,
-        )
-
-    return AdminChatReportActionResponse(success=True, report_id=report.id, status=report.status)
+    await db.refresh(confirmation)
+    return DangerousActionPendingResponse(
+        confirmation_id=confirmation.id,
+        action=confirmation.action,
+        item_type=confirmation.item_type,
+        item_id=confirmation.item_id,
+        status=confirmation.status,
+        requested_by=confirmation.requested_by,
+        requested_at=confirmation.requested_at,
+    )
 
 
 @router.post("/admin/chat/reports/{report_id}/escalate-ban", response_model=AdminChatReportActionResponse)

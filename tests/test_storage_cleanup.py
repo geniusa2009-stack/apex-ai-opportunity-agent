@@ -60,6 +60,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.api.deps import get_current_user
 from app.api.v1.endpoints import admin_moderation as admin_moderation_module
+from app.services import dangerous_action_service as dangerous_action_service_module
 from app.api.v1.endpoints import student_videos as student_videos_module
 from app.core.config import settings
 from app.db.session import get_db
@@ -392,6 +393,22 @@ CREATE TABLE moderation_log_entries (
 )
 """
 
+_CREATE_DANGEROUS_ACTION_CONFIRMATIONS_TABLE_SQL = """
+CREATE TABLE dangerous_action_confirmations (
+    id VARCHAR(36) PRIMARY KEY,
+    action VARCHAR(30) NOT NULL,
+    item_type VARCHAR(30) NOT NULL,
+    item_id VARCHAR(36) NOT NULL,
+    notes TEXT,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    is_override BOOLEAN NOT NULL DEFAULT 0,
+    requested_by VARCHAR(36),
+    requested_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    executed_by VARCHAR(36),
+    executed_at DATETIME
+)
+"""
+
 
 @pytest_asyncio.fixture
 async def db_session_factory():
@@ -405,6 +422,7 @@ async def db_session_factory():
         await conn.execute(text(_CREATE_USER_BOOKMARKS_TABLE_SQL))
         await conn.execute(text(_CREATE_STUDENT_VIDEOS_TABLE_SQL))
         await conn.execute(text(_CREATE_MODERATION_LOG_TABLE_SQL))
+        await conn.execute(text(_CREATE_DANGEROUS_ACTION_CONFIRMATIONS_TABLE_SQL))
 
     session_factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
     yield session_factory
@@ -525,8 +543,14 @@ class TestRouterDispatchesCleanupTask:
     async def test_admin_delete_dispatches_cleanup_and_removes_any_students_video(
         self, db_session_factory, client_factory
     ):
+        """Real Two-Person Confirmation for Dangerous Actions addition:
+        the real R2 cleanup dispatch now happens at APPROVAL time, from
+        `dangerous_action_service.py` (where the mutation logic actually
+        lives now -- see that module's own docstring), not from
+        `admin_moderation.py` directly."""
         async with db_session_factory() as session:
             admin = await _make_user(session, is_superuser=True)
+            second_admin = await _make_user(session, is_superuser=True)
             student = await _make_user(session)
             video = await _make_video(
                 session,
@@ -536,10 +560,17 @@ class TestRouterDispatchesCleanupTask:
             )
 
         client = client_factory(admin)
-        with patch.object(admin_moderation_module.task_delete_orphaned_media, "delay") as mock_delay:
-            response = client.delete(f"/api/v1/admin/videos/{video.id}")
+        response = client.delete(f"/api/v1/admin/videos/{video.id}")
+        assert response.status_code == 202
+        confirmation_id = response.json()["confirmation_id"]
 
-        assert response.status_code == 204
+        approver_client = client_factory(second_admin)
+        with patch.object(dangerous_action_service_module.task_delete_orphaned_media, "delay") as mock_delay:
+            approve_response = approver_client.post(
+                f"/api/v1/admin/moderation/dangerous-actions/{confirmation_id}/approve"
+            )
+
+        assert approve_response.status_code == 200
         mock_delay.assert_called_once_with(r2_urls=["https://pub-test.r2.dev/flagged/master.m3u8"])
 
         async with db_session_factory() as session:

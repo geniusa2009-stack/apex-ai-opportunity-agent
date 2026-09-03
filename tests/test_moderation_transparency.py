@@ -118,6 +118,22 @@ CREATE TABLE moderation_log_entries (
 )
 """
 
+_CREATE_DANGEROUS_ACTION_CONFIRMATIONS_TABLE_SQL = """
+CREATE TABLE dangerous_action_confirmations (
+    id VARCHAR(36) PRIMARY KEY,
+    action VARCHAR(30) NOT NULL,
+    item_type VARCHAR(30) NOT NULL,
+    item_id VARCHAR(36) NOT NULL,
+    notes TEXT,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    is_override BOOLEAN NOT NULL DEFAULT 0,
+    requested_by VARCHAR(36),
+    requested_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    executed_by VARCHAR(36),
+    executed_at DATETIME
+)
+"""
+
 _CREATE_NOTIFICATIONS_TABLE_SQL = """
 CREATE TABLE notifications (
     id VARCHAR(36) PRIMARY KEY,
@@ -144,6 +160,7 @@ async def db_session_factory():
         await conn.execute(text(_CREATE_USER_BOOKMARKS_TABLE_SQL))
         await conn.execute(text(_CREATE_STUDENT_VIDEOS_TABLE_SQL))
         await conn.execute(text(_CREATE_MODERATION_LOG_TABLE_SQL))
+        await conn.execute(text(_CREATE_DANGEROUS_ACTION_CONFIRMATIONS_TABLE_SQL))
         await conn.execute(text(_CREATE_NOTIFICATIONS_TABLE_SQL))
         await conn.run_sync(
             Base.metadata.create_all,
@@ -362,7 +379,16 @@ class TestVideoModerationNotifications:
         response = client.post(
             f"/api/v1/admin/videos/{video.id}/reject-and-purge-media", json={"notes": "Policy violation."}
         )
-        assert response.status_code == 200
+        assert response.status_code == 202
+        confirmation_id = response.json()["confirmation_id"]
+
+        async with db_session_factory() as session:
+            second_moderator = await _make_user(session, admin_role=AdminRole.SENIOR_MODERATOR)
+        approver_client = client_factory(second_moderator)
+        approve_response = approver_client.post(
+            f"/api/v1/admin/moderation/dangerous-actions/{confirmation_id}/approve"
+        )
+        assert approve_response.status_code == 200
 
         async with db_session_factory() as session:
             notes = await _notifications_for(session, student.id)
@@ -382,7 +408,16 @@ class TestVideoModerationNotifications:
         response = client.request(
             "DELETE", f"/api/v1/admin/videos/{video.id}", json={"notes": "Repeated policy violations."}
         )
-        assert response.status_code == 204
+        assert response.status_code == 202
+        confirmation_id = response.json()["confirmation_id"]
+
+        async with db_session_factory() as session:
+            second_moderator = await _make_user(session, admin_role=AdminRole.SENIOR_MODERATOR)
+        approver_client = client_factory(second_moderator)
+        approve_response = approver_client.post(
+            f"/api/v1/admin/moderation/dangerous-actions/{confirmation_id}/approve"
+        )
+        assert approve_response.status_code == 200
 
         async with db_session_factory() as session:
             notes = await _notifications_for(session, student.id)
@@ -403,7 +438,16 @@ class TestVideoModerationNotifications:
 
         client = client_factory(moderator)
         response = client.delete(f"/api/v1/admin/videos/{video.id}")
-        assert response.status_code == 204
+        assert response.status_code == 202
+        confirmation_id = response.json()["confirmation_id"]
+
+        async with db_session_factory() as session:
+            second_moderator = await _make_user(session, admin_role=AdminRole.SENIOR_MODERATOR)
+        approver_client = client_factory(second_moderator)
+        approve_response = approver_client.post(
+            f"/api/v1/admin/moderation/dangerous-actions/{confirmation_id}/approve"
+        )
+        assert approve_response.status_code == 200
 
         async with db_session_factory() as session:
             notes = await _notifications_for(session, student.id)
@@ -451,7 +495,16 @@ class TestChatReportNotifications:
         response = client.request(
             "DELETE", f"/api/v1/admin/chat/reports/{report_id}/message", json={"notes": "Confirmed harassment."}
         )
-        assert response.status_code == 200
+        assert response.status_code == 202
+        confirmation_id = response.json()["confirmation_id"]
+
+        async with db_session_factory() as session:
+            second_moderator = await _make_user(session, admin_role=AdminRole.SENIOR_MODERATOR)
+        approver_client = client_factory(second_moderator)
+        approve_response = approver_client.post(
+            f"/api/v1/admin/moderation/dangerous-actions/{confirmation_id}/approve"
+        )
+        assert approve_response.status_code == 200
 
         async with db_session_factory() as session:
             notes = await _notifications_for(session, sender.id)
@@ -474,7 +527,16 @@ class TestChatReportNotifications:
 
         client = client_factory(moderator)
         response = client.delete(f"/api/v1/admin/chat/reports/{report_id}/message")
-        assert response.status_code == 200
+        assert response.status_code == 202
+        confirmation_id = response.json()["confirmation_id"]
+
+        async with db_session_factory() as session:
+            second_moderator = await _make_user(session, admin_role=AdminRole.SENIOR_MODERATOR)
+        approver_client = client_factory(second_moderator)
+        approve_response = approver_client.post(
+            f"/api/v1/admin/moderation/dangerous-actions/{confirmation_id}/approve"
+        )
+        assert approve_response.status_code == 200
 
         async with db_session_factory() as session:
             notes = await _notifications_for(session, sender.id)
@@ -625,7 +687,11 @@ class TestAppealSubmission:
             moderator = await _make_user(session, admin_role=AdminRole.SENIOR_MODERATOR)
             video = await _make_video(session, student_id=student.id, status=StudentVideoStatus.REJECTED.value)
 
-        client_factory(moderator).delete(f"/api/v1/admin/videos/{video.id}")
+        request_resp = client_factory(moderator).delete(f"/api/v1/admin/videos/{video.id}")
+        confirmation_id = request_resp.json()["confirmation_id"]
+        async with db_session_factory() as session:
+            second_moderator = await _make_user(session, admin_role=AdminRole.SENIOR_MODERATOR)
+        client_factory(second_moderator).post(f"/api/v1/admin/moderation/dangerous-actions/{confirmation_id}/approve")
 
         async with db_session_factory() as session:
             row = (
@@ -824,7 +890,11 @@ class TestReversalSemantics:
             moderator = await _make_user(session, admin_role=AdminRole.SENIOR_MODERATOR)
             video = await _make_video(session, student_id=student.id, status=StudentVideoStatus.REJECTED.value)
 
-        client_factory(moderator).delete(f"/api/v1/admin/videos/{video.id}")
+        request_resp = client_factory(moderator).delete(f"/api/v1/admin/videos/{video.id}")
+        confirmation_id = request_resp.json()["confirmation_id"]
+        async with db_session_factory() as session:
+            second_moderator = await _make_user(session, admin_role=AdminRole.SENIOR_MODERATOR)
+        client_factory(second_moderator).post(f"/api/v1/admin/moderation/dangerous-actions/{confirmation_id}/approve")
 
         async with db_session_factory() as session:
             row = (

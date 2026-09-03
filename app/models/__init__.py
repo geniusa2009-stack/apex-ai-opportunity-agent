@@ -20,6 +20,7 @@ from app.models.career_compass import CareerCompassResult
 from app.models.case_note import CaseNote
 from app.models.chat import ChatMessage, ChatParticipant, ChatRoom
 from app.models.chat_moderation import ChatMessageReport, ChatMessageReportEntry
+from app.models.dangerous_action_confirmation import DangerousActionConfirmation
 from app.models.deadline_alert import DeadlineAlert
 from app.models.decision_matrix import DecisionMatrix
 from app.models.expat_survival import ExpatSurvival
@@ -51,6 +52,7 @@ __all__ = [
     "UserBookmark",
     "CannedResponse",
     "CaseNote",
+    "DangerousActionConfirmation",
     "Alumnus",
     "AgentAlert",
     "UserHistory",

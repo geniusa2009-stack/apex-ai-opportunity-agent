@@ -54,6 +54,7 @@ from app.db.session import get_db
 from app.main import app
 from app.models.badges import Badge, GamificationProfile, UserBadge
 from app.models.enums import StudentVideoStatus
+from app.models.dangerous_action_confirmation import DangerousActionConfirmation
 from app.models.student_videos import StudentVideo
 from app.models.user import User
 from app.services import chat_security, gamification_service, notification_service
@@ -238,6 +239,7 @@ async def db_session_factory():
                 GamificationProfile.__table__,
                 Badge.__table__,
                 UserBadge.__table__,
+                DangerousActionConfirmation.__table__,
             ],
         )
 
@@ -729,18 +731,26 @@ class TestRejectAndPurgeMedia:
     async def test_rejects_and_clears_media_urls_and_dispatches_cleanup(
         self, db_session_factory, client_factory, monkeypatch
     ):
+        """Real Two-Person Confirmation for Dangerous Actions addition:
+        `reject-and-purge-media` is one of the four real irreversible
+        actions -- the original POST now only REQUESTS the action (202,
+        pending); the real R2 purge dispatch happens at approval time,
+        from `dangerous_action_service.py` (where the mutation logic
+        actually lives now -- see that module's own docstring), by a
+        real SECOND admin, never the original requester."""
         dispatched: list[list[str]] = []
 
-        from app.api.v1.endpoints import admin_moderation as admin_moderation_module
+        from app.services import dangerous_action_service as dangerous_action_service_module
 
         monkeypatch.setattr(
-            admin_moderation_module.task_delete_orphaned_media,
+            dangerous_action_service_module.task_delete_orphaned_media,
             "delay",
             lambda r2_urls: dispatched.append(r2_urls),
         )
 
         async with db_session_factory() as db:
             admin = await _make_user(db, is_superuser=True)
+            second_admin = await _make_user(db, is_superuser=True)
             student = await _make_user(db, is_superuser=False)
             video = await _make_video(
                 db,
@@ -756,10 +766,16 @@ class TestRejectAndPurgeMedia:
             json={"notes": "Inappropriate content."},
         )
 
-        assert response.status_code == 200
-        body = response.json()
-        assert body["success"] is True
-        assert body["new_status"] == "rejected"
+        assert response.status_code == 202
+        confirmation_id = response.json()["confirmation_id"]
+
+        approver_client = client_factory(second_admin)
+        approve_response = approver_client.post(
+            f"/api/v1/admin/moderation/dangerous-actions/{confirmation_id}/approve"
+        )
+        assert approve_response.status_code == 200
+        approve_body = approve_response.json()
+        assert approve_body["status"] == "executed"
 
         assert dispatched == [
             ["https://r2.example.com/hls/master.m3u8", "https://r2.example.com/thumb.jpg"]

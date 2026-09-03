@@ -96,6 +96,22 @@ CREATE TABLE moderation_log_entries (
 )
 """
 
+_CREATE_DANGEROUS_ACTION_CONFIRMATIONS_TABLE_SQL = """
+CREATE TABLE dangerous_action_confirmations (
+    id VARCHAR(36) PRIMARY KEY,
+    action VARCHAR(30) NOT NULL,
+    item_type VARCHAR(30) NOT NULL,
+    item_id VARCHAR(36) NOT NULL,
+    notes TEXT,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    is_override BOOLEAN NOT NULL DEFAULT 0,
+    requested_by VARCHAR(36),
+    requested_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    executed_by VARCHAR(36),
+    executed_at DATETIME
+)
+"""
+
 # Transparency: Notify Users of Moderation Actions addition -- both
 # `delete_reported_message` and `escalate_chat_report_to_ban` now call
 # `notification_service.create_notification`, which was previously never
@@ -127,6 +143,7 @@ async def db_session_factory():
         await conn.execute(text(_CREATE_USERS_TABLE_SQL))
         await conn.execute(text(_CREATE_USER_BOOKMARKS_TABLE_SQL))
         await conn.execute(text(_CREATE_MODERATION_LOG_TABLE_SQL))
+        await conn.execute(text(_CREATE_DANGEROUS_ACTION_CONFIRMATIONS_TABLE_SQL))
         await conn.execute(text(_CREATE_NOTIFICATIONS_TABLE_SQL))
         await conn.run_sync(
             Base.metadata.create_all,
@@ -597,12 +614,23 @@ class TestDeleteMessageAction:
 
         client = client_factory(senior_mod)
         response = client.delete(f"/api/v1/admin/chat/reports/{case.id}/message")
-        assert response.status_code == 200
-        assert response.json()["status"] == "message_deleted"
+        assert response.status_code == 202
+        confirmation_id = response.json()["confirmation_id"]
+
+        async with db_session_factory() as session:
+            second_senior = await _make_user(session, admin_role=AdminRole.SENIOR_MODERATOR)
+        approver_client = client_factory(second_senior)
+        approve_response = approver_client.post(
+            f"/api/v1/admin/moderation/dangerous-actions/{confirmation_id}/approve"
+        )
+        assert approve_response.status_code == 200
+        assert approve_response.json()["status"] == "executed"
 
         async with db_session_factory() as session:
             deleted = await session.get(ChatMessage, message_id)
             assert deleted is None
+            resolved_case = await session.get(type(case), case.id)
+            assert resolved_case.status == "message_deleted"
 
 
 class TestEscalateBanAction:

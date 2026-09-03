@@ -706,6 +706,29 @@ class ModerationAction(str, enum.Enum):
     ESCALATE = "escalate"
     ESCALATION_RESOLVE = "escalation_resolve"
 
+    # --- Two-Person Confirmation for Dangerous Actions addition
+    # (migration 0054) --- STEP 1 INVESTIGATION confirmed the complete
+    # real list of irreversible/destructive actions is exactly these
+    # four: VIDEO_DELETE, VIDEO_REJECT_AND_PURGE, CHAT_MESSAGE_DELETE,
+    # GUILD_CONTENT_DELETE (see `app/models/
+    # dangerous_action_confirmation.py`'s own module docstring for the
+    # full Step 1 confirmation). These three NEW members are the real
+    # two-person-confirmation LIFECYCLE actions -- deliberately separate
+    # from the four above, which remain the actions being GATED, not
+    # renamed or reused: a `VIDEO_DELETE` log entry still means "a video
+    # was permanently deleted," now simply written at approval/override
+    # time instead of at the original single-actor call. `REQUESTED`/
+    # `APPROVED` mirror the `ESCALATE`/`ESCALATION_RESOLVE` pair's own
+    # "distinct verbs for distinct real events" convention immediately
+    # above; `OVERRIDDEN` is a THIRD, DISTINCT member (never reuses
+    # `APPROVED`) so the audit trail always shows, without inspecting
+    # `is_override` on a row a human never sees directly, whether an
+    # irreversible action went through real two-person confirmation or a
+    # deliberate Owner-only emergency bypass.
+    DANGEROUS_ACTION_REQUESTED = "dangerous_action_requested"
+    DANGEROUS_ACTION_APPROVED = "dangerous_action_approved"
+    DANGEROUS_ACTION_OVERRIDDEN = "dangerous_action_overridden"
+
 
 class ModerationTargetType(str, enum.Enum):
     """What kind of real row a `ModerationLogEntry.target_id` refers to
