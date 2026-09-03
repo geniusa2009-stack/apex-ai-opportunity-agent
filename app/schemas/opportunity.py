@@ -224,3 +224,46 @@ class AdminOpportunityDecisionResponse(BaseModel):
     success: bool
     opportunity_id: UUID
     new_status: OpportunityReviewStatus
+
+
+# =============================================================================
+# Manual Opportunity Creation, with Designated-Team-Member Access
+# =============================================================================
+
+
+class AdminOpportunityCreate(BaseModel):
+    """`POST /admin/opportunities` request body -- a Senior-Moderator-or-
+    higher hand-typing an Opportunity directly, no scraper/aggregator
+    involved. Deliberately NOT `OpportunityCreate` above: that schema is
+    the aggregator pipeline's own internal output shape, requiring
+    `source_name`/`source_type`/`source_base_url` tied to a real scraped
+    feed -- a human typing this by hand has none of that, and forcing a
+    caller to fabricate a fake source name/URL just to satisfy that
+    schema would be dishonest data entry. The real `Source` row this
+    creates instead is a single shared "Manual Entry" row the endpoint
+    itself get-or-creates (see `admin_opportunities.py::create_opportunity_manually`),
+    reusing `aggregator_service.get_or_create_source` rather than
+    re-implementing that lookup.
+
+    Every field below is either a real, directly-typeable fact (title/
+    description/target_url/opportunity_type/deadline/country/
+    is_local_egypt/target_age_group) or one of the two later, disclosed-
+    scope-boundary filtering additions (`target_academic_levels`/
+    `min_age`/`max_age`/`target_gender`) that `OpportunityCreate` above
+    explicitly could NOT populate because the aggregator's own Gemini
+    prompt was never taught to extract them -- a human typing the row
+    directly has no such limitation, so this schema accepts them.
+    """
+
+    title: str = Field(min_length=1, max_length=500)
+    description: str | None = None
+    target_url: str = Field(min_length=1, max_length=2048)
+    opportunity_type: OpportunityType
+    deadline: datetime | None = None
+    country: str = Field(default="Global")
+    is_local_egypt: bool = False
+    target_age_group: str | None = None
+    target_academic_levels: list[AcademicLevel] | None = None
+    min_age: int | None = Field(default=None, ge=0, le=120)
+    max_age: int | None = Field(default=None, ge=0, le=120)
+    target_gender: Gender | None = None

@@ -338,6 +338,19 @@ class SourceType(str, enum.Enum):
     FACEBOOK = "facebook"
     WEBSITE = "website"
 
+    # --- Manual Opportunity Creation addition (no schema migration needed -- both SourceType and ModerationAction back plain String columns, not native Postgres ENUM types, per each column's own docstring) --- A
+    # Senior-Moderator-or-higher hand-typing an Opportunity has no real
+    # feed/site behind it at all -- reusing WEBSITE (or any real scraped-
+    # platform value) for that row would misrepresent it as having come
+    # from an actual crawled site, which is false and would mislead any
+    # future audit of `Source.source_type`. A fourth, honest value is
+    # cheaper and more correct than overloading an existing one; grepped
+    # every real call site of `SourceType` first (aggregator_tasks.py's
+    # two literal usages, source.py's own server_default) -- neither
+    # switches/branches on the enum's members, so this is a pure,
+    # additive, non-breaking change.
+    MANUAL = "manual"
+
 
 class LiveSessionStatus(str, enum.Enum):
     """Lifecycle state of a `LiveSession` (real-time WebRTC video call
@@ -653,6 +666,18 @@ class ModerationAction(str, enum.Enum):
     # `CHAT_REPORT_DISMISS`/`CHAT_MESSAGE_DELETE` already established.
     GUILD_REPORT_DISMISS = "guild_report_dismiss"
     GUILD_CONTENT_DELETE = "guild_content_delete"
+
+    # --- Manual Opportunity Creation addition (no schema migration needed -- both SourceType and ModerationAction back plain String columns, not native Postgres ENUM types, per each column's own docstring) --- A
+    # real, distinct gap confirmed during this task's own Step 1
+    # investigation: the ONLY way an `Opportunity` row could ever be
+    # created was the scraper/aggregator pipeline -- there was no
+    # endpoint for a trusted team member to hand-type one (e.g. a
+    # scholarship a Moderator heard about directly, that no scraped
+    # source will ever pick up). `target_type=OPPORTUNITY`/
+    # `target_id=<the newly created opportunity's own id>`, same
+    # direct-target convention `OPPORTUNITY_APPROVE`/`OPPORTUNITY_REJECT`
+    # already use.
+    OPPORTUNITY_MANUAL_CREATE = "opportunity_manual_create"
 
 
 class ModerationTargetType(str, enum.Enum):

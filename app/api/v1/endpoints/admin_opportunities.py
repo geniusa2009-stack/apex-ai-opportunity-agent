@@ -69,6 +69,65 @@ Redis-backed unrecoverable ban), so the Senior-Moderator-only
 "destructive action" tier this codebase reserves for
 `delete_video_permanently`/`reject_video_and_purge_media` does not
 apply.
+
+=============================================================================
+Manual Opportunity Creation, with Designated-Team-Member Access (no schema migration needed -- no new column/table; see the SourceType/ModerationAction additions in app/models/enums.py)
+=============================================================================
+
+STEP 1 INVESTIGATION: confirmed via a full read of `OpportunityCreate`
+(app/schemas/opportunity.py) and `aggregator_service.upsert_opportunity`
+that no manual, non-scraper/aggregator creation path existed anywhere --
+every real `Opportunity` row before this addition was either
+Scrapy-pipeline- or aggregator-pipeline-authored. A genuine gap: a
+Moderator who hears about a real scholarship directly (word of mouth, a
+personal email, a partner org) had no way to add it -- it would simply
+never appear unless some future scrape happened to pick it up.
+
+STEP 2 DESIGN, ACCESS TIER: the prompt's own framing -- give this to
+"themselves (Owner) and specific team members they personally
+designate" -- is exactly what the existing 3-tier `AdminRole` system
+already provides: an Owner promotes a trusted volunteer to
+`SENIOR_MODERATOR` via the existing Owner-only
+`PATCH /admin/users/{user_id}/role`, and that IS the "personally
+designate" act the prompt describes. Gating this route at
+`RequireSeniorModerationAccess` reuses that existing, already-audited
+control rather than inventing a new, separate `can_create_opportunities`-
+style boolean that would duplicate a decision the Owner already makes
+through role assignment -- a second permission dimension with no
+independent real-world meaning here. Deliberately NOT
+`RequireModerationAccess` (would auto-grant this to every Moderator,
+which the prompt explicitly said NOT to do) and NOT `RequireOwner`
+(would exclude every "specific team member" the prompt explicitly says
+should be reachable).
+
+STEP 2 DESIGN, REVIEW STATUS: a manually created row is written with
+`review_status=PUBLISHED` directly, not `PENDING_REVIEW`. The
+`PENDING_REVIEW` gate (this file's own module docstring above) exists
+specifically to catch bad AI-scraped/extracted content before a human
+ever sees it -- a Senior-Moderator-or-higher typing the row by hand,
+having personally verified the opportunity is real, already performed
+that exact human check; routing it through the same queue a second time
+would be redundant process, not an added safety margin. `is_verified`
+is left `False` -- honest: this row never went through the separate AI
+verification pipeline (`verify_new_opportunities`), and that field's own
+meaning (see this file's Step 2 note above) is specifically "the AI
+task's own legitimacy judgment," which never ran here.
+
+STEP 2 DESIGN, SOURCE ROW: every `Opportunity.source_id` is a real
+`NOT NULL` FK (app/models/opportunity.py) -- a manually created row
+still needs one. Reuses `aggregator_service.get_or_create_source`
+unmodified (not re-implemented) against a single shared, well-known
+`Source` row (`name="Manual Entry"`), so every hand-typed opportunity
+correctly attributes to "a human typed this," distinguishable from any
+scraped/aggregated `Source` in every existing read (`OpportunityOut.
+source.source_type == SourceType.MANUAL`, a new, honest fourth enum
+value -- see `SourceType`'s own docstring in app/models/enums.py for why
+reusing `WEBSITE` would have been a misrepresentation).
+
+STEP 3.3, MODERATION LOG: a new `ModerationAction.OPPORTUNITY_MANUAL_CREATE`
+member (app/models/enums.py) -- same direct-target,
+`target_type=OPPORTUNITY` convention `OPPORTUNITY_APPROVE`/
+`OPPORTUNITY_REJECT` already use.
 """
 
 import logging
@@ -78,11 +137,18 @@ from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import aliased
 
-from app.api.deps import CurrentUser, DbSession, RequireModerationAccess, effective_admin_role
-from app.models.enums import ModerationAction, ModerationTargetType, OpportunityReviewStatus
+from app.api.deps import (
+    CurrentUser,
+    DbSession,
+    RequireModerationAccess,
+    RequireSeniorModerationAccess,
+    effective_admin_role,
+)
+from app.models.enums import ModerationAction, ModerationTargetType, OpportunityReviewStatus, SourceType
 from app.models.opportunity import Opportunity
 from app.models.user import User
 from app.schemas.opportunity import (
+    AdminOpportunityCreate,
     AdminOpportunityDecisionRequest,
     AdminOpportunityDecisionResponse,
     AdminOpportunityReviewOut,
@@ -90,6 +156,13 @@ from app.schemas.opportunity import (
     PaginatedResponse,
 )
 from app.services import moderation_claim_service, moderation_log_service
+from app.services.aggregator_service import get_or_create_source
+
+# The one shared `Source` row every manually created `Opportunity`
+# attributes to -- see this file's own module docstring, "Manual
+# Opportunity Creation" section, "STEP 2 DESIGN, SOURCE ROW".
+_MANUAL_SOURCE_NAME = "Manual Entry"
+_MANUAL_SOURCE_BASE_URL = "internal://manual-entry"
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +187,68 @@ def _build_review_item(opportunity: Opportunity, claimant_name: str | None) -> A
         claimed_by_name=claimant_name if effective_claimed_by is not None else None,
         claimed_at=effective_claimed_at,
     )
+
+
+@router.post(
+    "/admin/opportunities",
+    response_model=OpportunityOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_opportunity_manually(
+    payload: AdminOpportunityCreate,
+    current_user: CurrentUser,
+    db: DbSession,
+    _: RequireSeniorModerationAccess,
+) -> OpportunityOut:
+    """Senior-Moderator-or-higher. See this file's own module docstring,
+    "Manual Opportunity Creation" section, for the full access-tier /
+    review-status / source-row reasoning. Written straight to
+    `review_status=PUBLISHED`, `is_verified=False`.
+    """
+    source = await get_or_create_source(
+        db,
+        name=_MANUAL_SOURCE_NAME,
+        base_url=_MANUAL_SOURCE_BASE_URL,
+        source_type=SourceType.MANUAL,
+    )
+
+    opportunity = Opportunity(
+        title=payload.title,
+        description=payload.description,
+        target_url=payload.target_url,
+        source_id=source.id,
+        type=payload.opportunity_type,
+        deadline=payload.deadline,
+        country=payload.country,
+        is_local_egypt=payload.is_local_egypt,
+        target_age_group=payload.target_age_group,
+        target_academic_levels=payload.target_academic_levels,
+        min_age=payload.min_age,
+        max_age=payload.max_age,
+        target_gender=payload.target_gender,
+        review_status=OpportunityReviewStatus.PUBLISHED.value,
+        is_verified=False,
+        ai_confidence_score=None,
+        raw_extracted_data=None,
+        embedding=None,
+    )
+    db.add(opportunity)
+    await db.flush()
+
+    moderation_log_service.log_action(
+        db,
+        actor_id=current_user.id,
+        actor_role=effective_admin_role(current_user),
+        action=ModerationAction.OPPORTUNITY_MANUAL_CREATE,
+        target_type=ModerationTargetType.OPPORTUNITY,
+        target_id=opportunity.id,
+        outcome={"title": opportunity.title},
+    )
+
+    await db.commit()
+    await db.refresh(opportunity)
+
+    return OpportunityOut.model_validate(opportunity)
 
 
 @router.get(
