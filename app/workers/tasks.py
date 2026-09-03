@@ -9,7 +9,7 @@ from app.core.config import settings
 from app.db.session import AsyncSessionLocal, engine
 from app.models import Opportunity
 from app.models.enums import AcademicLevel, Gender
-from app.services import entity_relationship_service, research_trajectory_memory
+from app.services import entity_relationship_service, research_orchestrator, research_trajectory_memory
 from app.services.ai import ai_gateway
 
 logger = logging.getLogger(__name__)
@@ -135,15 +135,57 @@ async def _verify_new_opportunities(limit: int) -> dict:
 
             for opportunity in opportunities:
                 processed += 1
+
+                # Adaptive Research Orchestrator & Model Routing addition
+                # (Deliverable 4): routes THIS verification objective
+                # (real complexity classification + D1/D2/D3 signals),
+                # persists the decision as a real D3 trajectory step,
+                # BEFORE the real verification call below -- which is
+                # otherwise completely unchanged (same `ai_gateway.
+                # verify_and_embed` call site every pre-existing test
+                # mocks). Best-effort: an orchestration failure must
+                # never block real verification, same posture as the
+                # entity_relationship_service/research_trajectory_memory
+                # calls elsewhere in this function.
+                routing = None
+                try:
+                    routing_decision, routing_trajectory, routing_step = await research_orchestrator.orchestrate_verification(
+                        session, opportunity=opportunity
+                    )
+                    routing = (routing_decision, routing_trajectory, routing_step)
+                except Exception:
+                    logger.exception(
+                        "research_orchestrator.orchestrate_verification failed for opportunity %s "
+                        "-- proceeding with verification unrouted/untraced",
+                        opportunity.id,
+                    )
+
                 try:
                     verification, embedding = await ai_gateway.verify_and_embed(
                         opportunity.raw_extracted_data or {}
                     )
-                except Exception:
+                except Exception as exc:
                     logger.exception(
                         "AI verification call failed for opportunity %s", opportunity.id
                     )
                     errors += 1
+                    if routing is not None:
+                        try:
+                            await research_orchestrator.record_routing_outcome(
+                                session,
+                                decision=routing[0],
+                                trajectory=routing[1],
+                                step=routing[2],
+                                evidence=research_orchestrator.EvidenceState(
+                                    provider_call_failed=True, provider_call_error=str(exc)[:500]
+                                ),
+                            )
+                        except Exception:
+                            logger.exception(
+                                "research_orchestrator.record_routing_outcome failed for opportunity %s "
+                                "after a real verification failure",
+                                opportunity.id,
+                            )
                     continue
 
                 if (
@@ -222,6 +264,31 @@ async def _verify_new_opportunities(limit: int) -> dict:
                         "opportunity %s -- verification itself still succeeded",
                         opportunity.id,
                     )
+
+                # Deliverable 4: close the loop on the routing trace opened
+                # above with the REAL verification result -- applies
+                # should_stop/should_escalate, updates step_metadata, never
+                # writes to `opportunity` itself. Best-effort.
+                if routing is not None:
+                    try:
+                        await research_orchestrator.record_routing_outcome(
+                            session,
+                            decision=routing[0],
+                            trajectory=routing[1],
+                            step=routing[2],
+                            evidence=research_orchestrator.EvidenceState(
+                                confidence_score=verification.confidence_score,
+                                is_legitimate=verification.is_legitimate,
+                                source_authority_known=True,
+                                required_fields_present=bool(verification.eligibility_criteria),
+                            ),
+                        )
+                    except Exception:
+                        logger.exception(
+                            "research_orchestrator.record_routing_outcome failed for opportunity %s "
+                            "-- verification itself still succeeded",
+                            opportunity.id,
+                        )
 
             await session.commit()
     finally:

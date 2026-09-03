@@ -854,3 +854,62 @@ class TrajectoryOutcome(str, enum.Enum):
     NEUTRAL = "neutral"
     FAILED = "failed"
     MISLEADING = "misleading"
+
+
+# ---------------------------------------------------------------------
+# Adaptive Research Orchestrator & Model Routing (Deliverable 4)
+# ---------------------------------------------------------------------
+
+
+class ResearchComplexityClass(str, enum.Enum):
+    """Deterministic classification of how hard a research objective is
+    to resolve, produced by `app/services/research_orchestrator.py`'s
+    `classify_complexity`. Drives `ResearchDepthLevel` selection --
+    never an LLM's own self-reported confidence, see that module's own
+    docstring for the full "models are reasoning tools, not truth
+    oracles" reasoning."""
+
+    SIMPLE = "simple"
+    MODERATE = "moderate"
+    COMPLEX = "complex"
+    CRITICAL = "critical"
+
+
+class ResearchDepthLevel(str, enum.Enum):
+    """How much research/verification effort a given objective is
+    allocated. Each level maps to exactly one `DepthPolicy` in
+    `research_orchestrator.DEPTH_POLICIES` -- the single, centralized
+    source for step/call limits, never scattered magic numbers."""
+
+    SHALLOW = "shallow"
+    STANDARD = "standard"
+    DEEP = "deep"
+    ESCALATED = "escalated"
+
+
+class ProviderName(str, enum.Enum):
+    """The four real, genuinely-callable AI provider adapters that
+    exist in this codebase today (`app/services/ai.py` for OpenAI/
+    Anthropic, `app/services/gemini_client.py`-equivalent Gemini call
+    sites, `app/services/groq_client.py` for Groq). No DeepSeek/Qwen/
+    local-model entries -- see `research_orchestrator.py`'s own module
+    docstring for why those are deliberately not implemented."""
+
+    OPENAI = "openai"
+    ANTHROPIC = "anthropic"
+    GEMINI = "gemini"
+    GROQ = "groq"
+
+
+class ReasoningTaskType(str, enum.Enum):
+    """The real, distinct kinds of reasoning work this codebase's AI
+    Gateway/provider adapters are actually used for today -- the
+    dimension `ProviderCapability.task_suitability` is keyed on."""
+
+    VERIFICATION = "verification"
+    DOCUMENT_GENERATION = "document_generation"
+    GRADING = "grading"
+    PLANNING = "planning"
+    TAGGING = "tagging"
+    EXTRACTION = "extraction"
+    CHAT = "chat"

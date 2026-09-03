@@ -12,13 +12,14 @@ from sqlalchemy import select
 
 from app.api.deps import DbSession, RequireModerationAccess
 from app.models.research_trajectory import ResearchTrajectory, ResearchTrajectoryStep
+from app.schemas.research_orchestrator import ProviderPerformanceOut, RoutingDecisionOut
 from app.schemas.research_trajectory import (
     ResearchHintsOut,
     ResearchTrajectoryOut,
     ResearchTrajectoryStepOut,
     SourcePerformanceOut,
 )
-from app.services import research_trajectory_memory
+from app.services import research_orchestrator, research_trajectory_memory
 
 router = APIRouter(prefix="/admin/research", tags=["admin-research"])
 
@@ -77,3 +78,39 @@ async def get_source_performance(
     own docstring (Step 7, poisoning resistance)."""
     performance = await research_trajectory_memory.get_source_performance(db, limit=limit)
     return [SourcePerformanceOut(**p) for p in performance]
+
+
+# --- Adaptive Research Orchestrator & Model Routing additions (Deliverable 4) ---
+
+
+@router.get("/routing/{trajectory_id}", response_model=RoutingDecisionOut)
+async def get_routing_trace(
+    trajectory_id: uuid.UUID,
+    db: DbSession,
+    _: RequireModerationAccess,
+) -> RoutingDecisionOut:
+    """Real, persisted routing decision/trace for one trajectory --
+    read back from its `route_and_verify` step's `step_metadata`
+    (see `research_orchestrator.get_routing_trace`'s own docstring).
+    404 both when the trajectory itself doesn't exist and when it
+    exists but was never orchestrated by this deliverable (e.g. a plain
+    D3 aggregator-sweep trajectory with no routing step) -- either way,
+    there is no real routing decision to return."""
+    trace = await research_orchestrator.get_routing_trace(db, trajectory_id)
+    if trace is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Routing trace not found")
+    return RoutingDecisionOut(**trace)
+
+
+@router.get("/provider-performance", response_model=list[ProviderPerformanceOut])
+async def get_provider_performance(
+    db: DbSession,
+    _: RequireModerationAccess,
+) -> list[ProviderPerformanceOut]:
+    """Real, grouped-by-provider routing-selection counts. Never a
+    trust/truth verdict -- see `research_orchestrator.get_provider_performance`'s
+    own docstring. No secrets/prompts in this response -- only provider
+    names, real counts, and timestamps."""
+    performance = await research_orchestrator.get_provider_performance(db)
+    return [ProviderPerformanceOut(**p) for p in performance]
+

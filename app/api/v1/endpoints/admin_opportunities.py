@@ -445,19 +445,21 @@ def _build_buckets(counts: dict[str, int], *, all_known_values: list[str] | None
     return buckets
 
 
-@router.get(
-    "/admin/opportunities/coverage",
-    response_model=OpportunityCoverageOut,
-)
-async def get_opportunity_coverage(
-    db: DbSession,
-    _: RequireModerationAccess,
-) -> OpportunityCoverageOut:
-    """Moderator-or-higher. Real, simple gap analysis over the real
-    `Opportunity` table -- real counts by `type`/`country`/
-    `target_academic_levels`, with real, disclosed comparisons (see
-    `_build_buckets`) flagging under-covered values. No AI call, no
-    learned score: this is a real `SELECT` plus real Python counting.
+async def compute_opportunity_coverage(db: DbSession) -> OpportunityCoverageOut:
+    """Real, simple gap analysis over the real `Opportunity` table --
+    real counts by `type`/`country`/`target_academic_levels`, with real,
+    disclosed comparisons (see `_build_buckets`) flagging under-covered
+    values. No AI call, no learned score: this is a real `SELECT` plus
+    real Python counting.
+
+    Deliverable 4 addition: pulled out of the endpoint body below (which
+    now just calls this) so `app/services/research_orchestrator.py` can
+    reuse the exact same real coverage computation as a routing-depth
+    SIGNAL (poor coverage -> deeper discovery justified) without a second,
+    duplicated query -- see that module's own "D1 Coverage Integration"
+    section. Coverage counts stay a planning signal only there, never
+    promoted to an opportunity-truth field, same as this endpoint's own
+    pre-existing posture.
 
     STEP 1 INVESTIGATION note: fetched with plain column selects (not
     `Opportunity.target_academic_levels.any(...)`, which only compiles
@@ -499,3 +501,16 @@ async def get_opportunity_coverage(
         ),
         gap_threshold_ratio=_GAP_THRESHOLD_RATIO,
     )
+
+
+@router.get(
+    "/admin/opportunities/coverage",
+    response_model=OpportunityCoverageOut,
+)
+async def get_opportunity_coverage(
+    db: DbSession,
+    _: RequireModerationAccess,
+) -> OpportunityCoverageOut:
+    """Moderator-or-higher. See `compute_opportunity_coverage` for the
+    real computation this endpoint just exposes over HTTP."""
+    return await compute_opportunity_coverage(db)
