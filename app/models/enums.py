@@ -667,7 +667,7 @@ class ModerationAction(str, enum.Enum):
     GUILD_REPORT_DISMISS = "guild_report_dismiss"
     GUILD_CONTENT_DELETE = "guild_content_delete"
 
-    # --- Manual Opportunity Creation addition (no schema migration needed -- both SourceType and ModerationAction back plain String columns, not native Postgres ENUM types, per each column's own docstring) --- A
+    # --- Manual Opportunity Creation addition (migration 0050) --- A
     # real, distinct gap confirmed during this task's own Step 1
     # investigation: the ONLY way an `Opportunity` row could ever be
     # created was the scraper/aggregator pipeline -- there was no
@@ -677,6 +677,18 @@ class ModerationAction(str, enum.Enum):
     # `target_id=<the newly created opportunity's own id>`, same
     # direct-target convention `OPPORTUNITY_APPROVE`/`OPPORTUNITY_REJECT`
     # already use.
+    #
+    # SELF-CORRECTION: this member's own migration (0050) was originally
+    # skipped on the mistaken belief that `ModerationAction` backs a
+    # plain String column -- it does NOT (see
+    # `app/models/moderation_log.py::ModerationLogEntry.action`,
+    # `SAEnum(..., native_enum=True)`, a real native Postgres ENUM, same
+    # as every other `ModerationAction` addition before it -- migrations
+    # 0041/0045/0046/0047 each ran a real `ALTER TYPE moderation_action
+    # ADD VALUE`). `SourceType` (above) genuinely IS a plain
+    # `String(20)` column (`app/models/source.py`) and correctly needed
+    # no migration -- only that other, unrelated half of the original
+    # claim was accurate.
     OPPORTUNITY_MANUAL_CREATE = "opportunity_manual_create"
 
 

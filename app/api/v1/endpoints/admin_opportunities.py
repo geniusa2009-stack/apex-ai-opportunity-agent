@@ -71,7 +71,7 @@ Redis-backed unrecoverable ban), so the Senior-Moderator-only
 apply.
 
 =============================================================================
-Manual Opportunity Creation, with Designated-Team-Member Access (no schema migration needed -- no new column/table; see the SourceType/ModerationAction additions in app/models/enums.py)
+Manual Opportunity Creation, with Designated-Team-Member Access (no new table/column on `opportunities`/`sources` themselves; migration 0050 adds the real `ALTER TYPE moderation_action ADD VALUE` the new OPPORTUNITY_MANUAL_CREATE member needs -- see that migration's own SELF-CORRECTION docstring)
 =============================================================================
 
 STEP 1 INVESTIGATION: confirmed via a full read of `OpportunityCreate`
