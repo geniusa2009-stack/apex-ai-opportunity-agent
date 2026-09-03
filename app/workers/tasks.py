@@ -9,7 +9,7 @@ from app.core.config import settings
 from app.db.session import AsyncSessionLocal, engine
 from app.models import Opportunity
 from app.models.enums import AcademicLevel, Gender
-from app.services import entity_relationship_service
+from app.services import entity_relationship_service, research_trajectory_memory
 from app.services.ai import ai_gateway
 
 logger = logging.getLogger(__name__)
@@ -199,6 +199,29 @@ async def _verify_new_opportunities(limit: int) -> dict:
                     # these later without re-scraping anything.
                     opportunity.ai_confidence_score = verification.confidence_score
                     flagged += 1
+
+                # Search Trajectory Memory addition (Deliverable 3) --
+                # closes the loop from this real, decoupled verification
+                # pass back onto whichever real trajectory step
+                # originally discovered this opportunity (a real no-op
+                # for opportunities the pre-existing Scrapy pipeline
+                # created, since those have no matching step -- see
+                # `apply_verification_outcome`'s own docstring). Never
+                # writes to `Opportunity` itself; best-effort, same
+                # posture as the entity_relationship_service sync above.
+                try:
+                    await research_trajectory_memory.apply_verification_outcome(
+                        session,
+                        opportunity_id=opportunity.id,
+                        is_legitimate=verification.is_legitimate,
+                        confidence_score=verification.confidence_score,
+                    )
+                except Exception:
+                    logger.exception(
+                        "research_trajectory_memory.apply_verification_outcome failed for "
+                        "opportunity %s -- verification itself still succeeded",
+                        opportunity.id,
+                    )
 
             await session.commit()
     finally:

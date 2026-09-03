@@ -825,3 +825,32 @@ class RelationshipType(str, enum.Enum):
 
     SAME_ORGANIZATION = "same_organization"
     SAME_COUNTRY = "same_country"
+
+
+class TrajectoryStatus(str, enum.Enum):
+    """Lifecycle state of a `ResearchTrajectory` (Deliverable 3)."""
+
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class TrajectoryOutcome(str, enum.Enum):
+    """Real, disclosed research-EFFICIENCY signal (Deliverable 3, Step 6)
+    -- attached to a `ResearchTrajectoryStep` (one search action) and,
+    rolled up, to a `ResearchTrajectory` as a whole.
+
+    THIS IS NOT A TRUTH SCORE. `SUCCESSFUL`/`MISLEADING` describe how
+    USEFUL a query/source was for FINDING something the real Evidence +
+    Verification system (`ai_gateway.verify_opportunity`,
+    `app/workers/tasks.py::_verify_new_opportunities`) could then judge
+    -- they never substitute for that judgment. See
+    `research_trajectory_memory.py`'s own module docstring, Step 7, for
+    the full disclosed reasoning.
+    """
+
+    SUCCESSFUL = "successful"
+    PARTIALLY_USEFUL = "partially_useful"
+    NEUTRAL = "neutral"
+    FAILED = "failed"
+    MISLEADING = "misleading"

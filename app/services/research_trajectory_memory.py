@@ -1,0 +1,515 @@
+"""ResearchTrajectoryMemory (Deliverable 3): makes past research
+EXPERIENCE reusable -- not just logged.
+
+STEP 4 DESIGN, "do not introduce a vector database": every retrieval
+function below is deterministic and reuses only what this codebase's
+plain Postgres/SQLite already gives for free -- a real
+`normalize_objective`/keyword-overlap (Jaccard) comparison over
+`ResearchTrajectory.normalized_objective`, and real `GROUP BY`-style
+aggregation (done in Python over a real, indexed `SELECT`, portable to
+both the real Postgres deployment and this project's established SQLite
+test/live-verify substitute) over `ResearchTrajectoryStep.query`/
+`source_domain`. No embeddings, no pgvector, no new external dependency
+-- Deliverable 3's own Step 4 is explicit that this is deliberate, not
+a placeholder for "later."
+
+STEP 6/7 DESIGN, the most important constraint in this file: every
+number this module produces (`usefulness_score`, a source's
+`successful_count`/`failed_count`, a query's hit rate) is a RESEARCH
+EFFICIENCY SIGNAL -- how well a query/source has historically helped
+FIND something worth checking. None of it is promoted to "this source
+is trustworthy" or "this claim is true." `get_source_performance`
+deliberately returns real counts and real timestamps, never a
+trust/truth boolean, so a caller can never mistake "seen 40 times" for
+"verified true 40 times" -- verification remains the exclusive job of
+`ai_gateway.verify_opportunity`/`_verify_new_opportunities`
+(Evidence + Verification). `build_research_hints` is a planning aid; a
+planner that skipped this module entirely would still work, just less
+efficiently -- nothing here is load-bearing for correctness.
+"""
+import logging
+import re
+import uuid
+from datetime import datetime, timezone
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.enums import TrajectoryOutcome, TrajectoryStatus
+from app.models.research_trajectory import ResearchTrajectory, ResearchTrajectoryStep
+
+logger = logging.getLogger(__name__)
+
+_WHITESPACE_RE = re.compile(r"\s+")
+_NON_WORD_RE = re.compile(r"[^\w\s]")
+
+# Outcomes that count as "the step was worth taking" vs. "it wasn't", for
+# the real successful_steps/failed_steps rollup on the parent trajectory.
+# NEUTRAL (the default, pending state) counts as neither.
+_POSITIVE_OUTCOMES = {TrajectoryOutcome.SUCCESSFUL.value, TrajectoryOutcome.PARTIALLY_USEFUL.value}
+_NEGATIVE_OUTCOMES = {TrajectoryOutcome.FAILED.value, TrajectoryOutcome.MISLEADING.value}
+
+
+def normalize_objective(text: str) -> str:
+    """Lowercase, punctuation-stripped, whitespace-collapsed -- the real,
+    deterministic matching key every retrieval function compares
+    against. Not a hash: kept human-readable for debugging."""
+    lowered = text.strip().lower()
+    no_punct = _NON_WORD_RE.sub(" ", lowered)
+    return _WHITESPACE_RE.sub(" ", no_punct).strip()
+
+
+def _keywords(text: str) -> set[str]:
+    """Real keyword set for Jaccard-similarity matching -- words of 3+
+    characters only (drops noise like "a"/"in"/"of" without needing a
+    real stopword list/external dependency), with a real, deliberately
+    tiny normalization: a trailing "s" is stripped from any word longer
+    than 4 characters, so "scholarship"/"scholarships" (or
+    "student"/"students") match as the same real keyword. This is NOT a
+    real stemmer (no external NLP dependency, per Step 4) -- just enough
+    to keep singular/plural query phrasing from looking unrelated."""
+    words = normalize_objective(text).split(" ")
+    keywords = set()
+    for word in words:
+        if len(word) < 3:
+            continue
+        if len(word) > 4 and word.endswith("s"):
+            word = word[:-1]
+        keywords.add(word)
+    return keywords
+
+
+def _jaccard(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    intersection = len(a & b)
+    union = len(a | b)
+    return intersection / union if union else 0.0
+
+
+# ---------------------------------------------------------------------
+# Recording (Steps 2/3/5)
+# ---------------------------------------------------------------------
+
+
+async def start_trajectory(
+    db: AsyncSession, *, objective: str, metadata: dict | None = None
+) -> ResearchTrajectory:
+    """Real trajectory start -- one real row, `status=RUNNING`."""
+    trajectory = ResearchTrajectory(
+        objective=objective,
+        normalized_objective=normalize_objective(objective),
+        status=TrajectoryStatus.RUNNING.value,
+        trajectory_metadata=metadata,
+    )
+    db.add(trajectory)
+    await db.flush()
+    return trajectory
+
+
+async def record_step(
+    db: AsyncSession,
+    *,
+    trajectory: ResearchTrajectory,
+    action_type: str,
+    query: str | None = None,
+    source_domain: str | None = None,
+    parent_step_id: uuid.UUID | None = None,
+    reference_id: str | None = None,
+    metadata: dict | None = None,
+) -> ResearchTrajectoryStep:
+    """Real step creation. `step_number` is assigned from the real,
+    running count already on `trajectory` (1-indexed) -- the caller
+    never has to track it itself."""
+    trajectory.total_steps += 1
+    step = ResearchTrajectoryStep(
+        trajectory_id=trajectory.id,
+        step_number=trajectory.total_steps,
+        action_type=action_type,
+        query=query,
+        source_domain=source_domain,
+        parent_step_id=parent_step_id,
+        reference_id=reference_id,
+        outcome=TrajectoryOutcome.NEUTRAL.value,
+        step_metadata=metadata,
+    )
+    db.add(step)
+    await db.flush()
+    return step
+
+
+async def complete_step(
+    db: AsyncSession,
+    *,
+    step: ResearchTrajectoryStep,
+    trajectory: ResearchTrajectory,
+    outcome: TrajectoryOutcome,
+    usefulness_score: float | None = None,
+    discovered_entities_count: int = 0,
+    discovered_opportunities_count: int = 0,
+    verification_impact: str | None = None,
+    error_reason: str | None = None,
+) -> ResearchTrajectoryStep:
+    """Real step resolution -- records the real outcome of one real
+    action and rolls it up onto the real parent trajectory's own
+    running counters (`successful_steps`/`failed_steps`/
+    `opportunities_discovered`)."""
+    step.outcome = outcome.value
+    step.usefulness_score = usefulness_score
+    step.discovered_entities_count = discovered_entities_count
+    step.discovered_opportunities_count = discovered_opportunities_count
+    step.verification_impact = verification_impact
+    step.error_reason = error_reason
+
+    if outcome.value in _POSITIVE_OUTCOMES:
+        trajectory.successful_steps += 1
+    elif outcome.value in _NEGATIVE_OUTCOMES:
+        trajectory.failed_steps += 1
+
+    trajectory.opportunities_discovered += discovered_opportunities_count
+
+    db.add(step)
+    db.add(trajectory)
+    await db.flush()
+    return step
+
+
+def _derive_final_outcome(trajectory: ResearchTrajectory) -> str:
+    """Real, deterministic, disclosed heuristic -- no fabricated
+    scoring, just the real ratio of this real trajectory's own
+    successful vs. failed steps."""
+    if trajectory.total_steps == 0:
+        return TrajectoryOutcome.NEUTRAL.value
+    if trajectory.opportunities_verified > 0 and trajectory.failed_steps == 0:
+        return TrajectoryOutcome.SUCCESSFUL.value
+    if trajectory.successful_steps > 0 and trajectory.failed_steps > 0:
+        return TrajectoryOutcome.PARTIALLY_USEFUL.value
+    if trajectory.successful_steps > 0:
+        return TrajectoryOutcome.SUCCESSFUL.value
+    if trajectory.failed_steps > 0:
+        return TrajectoryOutcome.FAILED.value
+    return TrajectoryOutcome.NEUTRAL.value
+
+
+async def record_outcome(
+    db: AsyncSession,
+    *,
+    trajectory: ResearchTrajectory,
+    final_outcome: TrajectoryOutcome | None = None,
+) -> ResearchTrajectory:
+    """Real trajectory completion. `final_outcome`, when not given
+    explicitly, is derived deterministically from this trajectory's own
+    real step counters (`_derive_final_outcome`) -- never guessed from
+    outside data. Also rolls up `useful_sources` (real, deduplicated
+    domains that produced a real discovered opportunity) and
+    `research_depth` (real count of distinct real sources queried)."""
+    result = await db.execute(
+        select(ResearchTrajectoryStep).where(ResearchTrajectoryStep.trajectory_id == trajectory.id)
+    )
+    steps = result.scalars().all()
+
+    all_domains = {s.source_domain for s in steps if s.source_domain}
+    useful_domains = sorted(
+        {s.source_domain for s in steps if s.source_domain and s.discovered_opportunities_count > 0}
+    )
+
+    trajectory.useful_sources = useful_domains
+    trajectory.research_depth = len(all_domains)
+    trajectory.completed_at = datetime.now(timezone.utc)
+    trajectory.final_outcome = (final_outcome or TrajectoryOutcome(_derive_final_outcome(trajectory))).value
+    trajectory.status = (
+        TrajectoryStatus.FAILED.value
+        if trajectory.final_outcome == TrajectoryOutcome.FAILED.value
+        else TrajectoryStatus.COMPLETED.value
+    )
+
+    db.add(trajectory)
+    await db.flush()
+    return trajectory
+
+
+async def apply_verification_outcome(
+    db: AsyncSession, *, opportunity_id: uuid.UUID, is_legitimate: bool, confidence_score: float
+) -> ResearchTrajectoryStep | None:
+    """Closes the loop from the real, decoupled `_verify_new_opportunities`
+    verification pass back onto the real trajectory step that originally
+    discovered this opportunity (matched by `reference_id`, a compact
+    string reference -- see this module's own docstring). Best-effort
+    and side-effect-free when no such step exists (e.g. an opportunity
+    created by the pre-existing Scrapy pipeline, or before this feature
+    existed) -- returns `None` rather than raising, matching this
+    codebase's established "a memory/graph-sync failure must never
+    affect real verification" posture (`entity_relationship_service`).
+
+    THIS FUNCTION NEVER WRITES TO `Opportunity` -- it only updates the
+    trajectory step's own research-efficiency fields. Verification
+    truth stays exclusively owned by the caller.
+    """
+    result = await db.execute(
+        select(ResearchTrajectoryStep).where(ResearchTrajectoryStep.reference_id == str(opportunity_id))
+    )
+    step = result.scalars().first()
+    if step is None:
+        return None
+
+    if is_legitimate and confidence_score >= 0.7:
+        outcome = TrajectoryOutcome.SUCCESSFUL
+        verification_impact = "verified_legitimate"
+    elif is_legitimate:
+        outcome = TrajectoryOutcome.PARTIALLY_USEFUL
+        verification_impact = "verified_low_confidence"
+    else:
+        outcome = TrajectoryOutcome.MISLEADING
+        verification_impact = "verified_not_legitimate"
+
+    was_positive_before = step.outcome in _POSITIVE_OUTCOMES
+    was_negative_before = step.outcome in _NEGATIVE_OUTCOMES
+
+    step.outcome = outcome.value
+    step.usefulness_score = confidence_score
+    step.verification_impact = verification_impact
+
+    trajectory = await db.get(ResearchTrajectory, step.trajectory_id)
+    if trajectory is not None:
+        trajectory.opportunities_verified += 1
+        is_positive_now = outcome.value in _POSITIVE_OUTCOMES
+        is_negative_now = outcome.value in _NEGATIVE_OUTCOMES
+        if is_positive_now and not was_positive_before:
+            trajectory.successful_steps += 1
+            if was_negative_before:
+                trajectory.failed_steps -= 1
+        elif is_negative_now and not was_negative_before:
+            trajectory.failed_steps += 1
+            if was_positive_before:
+                trajectory.successful_steps -= 1
+        db.add(trajectory)
+
+    db.add(step)
+    await db.flush()
+    return step
+
+
+# ---------------------------------------------------------------------
+# Retrieval (Steps 3/4) -- deterministic, no vector DB
+# ---------------------------------------------------------------------
+
+
+async def retrieve_similar_trajectories(
+    db: AsyncSession, *, objective: str, limit: int = 5
+) -> list[tuple[ResearchTrajectory, float]]:
+    """Real Jaccard keyword-overlap over every real, COMPLETED
+    trajectory's `normalized_objective` -- deterministic, no embeddings.
+    Returns `(trajectory, similarity_score)` pairs, most similar first,
+    score > 0 only."""
+    target_keywords = _keywords(objective)
+    result = await db.execute(
+        select(ResearchTrajectory).where(ResearchTrajectory.status == TrajectoryStatus.COMPLETED.value)
+    )
+    candidates = result.scalars().all()
+
+    scored = [
+        (trajectory, _jaccard(target_keywords, _keywords(trajectory.objective)))
+        for trajectory in candidates
+    ]
+    scored = [pair for pair in scored if pair[1] > 0]
+    scored.sort(key=lambda pair: pair[1], reverse=True)
+    return scored[:limit]
+
+
+async def retrieve_successful_search_patterns(db: AsyncSession, *, limit: int = 10) -> list[dict]:
+    """Real, grouped-by-query counts for every real step whose real
+    outcome was SUCCESSFUL/PARTIALLY_USEFUL. A real research-efficiency
+    signal, not a truth claim -- see module docstring."""
+    return await _grouped_query_patterns(db, outcomes=_POSITIVE_OUTCOMES, limit=limit)
+
+
+async def retrieve_failed_search_patterns(db: AsyncSession, *, limit: int = 10) -> list[dict]:
+    """Same as `retrieve_successful_search_patterns`, for FAILED/
+    MISLEADING outcomes."""
+    return await _grouped_query_patterns(db, outcomes=_NEGATIVE_OUTCOMES, limit=limit)
+
+
+async def _grouped_query_patterns(db: AsyncSession, *, outcomes: set[str], limit: int) -> list[dict]:
+    result = await db.execute(
+        select(ResearchTrajectoryStep).where(
+            ResearchTrajectoryStep.outcome.in_(outcomes),
+            ResearchTrajectoryStep.query.is_not(None),
+        )
+    )
+    steps = result.scalars().all()
+
+    by_query: dict[str, list[ResearchTrajectoryStep]] = {}
+    for step in steps:
+        by_query.setdefault(step.query, []).append(step)
+
+    patterns = []
+    for query, matching_steps in by_query.items():
+        scores = [s.usefulness_score for s in matching_steps if s.usefulness_score is not None]
+        patterns.append(
+            {
+                "query": query,
+                "occurrences": len(matching_steps),
+                "average_usefulness_score": (sum(scores) / len(scores)) if scores else None,
+                "last_seen_at": max(s.created_at for s in matching_steps).isoformat(),
+            }
+        )
+    patterns.sort(key=lambda p: p["occurrences"], reverse=True)
+    return patterns[:limit]
+
+
+async def get_source_performance(db: AsyncSession, *, limit: int = 20) -> list[dict]:
+    """Real, grouped-by-domain counts -- STEP 7, POISONING RESISTANCE:
+    deliberately returns real counts/timestamps ONLY, never a
+    trust/truth boolean. "domain X produced useful evidence in N
+    previous trajectories" is the exact, disclosed shape this function
+    returns -- never "domain X is trustworthy"."""
+    result = await db.execute(
+        select(ResearchTrajectoryStep).where(ResearchTrajectoryStep.source_domain.is_not(None))
+    )
+    steps = result.scalars().all()
+
+    by_domain: dict[str, list[ResearchTrajectoryStep]] = {}
+    for step in steps:
+        by_domain.setdefault(step.source_domain, []).append(step)
+
+    performance = []
+    for domain, matching_steps in by_domain.items():
+        successful = sum(1 for s in matching_steps if s.outcome in _POSITIVE_OUTCOMES)
+        failed = sum(1 for s in matching_steps if s.outcome in _NEGATIVE_OUTCOMES)
+        performance.append(
+            {
+                "source_domain": domain,
+                "total_steps_seen": len(matching_steps),
+                "positive_signal_count": successful,
+                "negative_signal_count": failed,
+                "last_seen_at": max(s.created_at for s in matching_steps).isoformat(),
+            }
+        )
+    performance.sort(key=lambda p: p["total_steps_seen"], reverse=True)
+    return performance[:limit]
+
+
+async def get_source_performance_for_objective(
+    db: AsyncSession, *, objective: str, limit: int = 20
+) -> list[dict]:
+    """Same real, disclosed shape as `get_source_performance` (Step 7:
+    counts/timestamps only, never a trust verdict), narrowed to steps
+    whose own `query` has real keyword overlap with `objective` -- a
+    domain only counts as relevant "for this kind of research", not
+    just relevant in general. Used by `build_research_hints` so an
+    unrelated objective correctly gets an empty domain list rather than
+    every domain this memory has ever seen."""
+    target_keywords = _keywords(objective)
+    result = await db.execute(
+        select(ResearchTrajectoryStep).where(
+            ResearchTrajectoryStep.source_domain.is_not(None),
+            ResearchTrajectoryStep.query.is_not(None),
+        )
+    )
+    steps = [s for s in result.scalars().all() if _jaccard(target_keywords, _keywords(s.query)) > 0]
+
+    by_domain: dict[str, list[ResearchTrajectoryStep]] = {}
+    for step in steps:
+        by_domain.setdefault(step.source_domain, []).append(step)
+
+    performance = []
+    for domain, matching_steps in by_domain.items():
+        successful = sum(1 for s in matching_steps if s.outcome in _POSITIVE_OUTCOMES)
+        failed = sum(1 for s in matching_steps if s.outcome in _NEGATIVE_OUTCOMES)
+        performance.append(
+            {
+                "source_domain": domain,
+                "total_steps_seen": len(matching_steps),
+                "positive_signal_count": successful,
+                "negative_signal_count": failed,
+                "last_seen_at": max(s.created_at for s in matching_steps).isoformat(),
+            }
+        )
+    performance.sort(key=lambda p: p["total_steps_seen"], reverse=True)
+    return performance[:limit]
+
+
+async def build_research_hints(db: AsyncSession, *, objective: str) -> dict:
+    """THE important function (Deliverable 3, Step 3). Real, structured
+    hints a research planner can use for `objective` -- built entirely
+    from real, past trajectory data, never fabricated. Every list can
+    legitimately be empty (the real "no memory case": a genuinely new
+    objective with nothing similar in history returns empty lists and a
+    single, honest `recommended_next_actions` entry saying so, not an
+    error).
+
+    STEP 7 REMINDER: nothing in this return value is a truth claim.
+    `useful_domains`/`low_value_domains` are research-efficiency
+    signals derived from past OUTCOMES of research steps, never
+    promoted to "this domain is trustworthy" -- see `get_source_performance`.
+    """
+    similar = await retrieve_similar_trajectories(db, objective=objective, limit=5)
+    all_successful_patterns = await retrieve_successful_search_patterns(db, limit=50)
+    all_failed_patterns = await retrieve_failed_search_patterns(db, limit=50)
+
+    # Real relevance filter -- a query pattern (and, by extension, a
+    # source domain) only counts as a hint for THIS objective when it
+    # shares real keyword overlap with it. Without this,
+    # `build_research_hints` for a genuinely new, unrelated objective
+    # would return every OTHER objective's history, which is not a hint
+    # for this one -- the real "no memory case" this deliverable's own
+    # Step 3/8 explicitly requires.
+    target_keywords = _keywords(objective)
+    successful_patterns = [
+        p for p in all_successful_patterns if _jaccard(target_keywords, _keywords(p["query"])) > 0
+    ][:10]
+    failed_patterns = [
+        p for p in all_failed_patterns if _jaccard(target_keywords, _keywords(p["query"])) > 0
+    ][:10]
+
+    relevant_source_performance = await get_source_performance_for_objective(db, objective=objective, limit=20)
+    useful_domains = [
+        p["source_domain"] for p in relevant_source_performance
+        if p["positive_signal_count"] > p["negative_signal_count"] and p["positive_signal_count"] > 0
+    ]
+    low_value_domains = [
+        p["source_domain"] for p in relevant_source_performance
+        if p["negative_signal_count"] > p["positive_signal_count"] and p["negative_signal_count"] > 0
+    ]
+
+    recommended_next_actions: list[str] = []
+    if successful_patterns:
+        top = successful_patterns[0]
+        recommended_next_actions.append(
+            f"Consider repeating query {top['query']!r} -- it was useful in "
+            f"{top['occurrences']} previous step(s)."
+        )
+    if low_value_domains:
+        recommended_next_actions.append(
+            f"Treat {low_value_domains[0]!r} cautiously -- it has produced more "
+            "negative than positive research-efficiency signal historically "
+            "(this is a hint, not proof the domain is untrustworthy)."
+        )
+    if similar and similar[0][0].final_outcome == TrajectoryOutcome.FAILED.value:
+        recommended_next_actions.append(
+            "The most similar past research objective ended FAILED -- consider "
+            "adjusting query terms or sources before repeating the same approach."
+        )
+    if not similar and not successful_patterns and not failed_patterns:
+        recommended_next_actions.append(
+            "No prior research memory found for this objective yet -- proceeding "
+            "without historical hints."
+        )
+
+    return {
+        "successful_queries": [p["query"] for p in successful_patterns],
+        "failed_queries": [p["query"] for p in failed_patterns],
+        "useful_domains": useful_domains,
+        "low_value_domains": low_value_domains,
+        "recommended_next_actions": recommended_next_actions,
+        "known_patterns": [
+            {
+                "objective": trajectory.objective,
+                "similarity_score": round(score, 4),
+                "final_outcome": trajectory.final_outcome,
+                "opportunities_discovered": trajectory.opportunities_discovered,
+                "opportunities_verified": trajectory.opportunities_verified,
+            }
+            for trajectory, score in similar
+        ],
+    }

@@ -134,6 +134,47 @@ CREATE TABLE opportunities (
 )
 """
 
+_CREATE_RESEARCH_TRAJECTORIES_TABLE_SQL = """
+CREATE TABLE research_trajectories (
+    id VARCHAR(36) PRIMARY KEY,
+    objective VARCHAR(500) NOT NULL,
+    normalized_objective VARCHAR(500) NOT NULL,
+    started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at DATETIME,
+    status VARCHAR(20) NOT NULL DEFAULT 'running',
+    total_steps INTEGER NOT NULL DEFAULT 0,
+    successful_steps INTEGER NOT NULL DEFAULT 0,
+    failed_steps INTEGER NOT NULL DEFAULT 0,
+    opportunities_discovered INTEGER NOT NULL DEFAULT 0,
+    opportunities_verified INTEGER NOT NULL DEFAULT 0,
+    useful_sources TEXT,
+    research_depth INTEGER NOT NULL DEFAULT 0,
+    final_outcome VARCHAR(20),
+    trajectory_metadata TEXT
+)
+"""
+
+_CREATE_RESEARCH_TRAJECTORY_STEPS_TABLE_SQL = """
+CREATE TABLE research_trajectory_steps (
+    id VARCHAR(36) PRIMARY KEY,
+    trajectory_id VARCHAR(36) NOT NULL,
+    step_number INTEGER NOT NULL,
+    action_type VARCHAR(50) NOT NULL,
+    query VARCHAR(500),
+    source_domain VARCHAR(500),
+    reference_id VARCHAR(100),
+    parent_step_id VARCHAR(36),
+    outcome VARCHAR(20) NOT NULL DEFAULT 'neutral',
+    usefulness_score FLOAT,
+    discovered_entities_count INTEGER NOT NULL DEFAULT 0,
+    discovered_opportunities_count INTEGER NOT NULL DEFAULT 0,
+    verification_impact VARCHAR(50),
+    error_reason VARCHAR(500),
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    step_metadata TEXT
+)
+"""
+
 _CREATE_ENTITY_RELATIONSHIPS_TABLE_SQL = """
 CREATE TABLE entity_relationships (
     id VARCHAR(36) PRIMARY KEY,
@@ -168,6 +209,8 @@ async def db_session_factory():
         await conn.execute(text(_CREATE_OPPORTUNITIES_TABLE_SQL))
         await conn.execute(text(_CREATE_USER_BOOKMARKS_TABLE_SQL))
         await conn.execute(text(_CREATE_ENTITY_RELATIONSHIPS_TABLE_SQL))
+        await conn.execute(text(_CREATE_RESEARCH_TRAJECTORIES_TABLE_SQL))
+        await conn.execute(text(_CREATE_RESEARCH_TRAJECTORY_STEPS_TABLE_SQL))
 
     session_factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
     yield session_factory

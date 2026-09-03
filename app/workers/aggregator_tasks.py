@@ -35,6 +35,8 @@ from typing import Any
 from app.core.celery_app import celery_app
 from app.db.session import AsyncSessionLocal, engine
 from app.models.enums import SourceType
+from app.models.enums import TrajectoryOutcome
+from app.services import research_trajectory_memory
 from app.services.aggregator_service import (
     AggregatorError,
     fetch_new_facebook_posts,
@@ -74,6 +76,20 @@ async def _run_daily_opportunity_scraper() -> dict:
 
     try:
         async with AsyncSessionLocal() as session:
+            # Search Trajectory Memory addition (Deliverable 3) -- one
+            # real trajectory per real run of this loop. See
+            # `research_trajectory_memory.py`'s own module docstring for
+            # why this loop (not the Scrapy scraper, which has no query
+            # concept) is the real integration point.
+            trajectory = await research_trajectory_memory.start_trajectory(
+                session,
+                objective=(
+                    f"Daily opportunity discovery sweep: "
+                    f"{len(config.telegram_channels)} telegram channel(s), "
+                    f"{len(config.facebook_pages)} facebook page(s)"
+                ),
+            )
+
             for channel in config.telegram_channels:
                 # Explicit `dict[str, Any]` annotation -- disclosed mypy
                 # fix: without it, mypy infers this literal's value type
@@ -90,24 +106,62 @@ async def _run_daily_opportunity_scraper() -> dict:
                     "source_base_url": f"https://t.me/{channel.handle.lstrip('@')}",
                     "category": channel.category,
                 }
+                query_step = await research_trajectory_memory.record_step(
+                    session,
+                    trajectory=trajectory,
+                    action_type="query_source",
+                    query=channel.handle,
+                    source_domain=source_info["source_base_url"],
+                )
                 for raw_text in fetch_new_telegram_posts(channel):
                     processed += 1
+                    result_step = await research_trajectory_memory.record_step(
+                        session,
+                        trajectory=trajectory,
+                        action_type="process_result",
+                        query=channel.handle,
+                        source_domain=source_info["source_base_url"],
+                        parent_step_id=query_step.id,
+                    )
                     try:
                         opportunity_data = await process_raw_post_via_ai(raw_text, source_info)
-                        _, was_created = await upsert_opportunity(session, opportunity_data)
+                        opportunity, was_created = await upsert_opportunity(session, opportunity_data)
                         created += int(was_created)
                         updated += int(not was_created)
-                    except AggregatorError:
+                        result_step.reference_id = str(opportunity.id)
+                        # NEUTRAL, not SUCCESSFUL: a discovered opportunity
+                        # is only a real research-efficiency success once
+                        # the real, decoupled verification pass judges it
+                        # (`apply_verification_outcome`, wired into
+                        # `_verify_new_opportunities` below) -- this step
+                        # never guesses ahead of that real judgment.
+                        await research_trajectory_memory.complete_step(
+                            session,
+                            step=result_step,
+                            trajectory=trajectory,
+                            outcome=TrajectoryOutcome.NEUTRAL,
+                            discovered_opportunities_count=int(was_created),
+                            discovered_entities_count=1,
+                        )
+                    except AggregatorError as exc:
                         logger.exception(
                             "run_daily_opportunity_scraper: AI extraction failed for %s", channel.handle
                         )
                         errors += 1
-                    except Exception:
+                        await research_trajectory_memory.complete_step(
+                            session, step=result_step, trajectory=trajectory,
+                            outcome=TrajectoryOutcome.FAILED, error_reason=str(exc),
+                        )
+                    except Exception as exc:
                         logger.exception(
                             "run_daily_opportunity_scraper: unexpected failure processing a post from %s",
                             channel.handle,
                         )
                         errors += 1
+                        await research_trajectory_memory.complete_step(
+                            session, step=result_step, trajectory=trajectory,
+                            outcome=TrajectoryOutcome.FAILED, error_reason=str(exc),
+                        )
 
             for page in config.facebook_pages:
                 # Distinct name from the telegram loop's `source_info` above
@@ -123,25 +177,58 @@ async def _run_daily_opportunity_scraper() -> dict:
                     "source_base_url": f"https://www.facebook.com/{page.page_id}",
                     "target_age": page.target_age,
                 }
+                query_step = await research_trajectory_memory.record_step(
+                    session,
+                    trajectory=trajectory,
+                    action_type="query_source",
+                    query=page.page_id,
+                    source_domain=fb_source_info["source_base_url"],
+                )
                 for raw_text in fetch_new_facebook_posts(page):
                     processed += 1
+                    result_step = await research_trajectory_memory.record_step(
+                        session,
+                        trajectory=trajectory,
+                        action_type="process_result",
+                        query=page.page_id,
+                        source_domain=fb_source_info["source_base_url"],
+                        parent_step_id=query_step.id,
+                    )
                     try:
                         opportunity_data = await process_raw_post_via_ai(raw_text, fb_source_info)
-                        _, was_created = await upsert_opportunity(session, opportunity_data)
+                        opportunity, was_created = await upsert_opportunity(session, opportunity_data)
                         created += int(was_created)
                         updated += int(not was_created)
-                    except AggregatorError:
+                        result_step.reference_id = str(opportunity.id)
+                        await research_trajectory_memory.complete_step(
+                            session,
+                            step=result_step,
+                            trajectory=trajectory,
+                            outcome=TrajectoryOutcome.NEUTRAL,
+                            discovered_opportunities_count=int(was_created),
+                            discovered_entities_count=1,
+                        )
+                    except AggregatorError as exc:
                         logger.exception(
                             "run_daily_opportunity_scraper: AI extraction failed for %s", page.page_id
                         )
                         errors += 1
-                    except Exception:
+                        await research_trajectory_memory.complete_step(
+                            session, step=result_step, trajectory=trajectory,
+                            outcome=TrajectoryOutcome.FAILED, error_reason=str(exc),
+                        )
+                    except Exception as exc:
                         logger.exception(
                             "run_daily_opportunity_scraper: unexpected failure processing a post from %s",
                             page.page_id,
                         )
                         errors += 1
+                        await research_trajectory_memory.complete_step(
+                            session, step=result_step, trajectory=trajectory,
+                            outcome=TrajectoryOutcome.FAILED, error_reason=str(exc),
+                        )
 
+            await research_trajectory_memory.record_outcome(session, trajectory=trajectory)
             await session.commit()
     finally:
         await engine.dispose()
