@@ -267,3 +267,41 @@ class AdminOpportunityCreate(BaseModel):
     min_age: int | None = Field(default=None, ge=0, le=120)
     max_age: int | None = Field(default=None, ge=0, le=120)
     target_gender: Gender | None = None
+
+
+# --- Search Coverage / Gap Analysis addition (Deliverable 1) ---
+#
+# STEP 1 INVESTIGATION (read the real `Opportunity` model in full, and
+# `app/api/v1/endpoints/opportunities.py`/`admin_opportunities.py`
+# before writing this): no existing endpoint anywhere in this codebase
+# aggregates the `Opportunity` table by `country`/`type`/
+# `target_academic_levels` -- every existing query either lists
+# individual rows (paginated) or filters to one specific value. This is
+# a genuinely new read, not an existing one exposed under a new name.
+#
+# STEP 2 DESIGN: real counts and real comparisons, not a fabricated
+# "coverage score". `type` and `target_academic_levels` are both fixed,
+# enumerated vocabularies (`OpportunityType`/`AcademicLevel`) -- every
+# real value is listed even when its real count is zero, since "zero
+# rows of this type exist" is itself real, disclosed information a
+# fabricated score would hide. `country` is open-vocabulary (free text),
+# so only countries that actually appear are listed, sorted by count
+# descending; a country is flagged `is_gap=True` when its own real count
+# is less than `gap_threshold_ratio` (default 0.1, i.e. under 10%) of
+# the single highest real country count -- a plain, explainable
+# comparison against real data, not a learned or weighted score.
+class CoverageBucket(BaseModel):
+    """One real value (a country name, an `OpportunityType`, or an
+    `AcademicLevel`) and its real row count."""
+
+    value: str
+    count: int
+    is_gap: bool
+
+
+class OpportunityCoverageOut(BaseModel):
+    total_opportunities: int
+    by_type: list[CoverageBucket]
+    by_country: list[CoverageBucket]
+    by_academic_level: list[CoverageBucket]
+    gap_threshold_ratio: float

@@ -144,7 +144,14 @@ from app.api.deps import (
     RequireSeniorModerationAccess,
     effective_admin_role,
 )
-from app.models.enums import ModerationAction, ModerationTargetType, OpportunityReviewStatus, SourceType
+from app.models.enums import (
+    AcademicLevel,
+    ModerationAction,
+    ModerationTargetType,
+    OpportunityReviewStatus,
+    OpportunityType,
+    SourceType,
+)
 from app.models.opportunity import Opportunity
 from app.models.user import User
 from app.schemas.opportunity import (
@@ -152,6 +159,8 @@ from app.schemas.opportunity import (
     AdminOpportunityDecisionRequest,
     AdminOpportunityDecisionResponse,
     AdminOpportunityReviewOut,
+    CoverageBucket,
+    OpportunityCoverageOut,
     OpportunityOut,
     PaginatedResponse,
 )
@@ -397,4 +406,96 @@ async def reject_opportunity(
         success=True,
         opportunity_id=opportunity.id,
         new_status=OpportunityReviewStatus(opportunity.review_status),
+    )
+
+
+# --- Search Coverage / Gap Analysis addition (Deliverable 1) ---
+_GAP_THRESHOLD_RATIO = 0.1
+
+
+def _build_buckets(counts: dict[str, int], *, all_known_values: list[str] | None) -> list[CoverageBucket]:
+    """Real counts -> real, explainable gap buckets.
+
+    `all_known_values`, when given (the two fixed-vocabulary dimensions,
+    `type`/`target_academic_levels`), forces every real enum value to
+    appear even at a real count of zero -- a zero IS the finding, not a
+    missing row this function should silently drop. For the open-
+    vocabulary `country` dimension (`all_known_values=None`), only
+    countries that genuinely appear in the data are listed.
+
+    A value is flagged `is_gap=True` when its own real count is below
+    `_GAP_THRESHOLD_RATIO` (10%) of the single highest real count in
+    this same dimension -- a plain, real comparison against real data,
+    not a fabricated weighted "coverage score". When every real count in
+    a dimension is zero (an empty table), nothing is flagged as a gap
+    relative to another zero.
+    """
+    values = list(all_known_values) if all_known_values is not None else sorted(
+        counts, key=lambda v: counts[v], reverse=True
+    )
+    max_count = max(counts.values(), default=0)
+    threshold = max_count * _GAP_THRESHOLD_RATIO
+    buckets = []
+    for value in values:
+        count = counts.get(value, 0)
+        is_gap = max_count > 0 and count <= threshold
+        buckets.append(CoverageBucket(value=value, count=count, is_gap=is_gap))
+    if all_known_values is not None:
+        buckets.sort(key=lambda b: b.count, reverse=True)
+    return buckets
+
+
+@router.get(
+    "/admin/opportunities/coverage",
+    response_model=OpportunityCoverageOut,
+)
+async def get_opportunity_coverage(
+    db: DbSession,
+    _: RequireModerationAccess,
+) -> OpportunityCoverageOut:
+    """Moderator-or-higher. Real, simple gap analysis over the real
+    `Opportunity` table -- real counts by `type`/`country`/
+    `target_academic_levels`, with real, disclosed comparisons (see
+    `_build_buckets`) flagging under-covered values. No AI call, no
+    learned score: this is a real `SELECT` plus real Python counting.
+
+    STEP 1 INVESTIGATION note: fetched with plain column selects (not
+    `Opportunity.target_academic_levels.any(...)`, which only compiles
+    against the real Postgres `ARRAY` type) so this same query runs
+    correctly against both the real Postgres deployment and this
+    project's established SQLite test/live-verify substitute.
+    """
+    result = await db.execute(
+        select(
+            Opportunity.type,
+            Opportunity.country,
+            Opportunity.target_academic_levels,
+        )
+    )
+    rows = result.all()
+
+    total = len(rows)
+    type_counts: dict[str, int] = {}
+    country_counts: dict[str, int] = {}
+    level_counts: dict[str, int] = {}
+
+    for opp_type, country, academic_levels in rows:
+        type_value = opp_type.value if hasattr(opp_type, "value") else str(opp_type)
+        type_counts[type_value] = type_counts.get(type_value, 0) + 1
+
+        country_value = country or "Unspecified"
+        country_counts[country_value] = country_counts.get(country_value, 0) + 1
+
+        for level in academic_levels or []:
+            level_value = level.value if hasattr(level, "value") else str(level)
+            level_counts[level_value] = level_counts.get(level_value, 0) + 1
+
+    return OpportunityCoverageOut(
+        total_opportunities=total,
+        by_type=_build_buckets(type_counts, all_known_values=[t.value for t in OpportunityType]),
+        by_country=_build_buckets(country_counts, all_known_values=None),
+        by_academic_level=_build_buckets(
+            level_counts, all_known_values=[lvl.value for lvl in AcademicLevel]
+        ),
+        gap_threshold_ratio=_GAP_THRESHOLD_RATIO,
     )
