@@ -9,6 +9,7 @@ from app.api.v1.endpoints.admin_signups import router as admin_signups_router
 from app.api.v1.endpoints.admin_chat_reports import router as admin_chat_reports_router
 from app.api.v1.endpoints.admin_high_risk import router as admin_high_risk_router
 from app.api.v1.endpoints.admin_canned_responses import router as admin_canned_responses_router
+from app.api.v1.endpoints.admin_case_notes import router as admin_case_notes_router
 from app.api.v1.endpoints.admin_escalations import router as admin_escalations_router
 from app.api.v1.endpoints.admin_opportunities import router as admin_opportunities_router
 from app.api.v1.endpoints.admin_repeat_offenders import router as admin_repeat_offenders_router
@@ -253,6 +254,13 @@ api_router.include_router(admin_escalations_router)
 # registered -- no path-template ambiguity, registration order is
 # provably irrelevant.
 api_router.include_router(admin_canned_responses_router)
+# `admin_case_notes_router` (Internal Notes on Cases) -- shares the
+# SAME `admin/moderation/{item_type}/{item_id}/...` prefix as
+# `admin_claims_router`/`admin_escalations_router`, diverging at the
+# final literal segment (`notes` vs. `claim`/`escalate`) -- same "no
+# ambiguity, FastAPI matches the full literal path" reasoning as
+# `admin_escalations_router`'s own registration comment above.
+api_router.include_router(admin_case_notes_router)
 # `admin_stats_router` (Phase 5 -- Contribution Stats + The 3 Views) --
 # `/admin/team/summary` diverges from the EXISTING `/admin/team`
 # (`admin_roles_router`, above) at the THIRD path segment (`/admin/team`

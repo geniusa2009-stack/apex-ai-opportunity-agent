@@ -17,6 +17,7 @@ from app.models.bookmark import UserBookmark
 from app.models.canned_response import CannedResponse
 from app.models.budget_planner import BudgetPlanner
 from app.models.career_compass import CareerCompassResult
+from app.models.case_note import CaseNote
 from app.models.chat import ChatMessage, ChatParticipant, ChatRoom
 from app.models.chat_moderation import ChatMessageReport, ChatMessageReportEntry
 from app.models.deadline_alert import DeadlineAlert
@@ -49,6 +50,7 @@ __all__ = [
     "Opportunity",
     "UserBookmark",
     "CannedResponse",
+    "CaseNote",
     "Alumnus",
     "AgentAlert",
     "UserHistory",
