@@ -28,6 +28,7 @@ from app.models.guild_moderation import GuildContentReport, GuildContentReportEn
 from app.models.guilds import Guild, GuildComment, GuildPost, GuildQuest
 from app.models.live_session import LiveSession
 from app.models.moderation_appeal import ModerationAppeal
+from app.models.moderation_escalation import ModerationEscalation
 from app.models.notification import Notification
 from app.models.onboarding import OnboardingChecklistProgress
 from app.models.shift import ShiftAssignment
@@ -89,6 +90,7 @@ __all__ = [
     "MentorshipRelation",
     "LiveSession",
     "ModerationAppeal",
+    "ModerationEscalation",
     "OnboardingChecklistProgress",
     "ShiftAssignment",
 ]

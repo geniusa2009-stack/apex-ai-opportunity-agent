@@ -8,6 +8,7 @@ from app.api.v1.endpoints.admin_guild_reports import router as admin_guild_repor
 from app.api.v1.endpoints.admin_signups import router as admin_signups_router
 from app.api.v1.endpoints.admin_chat_reports import router as admin_chat_reports_router
 from app.api.v1.endpoints.admin_high_risk import router as admin_high_risk_router
+from app.api.v1.endpoints.admin_escalations import router as admin_escalations_router
 from app.api.v1.endpoints.admin_opportunities import router as admin_opportunities_router
 from app.api.v1.endpoints.admin_repeat_offenders import router as admin_repeat_offenders_router
 from app.api.v1.endpoints.moderation_appeals import router as moderation_appeals_router
@@ -232,6 +233,19 @@ api_router.include_router(admin_activity_log_router)
 # `admin_activity_log_router` simply because both are recent additions
 # to the same moderation subsystem.
 api_router.include_router(admin_claims_router)
+# `admin_escalations_router` (Escalation Path Between Volunteers) --
+# `POST`/`DELETE /admin/moderation/{item_type}/{item_id}/escalate`
+# shares the SAME `admin/moderation/{item_type}/{item_id}/...` prefix
+# as `admin_claims_router` immediately above, diverging only at the
+# final literal segment (`escalate` vs. `claim`) -- FastAPI matches on
+# the full literal path, so this is no more ambiguous than `claim`/
+# `release` already being two different HTTP methods on the identical
+# path. `GET /admin/escalations` is a brand-new top-level literal
+# sharing no segment position with any other route already registered.
+# Registration order is provably irrelevant either way; placed
+# immediately after `admin_claims_router` since both are the same
+# `{item_type}/{item_id}` dispatch pattern.
+api_router.include_router(admin_escalations_router)
 # `admin_stats_router` (Phase 5 -- Contribution Stats + The 3 Views) --
 # `/admin/team/summary` diverges from the EXISTING `/admin/team`
 # (`admin_roles_router`, above) at the THIRD path segment (`/admin/team`

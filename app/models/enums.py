@@ -691,6 +691,21 @@ class ModerationAction(str, enum.Enum):
     # claim was accurate.
     OPPORTUNITY_MANUAL_CREATE = "opportunity_manual_create"
 
+    # --- Escalation Path Between Volunteers addition (migration 0051) ---
+    # A real, distinct gap confirmed during this task's own Step 1
+    # investigation: no generic "flag this item for more senior
+    # attention" mechanism existed anywhere (see
+    # `app/models/moderation_escalation.py`'s own module docstring for
+    # the full investigation, including why `CHAT_REPORT_ESCALATE_BAN`
+    # is a real but unrelated concept). `target_type`/`target_id` here
+    # are the SAME item being escalated (not the escalation row's own
+    # id) -- same direct-target convention `OPPORTUNITY_APPROVE`/
+    # `OPPORTUNITY_REJECT` already use, so this feature's actions show
+    # up correctly on that item's own activity-log history, not just in
+    # `moderation_escalations` itself.
+    ESCALATE = "escalate"
+    ESCALATION_RESOLVE = "escalation_resolve"
+
 
 class ModerationTargetType(str, enum.Enum):
     """What kind of real row a `ModerationLogEntry.target_id` refers to
