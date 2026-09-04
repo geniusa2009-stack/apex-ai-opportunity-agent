@@ -752,7 +752,19 @@ class TestVerifyNewOpportunitiesIntegration:
             assert len(steps) == 1
             meta = steps[0].step_metadata
             assert meta["primary_provider"] == "openai"
-            assert meta["stopped_early"] is True
+            # D4.1: `source_authority_known` is honestly `False` (no real
+            # resolver exists in this codebase -- see D4.1's report), so
+            # `should_stop` correctly refuses to stop early even though
+            # confidence was high; escalation IS requested, but since
+            # OpenAI is the only real verification-suitable provider in
+            # this codebase today, there is no eligible alternative --
+            # execution stops safely instead of faking a second call.
+            assert meta["stopped_early"] is False
+            assert meta["escalation_triggered"] is True
+            assert meta["escalation_unavailable"] is True
+            assert len(meta["attempts"]) == 1
+            assert meta["attempts"][0]["provider"] == "openai"
+            assert meta["attempts"][0]["outcome"] == "legitimate"
 
     async def test_provider_failure_is_recorded_as_fallback_in_trace(self, db_session_factory):
         from app.workers.tasks import _verify_new_opportunities
@@ -773,6 +785,13 @@ class TestVerifyNewOpportunitiesIntegration:
             meta = steps[0].step_metadata
             assert meta["fallback_used"] is True
             assert "openai timeout" in meta["fallback_reason"]
+            # D4.1: exactly one real provider attempt was made -- the
+            # bounded execution loop does not retry the same provider to
+            # simulate escalation, and there is no eligible alternative.
+            assert len(meta["attempts"]) == 1
+            assert meta["attempts"][0]["provider"] == "openai"
+            assert meta["attempts"][0]["outcome"] == "provider_call_failed"
+            assert meta["escalation_unavailable"] is True
 
     async def test_orchestration_failure_never_blocks_real_verification(self, db_session_factory, monkeypatch):
         """A broken orchestrator must never corrupt/block the real,
@@ -804,6 +823,300 @@ class TestVerifyNewOpportunitiesIntegration:
             from app.models.opportunity import Opportunity
             saved = await db.get(Opportunity, opp_id)
             assert saved.is_verified is True
+
+
+# ---------------------------------------------------------------------
+# M2. Bounded Execution Controller (Deliverable 4.1)
+# ---------------------------------------------------------------------
+#
+# `execute_verification` is the ONLY call site left that invokes the
+# real `ai_gateway.verify_and_embed` for a routed opportunity -- these
+# tests exercise its bounded attempt loop directly (not just through
+# `_verify_new_opportunities`) so the STOP/ESCALATE/budget/failure
+# control-flow guarantees are pinned precisely.
+
+
+@pytest.mark.asyncio
+class TestExecutionControl:
+    async def _routed(self, db, *, country="Egypt", opp_type="scholarship"):
+        from app.models.opportunity import Opportunity
+
+        opp_id = await _make_opportunity(db, country=country, opp_type=opp_type)
+        opportunity = await db.get(Opportunity, opp_id)
+        decision, trajectory, step = await ro.orchestrate_verification(db, opportunity=opportunity)
+        await db.commit()
+        return opportunity, decision, trajectory, step
+
+    async def test_stop_prevents_a_second_provider_call(self, db_session_factory, monkeypatch):
+        """A. First attempt succeeds, the orchestrator's STOP decision is
+        honored, and the provider is called exactly once."""
+        monkeypatch.setattr(ro, "should_stop", lambda evidence, policy: (True, "test: evidence sufficient"))
+
+        schema = VerifiedOpportunitySchema(
+            title="X", eligibility_criteria="anyone", funding_details=None, deadline=None,
+            is_legitimate=True, confidence_score=0.95, min_age=None, max_age=None,
+            target_gender=None, target_academic_levels=None,
+        )
+        call_count = 0
+
+        async def _fake_verify(_raw):
+            nonlocal call_count
+            call_count += 1
+            return schema, [0.1] * 1536
+
+        monkeypatch.setattr(ro.ai_gateway, "verify_and_embed", _fake_verify)
+
+        async with db_session_factory() as db:
+            opportunity, decision, trajectory, step = await self._routed(db)
+            result_schema, embedding, decision = await ro.execute_verification(
+                db, opportunity=opportunity, decision=decision, trajectory=trajectory, step=step
+            )
+            await db.commit()
+
+        assert call_count == 1
+        assert result_schema is not None
+        assert decision.stopped_early is True
+        assert len(decision.attempts) == 1
+
+    async def test_escalate_calls_a_second_genuinely_eligible_provider(self, db_session_factory, monkeypatch):
+        """B. A second candidate is only ever tried if it is real: task-
+        suitable AND genuinely available. Since only OpenAI carries
+        `VERIFICATION` suitability in the real, production
+        `PROVIDER_CAPABILITIES` registry today, this test injects a
+        clearly test-only second capability entry (NOT a real production
+        capability -- see the module docstring's own disclosure of this
+        fact) to exercise the second-call path at all."""
+        test_only_second = ro.ProviderCapability(
+            provider=ro.ProviderName.GEMINI,
+            model="test-only-escalation-model",
+            task_suitability=frozenset({ro.ReasoningTaskType.VERIFICATION}),
+            structured_output=False, tool_use=False, long_context=False, multimodal=False,
+            reasoning_strength="low", low_latency=True, low_cost=True,
+            priority=1, api_key_setting="gemini_api_key",
+        )
+        monkeypatch.setattr(ro, "PROVIDER_CAPABILITIES", ro.PROVIDER_CAPABILITIES + (test_only_second,))
+        # Both real (OpenAI, priority=0) and test-only (Gemini, priority=1)
+        # candidates genuinely "available" here -- OpenAI still sorts
+        # first (lower priority), so the primary call is the real one.
+        monkeypatch.setattr(ro.settings, "openai_api_key", "test-only-real-looking-key")
+        monkeypatch.setattr(ro.settings, "gemini_api_key", "test-only-real-looking-key")
+
+        failing_schema_exc = TimeoutError("openai timeout")
+        success_schema = VerifiedOpportunitySchema(
+            title="Y", eligibility_criteria="anyone", funding_details=None, deadline=None,
+            is_legitimate=True, confidence_score=0.9, min_age=None, max_age=None,
+            target_gender=None, target_academic_levels=None,
+        )
+        calls = []
+
+        async def _fake_verify(_raw):
+            calls.append(len(calls) + 1)
+            if len(calls) == 1:
+                raise failing_schema_exc
+            return success_schema, [0.2] * 1536
+
+        monkeypatch.setattr(ro.ai_gateway, "verify_and_embed", _fake_verify)
+
+        async with db_session_factory() as db:
+            opportunity, decision, trajectory, step = await self._routed(db, country="Global")
+            result_schema, embedding, decision = await ro.execute_verification(
+                db, opportunity=opportunity, decision=decision, trajectory=trajectory, step=step
+            )
+            await db.commit()
+
+        assert len(calls) == 2
+        assert result_schema is not None  # the second, genuinely-eligible provider succeeded
+        assert len(decision.attempts) == 2
+        assert decision.attempts[0]["provider"] == "openai"
+        assert decision.attempts[0]["outcome"] == "provider_call_failed"
+        assert decision.attempts[1]["provider"] == "gemini"
+        assert decision.attempts[1]["outcome"] == "legitimate"
+        # Both real (OpenAI) and test-only (Gemini) candidates have now
+        # been tried -- no third VERIFICATION-suitable candidate exists,
+        # so a further escalation request still correctly reports
+        # unavailable rather than looping back onto an already-tried
+        # provider.
+        assert decision.escalation_unavailable is True
+
+    async def test_escalate_with_no_alternative_provider_stops_safely(self, db_session_factory, monkeypatch):
+        """C. Against the REAL production registry (only OpenAI has
+        VERIFICATION suitability): first provider called once, no
+        duplicate call to the same provider, `escalation_unavailable` is
+        recorded, execution terminates without a second call."""
+        schema = VerifiedOpportunitySchema(
+            title="Z", eligibility_criteria="anyone", funding_details=None, deadline=None,
+            is_legitimate=True, confidence_score=0.6, min_age=None, max_age=None,
+            target_gender=None, target_academic_levels=None,
+        )
+        call_count = 0
+
+        async def _fake_verify(_raw):
+            nonlocal call_count
+            call_count += 1
+            return schema, [0.1] * 1536
+
+        monkeypatch.setattr(ro.ai_gateway, "verify_and_embed", _fake_verify)
+
+        async with db_session_factory() as db:
+            opportunity, decision, trajectory, step = await self._routed(db)
+            result_schema, embedding, decision = await ro.execute_verification(
+                db, opportunity=opportunity, decision=decision, trajectory=trajectory, step=step
+            )
+            await db.commit()
+            trajectory_id = trajectory.id
+
+        assert call_count == 1
+        assert len(decision.attempts) == 1
+        assert decision.attempts[0]["provider"] == "openai"
+        assert decision.escalation_unavailable is True
+
+        async with db_session_factory() as fresh_db:
+            trace = await ro.get_routing_trace(fresh_db, trajectory_id)
+            assert trace["escalation_unavailable"] is True
+            assert len(trace["attempts"]) == 1
+
+    async def test_maximum_attempts_are_strictly_bounded(self, db_session_factory, monkeypatch):
+        """D. Even if escalation keeps firing and candidates keep
+        appearing available, the loop never exceeds
+        `policy.max_provider_calls`."""
+        # Three test-only, always-available, VERIFICATION-suitable
+        # capabilities on top of the real OpenAI one -- deliberately
+        # more than any real DepthPolicy.max_provider_calls, to prove
+        # the ceiling is real and not just "ran out of candidates".
+        extra = tuple(
+            ro.ProviderCapability(
+                provider=p, model=f"test-only-{p.value}",
+                task_suitability=frozenset({ro.ReasoningTaskType.VERIFICATION}),
+                structured_output=False, tool_use=False, long_context=False, multimodal=False,
+                reasoning_strength="low", low_latency=True, low_cost=True,
+                priority=5, api_key_setting=f"{p.value}_api_key",
+            )
+            for p in (ro.ProviderName.ANTHROPIC, ro.ProviderName.GEMINI, ro.ProviderName.GROQ)
+        )
+        monkeypatch.setattr(ro, "PROVIDER_CAPABILITIES", ro.PROVIDER_CAPABILITIES + extra)
+        for cap in extra:
+            monkeypatch.setattr(ro.settings, cap.api_key_setting, "test-only-real-looking-key")
+        # Force escalation every single time so only the hard call-count
+        # ceiling -- not a lack of triggers -- can end the loop.
+        monkeypatch.setattr(ro, "should_stop", lambda evidence, policy: (False, "test: never stop"))
+        monkeypatch.setattr(ro, "should_escalate", lambda *a, **k: (True, ["test: always escalate"]))
+
+        schema = VerifiedOpportunitySchema(
+            title="W", eligibility_criteria="anyone", funding_details=None, deadline=None,
+            is_legitimate=True, confidence_score=0.99, min_age=None, max_age=None,
+            target_gender=None, target_academic_levels=None,
+        )
+        call_count = 0
+
+        async def _fake_verify(_raw):
+            nonlocal call_count
+            call_count += 1
+            return schema, [0.1] * 1536
+
+        monkeypatch.setattr(ro.ai_gateway, "verify_and_embed", _fake_verify)
+
+        async with db_session_factory() as db:
+            opportunity, decision, trajectory, step = await self._routed(db, country="Global")
+            policy = ro.DEPTH_POLICIES[decision.depth]
+            await ro.execute_verification(
+                db, opportunity=opportunity, decision=decision, trajectory=trajectory, step=step
+            )
+            await db.commit()
+
+        assert call_count == policy.max_provider_calls
+        assert call_count <= policy.max_provider_calls  # never exceeded, regardless of trigger count
+        assert len(decision.attempts) == policy.max_provider_calls
+
+    async def test_provider_failure_bounded_escalation_no_infinite_retry(self, db_session_factory, monkeypatch):
+        """E. A failed attempt is recorded; escalation is only attempted
+        within the real budget; there is no infinite retry loop even
+        when every attempt fails."""
+        call_count = 0
+
+        async def _always_fails(_raw):
+            nonlocal call_count
+            call_count += 1
+            raise TimeoutError("openai timeout")
+
+        monkeypatch.setattr(ro.ai_gateway, "verify_and_embed", _always_fails)
+
+        async with db_session_factory() as db:
+            opportunity, decision, trajectory, step = await self._routed(db)
+            policy = ro.DEPTH_POLICIES[decision.depth]
+            result_schema, embedding, decision = await ro.execute_verification(
+                db, opportunity=opportunity, decision=decision, trajectory=trajectory, step=step
+            )
+            await db.commit()
+
+        assert result_schema is None
+        assert call_count <= policy.max_provider_calls
+        assert call_count == 1  # single real VERIFICATION-suitable provider -- no eligible alternative to retry
+        assert decision.attempts[-1]["outcome"] == "provider_call_failed"
+        assert decision.escalation_unavailable is True
+
+    async def test_source_authority_is_never_hardcoded_true(self, db_session_factory, monkeypatch):
+        """F. The execution path no longer hardcodes
+        `source_authority_known=True` -- even a high-confidence,
+        legitimate result leaves it honestly `False` because no real
+        source-authority resolver exists in this codebase."""
+        schema = VerifiedOpportunitySchema(
+            title="Trusted-looking", eligibility_criteria="anyone", funding_details="full", deadline=None,
+            is_legitimate=True, confidence_score=0.99, min_age=None, max_age=None,
+            target_gender=None, target_academic_levels=None,
+        )
+
+        async def _fake_verify(_raw):
+            return schema, [0.1] * 1536
+
+        monkeypatch.setattr(ro.ai_gateway, "verify_and_embed", _fake_verify)
+
+        async with db_session_factory() as db:
+            opportunity, decision, trajectory, step = await self._routed(db)
+            await ro.execute_verification(
+                db, opportunity=opportunity, decision=decision, trajectory=trajectory, step=step
+            )
+            await db.commit()
+
+        # A confidence of 0.99 alone must NOT be enough to stop, because
+        # `should_stop` also requires `source_authority_known` -- if this
+        # were still hardcoded True, `stopped_early` would be True here.
+        assert decision.stopped_early is False
+        assert any("source authority" in r for r in decision.escalation_reasons)
+
+    async def test_trajectory_records_actual_attempts_not_hypothetical_ones(self, db_session_factory, monkeypatch):
+        """G. When routing selects a provider but the bounded loop caps
+        out before trying it (budget already exhausted), the trajectory
+        must not claim a successful call that never happened. Here we
+        assert the normal, real case: exactly the attempts that were
+        actually made are the ones recorded, with real outcomes."""
+        schema = VerifiedOpportunitySchema(
+            title="Real Call", eligibility_criteria="anyone", funding_details=None, deadline=None,
+            is_legitimate=False, confidence_score=0.3, min_age=None, max_age=None,
+            target_gender=None, target_academic_levels=None,
+        )
+
+        async def _fake_verify(_raw):
+            return schema, [0.1] * 1536
+
+        monkeypatch.setattr(ro.ai_gateway, "verify_and_embed", _fake_verify)
+
+        async with db_session_factory() as db:
+            opportunity, decision, trajectory, step = await self._routed(db)
+            result_schema, embedding, decision = await ro.execute_verification(
+                db, opportunity=opportunity, decision=decision, trajectory=trajectory, step=step
+            )
+            await db.commit()
+            trajectory_id = trajectory.id
+
+        assert result_schema is not None
+        assert result_schema.is_legitimate is False
+
+        async with db_session_factory() as fresh_db:
+            trace = await ro.get_routing_trace(fresh_db, trajectory_id)
+            assert len(trace["attempts"]) == 1
+            assert trace["attempts"][0]["provider"] == "openai"
+            assert trace["attempts"][0]["outcome"] == "flagged"
+            assert trace["attempts"][0]["confidence_score"] == 0.3
 
 
 # ---------------------------------------------------------------------

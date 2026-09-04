@@ -136,17 +136,22 @@ async def _verify_new_opportunities(limit: int) -> dict:
             for opportunity in opportunities:
                 processed += 1
 
-                # Adaptive Research Orchestrator & Model Routing addition
-                # (Deliverable 4): routes THIS verification objective
-                # (real complexity classification + D1/D2/D3 signals),
-                # persists the decision as a real D3 trajectory step,
-                # BEFORE the real verification call below -- which is
-                # otherwise completely unchanged (same `ai_gateway.
-                # verify_and_embed` call site every pre-existing test
-                # mocks). Best-effort: an orchestration failure must
-                # never block real verification, same posture as the
-                # entity_relationship_service/research_trajectory_memory
-                # calls elsewhere in this function.
+                # Adaptive Research Orchestrator & Model Routing (Deliverable 4)
+                # + Execution Control Fix (Deliverable 4.1): routes THIS
+                # verification objective (real complexity classification +
+                # D1/D2/D3 signals), persists the decision as a real D3
+                # trajectory step, then the ONLY real `ai_gateway.
+                # verify_and_embed` call for a routed opportunity happens
+                # inside `execute_verification`'s bounded attempt loop --
+                # which actually obeys should_stop/should_escalate rather
+                # than calling the provider unconditionally and only
+                # recording the decision afterward. Best-effort: an
+                # orchestration failure must never block real verification
+                # (same posture as the entity_relationship_service/
+                # research_trajectory_memory calls elsewhere in this
+                # function) -- in that case only, we fall back to a single
+                # direct, unrouted `ai_gateway.verify_and_embed` call so an
+                # orchestrator bug never takes down verification itself.
                 routing = None
                 try:
                     routing_decision, routing_trajectory, routing_step = await research_orchestrator.orchestrate_verification(
@@ -160,32 +165,35 @@ async def _verify_new_opportunities(limit: int) -> dict:
                         opportunity.id,
                     )
 
-                try:
-                    verification, embedding = await ai_gateway.verify_and_embed(
-                        opportunity.raw_extracted_data or {}
-                    )
-                except Exception as exc:
-                    logger.exception(
-                        "AI verification call failed for opportunity %s", opportunity.id
-                    )
+                if routing is not None:
+                    try:
+                        verification, embedding, routing_decision = await research_orchestrator.execute_verification(
+                            session,
+                            opportunity=opportunity,
+                            decision=routing[0],
+                            trajectory=routing[1],
+                            step=routing[2],
+                        )
+                        routing = (routing_decision, routing[1], routing[2])
+                    except Exception:
+                        logger.exception(
+                            "research_orchestrator.execute_verification failed for opportunity %s",
+                            opportunity.id,
+                        )
+                        verification, embedding = None, None
+                else:
+                    try:
+                        verification, embedding = await ai_gateway.verify_and_embed(
+                            opportunity.raw_extracted_data or {}
+                        )
+                    except Exception:
+                        logger.exception(
+                            "AI verification call failed for opportunity %s", opportunity.id
+                        )
+                        verification, embedding = None, None
+
+                if verification is None:
                     errors += 1
-                    if routing is not None:
-                        try:
-                            await research_orchestrator.record_routing_outcome(
-                                session,
-                                decision=routing[0],
-                                trajectory=routing[1],
-                                step=routing[2],
-                                evidence=research_orchestrator.EvidenceState(
-                                    provider_call_failed=True, provider_call_error=str(exc)[:500]
-                                ),
-                            )
-                        except Exception:
-                            logger.exception(
-                                "research_orchestrator.record_routing_outcome failed for opportunity %s "
-                                "after a real verification failure",
-                                opportunity.id,
-                            )
                     continue
 
                 if (
@@ -265,30 +273,11 @@ async def _verify_new_opportunities(limit: int) -> dict:
                         opportunity.id,
                     )
 
-                # Deliverable 4: close the loop on the routing trace opened
-                # above with the REAL verification result -- applies
-                # should_stop/should_escalate, updates step_metadata, never
-                # writes to `opportunity` itself. Best-effort.
-                if routing is not None:
-                    try:
-                        await research_orchestrator.record_routing_outcome(
-                            session,
-                            decision=routing[0],
-                            trajectory=routing[1],
-                            step=routing[2],
-                            evidence=research_orchestrator.EvidenceState(
-                                confidence_score=verification.confidence_score,
-                                is_legitimate=verification.is_legitimate,
-                                source_authority_known=True,
-                                required_fields_present=bool(verification.eligibility_criteria),
-                            ),
-                        )
-                    except Exception:
-                        logger.exception(
-                            "research_orchestrator.record_routing_outcome failed for opportunity %s "
-                            "-- verification itself still succeeded",
-                            opportunity.id,
-                        )
+                # Deliverable 4.1: the routing trace for this opportunity was
+                # already closed out inside `execute_verification` (real
+                # should_stop/should_escalate against the REAL verification
+                # result, before `verification`/`embedding` were even
+                # returned to this loop) -- nothing left to do here.
 
             await session.commit()
     finally:

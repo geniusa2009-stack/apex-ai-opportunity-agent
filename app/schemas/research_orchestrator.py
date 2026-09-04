@@ -33,6 +33,8 @@ class RoutingDecisionOut(BaseModel):
     fallback_reason: str | None
     stopped_early: bool
     stop_reason: str | None
+    escalation_unavailable: bool = False
+    attempts: list[dict] = []
     trajectory_signals: dict
     decided_at: datetime | None
 
