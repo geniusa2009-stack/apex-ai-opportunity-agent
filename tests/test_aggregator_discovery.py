@@ -371,7 +371,7 @@ def _config(n_channels: int) -> SourcesConfig:
 def _fields(url: str) -> AIExtractedOpportunityFields:
     return AIExtractedOpportunityFields(
         title=f"Opportunity at {url}", description="A real extracted opportunity.", deadline=None,
-        original_link=url, target_age_group="university", is_local_egypt=False, opportunity_type="scholarship",
+        original_link=url, target_age_group="university", country_hint="Global", opportunity_type="scholarship",
     )
 
 

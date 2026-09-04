@@ -60,6 +60,7 @@ from app.models.enums import OpportunityType, SourceType
 from app.models.opportunity import Opportunity
 from app.models.source import Source
 from app.schemas.opportunity import OpportunityCreate
+from app.services.taxonomy import normalize_country
 
 logger = logging.getLogger(__name__)
 
@@ -249,8 +250,20 @@ class AIExtractedOpportunityFields(BaseModel):
         default=None,
         description="e.g. 'prep_secondary', 'university', 'graduates', or null if not determinable.",
     )
-    is_local_egypt: bool = Field(
-        description="True if this is strictly an Egyptian local opportunity, false if global/international."
+    country_hint: str | None = Field(
+        default=None,
+        description=(
+            "The country or geographic scope EXPLICITLY supported by the post's own text "
+            "(e.g. 'Egypt', 'France', 'Kenya', 'United States', 'United Kingdom', 'Global', "
+            "'Online'), or null if the post states no geography at all. D5.1 (Global Country "
+            "Extraction Unblock): this replaced the earlier Egypt-only `is_local_egypt: bool` "
+            "field, which structurally capped every extraction at Egypt-or-Global. This is a "
+            "discovery/extraction signal only -- it must NEVER be guessed from language, "
+            "organization name, or source-channel origin (see the system prompt's own "
+            "no-guessing rule), and it establishes no legitimacy/eligibility/verification "
+            "status; `Opportunity.is_verified` stays independently False on every insert this "
+            "module makes, exactly as before (see `upsert_opportunity`)."
+        ),
     )
     opportunity_type: str = Field(
         description="Best-fit classification: one of 'scholarship', 'internship', 'volunteer', 'course'."
@@ -260,8 +273,8 @@ class AIExtractedOpportunityFields(BaseModel):
 _EXTRACTION_SYSTEM_PROMPT = """\
 Analyze this social media post. Clean the Arabic/English text. Extract the \
 opportunity Title, Description, Deadline (ISO format), Original Application \
-Link, Target Age Group, and determine if it is strictly an Egyptian local \
-opportunity (is_local_egypt: true) or global. Return valid JSON.
+Link, Target Age Group, and the country or geographic scope the post's own \
+text explicitly supports (country_hint). Return valid JSON.
 
 You must return a strict JSON object with these exact keys:
 - 'title': string, a clean, human-readable title.
@@ -272,8 +285,16 @@ deadline is stated.
 the post, null if none is present. Never invent a link that isn't in the text.
 - 'target_age_group': string or null, e.g. 'prep_secondary', 'university', \
 'graduates', null if not determinable from the post.
-- 'is_local_egypt': boolean, true only if this is STRICTLY an Egyptian local \
-opportunity, false if it is global/international or the location is unclear.
+- 'country_hint': string or null, the specific country or geographic scope \
+(e.g. 'Egypt', 'France', 'Kenya', 'United States', 'United Kingdom', \
+'Global', 'Online') that the post's own text EXPLICITLY states or clearly \
+supports. Do NOT guess a country from the language the post is written in, \
+from an organization's name sounding like it belongs to a particular \
+country, or from which channel/page the post came from -- extract only \
+what the post's own content actually says. If the post explicitly says the \
+opportunity is global/international/worldwide/remote/online, return \
+'Global'. If no geographic scope can be determined from the post's own \
+text, return null.
 - 'opportunity_type': string, your best-fit classification of this \
 opportunity as exactly one of: 'scholarship', 'internship', 'volunteer', \
 'course'. Use 'course' for training programs, workshops, or general \
@@ -396,8 +417,21 @@ async def process_raw_post_via_ai(raw_text: str, source_info: dict) -> Opportuni
     """
     extracted = await _extract_fields_via_gemini(raw_text, source_info)
 
-    is_local_egypt = extracted.is_local_egypt
-    country = "Egypt" if is_local_egypt else "Global"
+    # D5.1 (Global Country Extraction Unblock): `country_hint` is the raw,
+    # country-neutral text the extraction step produced (see
+    # `AIExtractedOpportunityFields.country_hint`'s own docstring) -- no
+    # Egypt-specific branching happens here. `Opportunity.country` keeps
+    # its existing, disclosed posture (free text, "Global" fallback when
+    # nothing is stated -- see module docstring) rather than introducing a
+    # third null/"Unknown" state this column has never held before.
+    # `is_local_egypt` (the real, indexed DB column the student dashboard's
+    # own fast-boolean filter depends on -- see `dashboards.py`) is then
+    # DERIVED downstream from that same value via the existing
+    # `taxonomy.normalize_country` layer, rather than being a primary
+    # extraction signal -- it is exactly the "Egypt" special case of a now
+    # country-neutral pipeline, not the pipeline's ceiling.
+    country = extracted.country_hint.strip() if extracted.country_hint and extracted.country_hint.strip() else "Global"
+    is_local_egypt = normalize_country(country) == "EG"
 
     return OpportunityCreate(
         title=extracted.title,

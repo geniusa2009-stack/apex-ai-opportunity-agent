@@ -150,6 +150,34 @@ COUNTRY_ALIASES: dict[str, str] = {
     "international": "GLOBAL",
     "عالمي": "GLOBAL",
     "دولي": "GLOBAL",
+    # D5.1 (Global Country Extraction Unblock): the upstream AI
+    # extraction layer (`aggregator_service.process_raw_post_via_ai`)
+    # can now emit a real free-text `country_hint` other than
+    # "Egypt"/"Global" (see that module's own docstring). These entries
+    # are the exact, minimal set this deliverable's own multilingual
+    # test cases require -- English + real Arabic/French synonyms for
+    # France and Kenya (the two languages/countries the spec's own
+    # behavioral test cases name), plus the three other countries named
+    # in the spec's example list (Germany, United States, United
+    # Kingdom) in English only, since no test case requires their
+    # Arabic/French synonyms. Same one-line-per-alias extension
+    # posture as the Egypt/Global entries above -- not a country
+    # database, still a small explicit static table.
+    "france": "FR",
+    "fr": "FR",
+    "فرنسا": "FR",
+    "kenya": "KE",
+    "ke": "KE",
+    "كينيا": "KE",
+    "germany": "DE",
+    "allemagne": "DE",
+    "united states": "US",
+    "united states of america": "US",
+    "usa": "US",
+    "us": "US",
+    "united kingdom": "GB",
+    "uk": "GB",
+    "great britain": "GB",
 }
 
 

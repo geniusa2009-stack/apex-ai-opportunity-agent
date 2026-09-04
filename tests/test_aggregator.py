@@ -44,6 +44,7 @@ from app.models.opportunity import Opportunity
 from app.models.source import Source
 from app.schemas.opportunity import OpportunityCreate
 from app.services import aggregator_service
+from app.services.taxonomy import normalize_country
 from app.services.aggregator_service import (
     AIExtractedOpportunityFields,
     FacebookPageConfig,
@@ -97,7 +98,7 @@ def _mock_gemini_extraction(**overrides) -> AsyncMock:
         deadline="2026-08-30",
         original_link="https://careers.vodafone.com.eg/summer-internship-2026",
         target_age_group="university",
-        is_local_egypt=True,
+        country_hint="Egypt",
         opportunity_type="internship",
     )
     defaults.update(overrides)
@@ -130,14 +131,14 @@ class TestAIPromptParsing:
         assert result.deadline == datetime(2026, 8, 30)
         assert result.target_age_group == "university"
         assert result.is_local_egypt is True
-        assert result.country == "Egypt", "is_local_egypt=True must derive country='Egypt'"
+        assert result.country == "Egypt", "country_hint='Egypt' must derive country='Egypt'"
         assert result.source_name == "@tadrebat_1"
         assert result.source_type == SourceType.TELEGRAM
         assert result.source_base_url == "https://t.me/tadrebat_1"
 
     @pytest.mark.asyncio
     async def test_global_opportunity_derives_country_global(self):
-        with _mock_gemini_extraction(is_local_egypt=False, title="Global DAAD Scholarship"):
+        with _mock_gemini_extraction(country_hint="Global", title="Global DAAD Scholarship"):
             result = await process_raw_post_via_ai("some global scholarship post", _SAMPLE_SOURCE_INFO)
 
         assert result.is_local_egypt is False
@@ -427,3 +428,167 @@ class TestDatabasePersistence:
                 await session.execute(select(func.count()).select_from(Source).where(Source.name == "@tadrebat_1"))
             ).scalar_one()
             assert count == 1
+
+
+# ---------------------------------------------------------------------
+# D5.1 -- Global Country Extraction Unblock.
+#
+# `process_raw_post_via_ai` used to derive `Opportunity.country` from a
+# single Egypt-specific boolean (`is_local_egypt`), which structurally
+# capped every extraction at "Egypt" or "Global" no matter what a post's
+# own text actually said. `AIExtractedOpportunityFields.country_hint`
+# (a free-text `str | None`) replaces that boolean; this class proves the
+# extractor can now carry a real non-Egypt country through to
+# `OpportunityCreate.country`, that `is_local_egypt` (the real, indexed DB
+# column `dashboards.py`'s own local-Egypt filter depends on) is still
+# correctly derived downstream via the EXISTING `taxonomy.normalize_country`
+# layer, and that no Egypt-guessing happens for Arabic-language content
+# that doesn't itself state a country.
+#
+# Same "mock `_extract_fields_via_gemini`, exercise everything else for
+# real" boundary as `TestAIPromptParsing` above -- the multilingual cases
+# (Tests 4/5) prove the DOWNSTREAM pipeline correctly carries an
+# Arabic/French-sourced `country_hint` string through to
+# `country`/`is_local_egypt`; they do not exercise a live Gemini call
+# (no API key in this sandbox), matching this module's own established
+# mocking convention.
+# ---------------------------------------------------------------------
+
+
+class TestCountryHintExtraction:
+    pytestmark = pytest.mark.asyncio
+
+    async def test_01_explicit_egypt_country_hint_yields_egypt(self):
+        """Test 1: Egypt, explicit -> country_hint='Egypt'."""
+        with _mock_gemini_extraction(country_hint="Egypt"):
+            result = await process_raw_post_via_ai(_SAMPLE_ARABIC_POST, _SAMPLE_SOURCE_INFO)
+
+        assert result.country == "Egypt"
+        assert result.is_local_egypt is True
+
+    async def test_02_explicit_france_country_hint_yields_france(self):
+        """Test 2: France, explicit -> France. Proves the extractor is no
+        longer structurally capped at Egypt/Global."""
+        with _mock_gemini_extraction(
+            country_hint="France", title="Scholarship for students in France"
+        ):
+            result = await process_raw_post_via_ai(
+                "Scholarship for students in France", _SAMPLE_SOURCE_INFO
+            )
+
+        assert result.country == "France"
+        assert result.is_local_egypt is False
+
+    async def test_03_explicit_kenya_country_hint_yields_kenya(self):
+        """Test 3: Kenya, explicit -> Kenya."""
+        with _mock_gemini_extraction(
+            country_hint="Kenya", title="Programme destiné aux étudiants au Kenya"
+        ):
+            result = await process_raw_post_via_ai(
+                "Programme destiné aux étudiants au Kenya", _SAMPLE_SOURCE_INFO
+            )
+
+        assert result.country == "Kenya"
+        assert result.is_local_egypt is False
+
+    async def test_04_arabic_source_explicitly_stating_france_yields_france(self):
+        """Test 4: Arabic source explicitly says France ("منحة للدراسة في
+        فرنسا") -> France. Proves multilingual EXPLICIT geography is
+        carried through -- the raw Arabic post text is passed in; the
+        mocked extraction stands in for what Gemini would return for it
+        (no live Gemini call is made in this sandbox)."""
+        arabic_post = "منحة للدراسة في فرنسا لطلاب كلية الهندسة"
+        with _mock_gemini_extraction(
+            country_hint="France", title="منحة للدراسة في فرنسا"
+        ):
+            result = await process_raw_post_via_ai(arabic_post, _SAMPLE_SOURCE_INFO)
+
+        assert result.country == "France"
+        assert result.is_local_egypt is False
+
+    async def test_05_french_source_explicitly_stating_kenya_yields_kenya(self):
+        """Test 5: French source explicitly says Kenya ("Programme destiné
+        aux étudiants au Kenya") -> Kenya."""
+        french_post = "Programme destiné aux étudiants au Kenya, candidature ouverte."
+        with _mock_gemini_extraction(country_hint="Kenya", title="Programme au Kenya"):
+            result = await process_raw_post_via_ai(french_post, _SAMPLE_SOURCE_INFO)
+
+        assert result.country == "Kenya"
+        assert result.is_local_egypt is False
+
+    async def test_06_explicit_global_worldwide_yields_existing_global_representation(self):
+        """Test 6: Global/worldwide explicit -> the existing 'Global'
+        sentinel representation (same one `taxonomy.normalize_country`
+        already maps to 'GLOBAL'), not a new/second representation."""
+        with _mock_gemini_extraction(country_hint="Worldwide", title="Worldwide open call"):
+            result = await process_raw_post_via_ai("open to applicants worldwide", _SAMPLE_SOURCE_INFO)
+
+        assert result.country == "Worldwide"
+        assert normalize_country(result.country) == "GLOBAL"
+        assert result.is_local_egypt is False
+
+    async def test_07_no_geography_falls_back_to_global(self):
+        """Test 7: no geography stated (country_hint=null) -> the
+        existing 'Global' fallback representation `Opportunity.country`
+        already used before this change (this column has never held a
+        null/'Unknown' value in this pipeline, so no new state is
+        introduced here)."""
+        with _mock_gemini_extraction(country_hint=None):
+            result = await process_raw_post_via_ai("a post with no stated location", _SAMPLE_SOURCE_INFO)
+
+        assert result.country == "Global"
+        assert result.is_local_egypt is False
+
+    async def test_08_arabic_source_with_no_explicit_country_is_not_guessed_as_egypt(self):
+        """Test 8: the no-guessing rule. An Arabic-language post that
+        itself states no country must NOT be automatically inferred as
+        Egypt just because it's written in Arabic or came from an
+        Egypt-associated source -- the extraction step's own system
+        prompt instructs this; this test proves the downstream code does
+        not silently reintroduce that guess either."""
+        arabic_post_no_geo = "فرصة تدريب لمدة شهرين في مجال البرمجة، التقديم متاح الآن."
+        with _mock_gemini_extraction(country_hint=None, title="فرصة تدريب في البرمجة"):
+            result = await process_raw_post_via_ai(arabic_post_no_geo, _SAMPLE_SOURCE_INFO)
+
+        assert result.country != "Egypt"
+        assert result.is_local_egypt is False
+        assert result.country == "Global"
+
+    async def test_09_extracted_country_continues_through_existing_normalization_layer(self):
+        """Test 9: the extracted, raw country value is handed to the
+        EXISTING `taxonomy.normalize_country` normalization layer (not a
+        second/parallel normalization system) to derive `is_local_egypt`
+        -- proven here for a real non-Egypt country plus a real Egypt
+        alias variant, both resolving correctly through that one shared
+        function."""
+        with _mock_gemini_extraction(country_hint="Germany", title="Scholarship in Germany"):
+            result = await process_raw_post_via_ai("Scholarship for students in Germany", _SAMPLE_SOURCE_INFO)
+
+        assert result.country == "Germany"
+        assert normalize_country(result.country) == "DE"
+        assert result.is_local_egypt is False
+
+        with _mock_gemini_extraction(country_hint="مصر", title="فرصة في مصر"):
+            result_eg = await process_raw_post_via_ai("فرصة تدريب في مصر", _SAMPLE_SOURCE_INFO)
+
+        assert result_eg.country == "مصر"
+        assert normalize_country(result_eg.country) == "EG"
+        assert result_eg.is_local_egypt is True
+
+    async def test_10_discovery_verification_boundary_is_unaffected(self):
+        """Test 10: discovery/verification boundary. Country extraction is
+        a discovery signal only -- it must never establish verification
+        status. Every `Opportunity` this pipeline creates must still land
+        with `is_verified=False, ai_confidence_score=None` regardless of
+        which country was extracted, exactly as before this change (see
+        `upsert_opportunity`/module docstring's own two-phase design)."""
+        with _mock_gemini_extraction(country_hint="United States", title="US fellowship"):
+            result = await process_raw_post_via_ai("A fellowship open to students in the United States", _SAMPLE_SOURCE_INFO)
+
+        assert result.country == "United States"
+        assert normalize_country(result.country) == "US"
+        # `OpportunityCreate` itself carries no `is_verified`/
+        # `ai_confidence_score` fields at all -- those are set by
+        # `upsert_opportunity`'s own insert path, independent of country.
+        assert not hasattr(result, "is_verified")
+        assert not hasattr(result, "ai_confidence_score")
