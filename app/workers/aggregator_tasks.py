@@ -54,7 +54,7 @@ from typing import Any
 
 from app.core.celery_app import celery_app
 from app.db.session import AsyncSessionLocal, engine
-from app.models.enums import SourceType, TrajectoryOutcome
+from app.models.enums import OpportunityType, SourceType, TrajectoryOutcome
 from app.services import research_orchestrator as ro
 from app.services import research_trajectory_memory
 from app.services.aggregator_service import (
@@ -62,33 +62,26 @@ from app.services.aggregator_service import (
     FacebookPageConfig,
     TelegramChannelConfig,
     SourcesConfig,
-    fetch_new_facebook_posts,
-    fetch_new_telegram_posts,
     load_sources_config,
     process_raw_post_via_ai,
     upsert_opportunity,
 )
+from app.services.source_adapters import UnsupportedSourceKindError, get_adapter
+from app.services.taxonomy import normalize_category
 
 logger = logging.getLogger(__name__)
 
-# D1 signal -> source-category prioritization (Step 5/12): a small,
-# disclosed, approximate keyword mapping from this codebase's four real
-# `OpportunityType` values onto the free-text `category` strings this
-# pipeline's own sources config already uses
-# (`app/data/opportunity_sources.json`). There is no formal taxonomy
-# linking the two -- source categories are human-curated, informal
-# labels ("Internships_Training", "Self_Development"), not
-# `OpportunityType` values themselves. This mapping is intentionally
-# conservative (substring match only, case-insensitive) and used ONLY to
-# decide which already-configured sources to poll FIRST when D1 flags a
-# type as under-covered -- never to decide what an opportunity IS (that
-# stays Gemini's per-post `opportunity_type` classification, unchanged).
-_TYPE_CATEGORY_HINTS: dict[str, tuple[str, ...]] = {
-    "scholarship": ("scholar",),
-    "internship": ("intern", "training"),
-    "course": ("course", "educ", "self_development"),
-    "volunteer": ("volunteer",),
-}
+# D1/D4 signal -> source-category prioritization (Step 5/12), Deliverable
+# 5 Feature 4: the fragile, hardcoded `_TYPE_CATEGORY_HINTS` keyword dict
+# this comment used to describe is REMOVED. Source categories are
+# human-curated, informal, free-text/multilingual labels
+# ("Internships_Training", "Self_Development", "منح") -- this pipeline
+# now maps them onto the real `OpportunityType` taxonomy via the single,
+# centralized `app.services.taxonomy.normalize_category` (also reusable
+# by D1/D2/any future recommendation code), never a per-file keyword
+# dict. Still used ONLY to decide which already-configured sources to
+# poll FIRST -- never to decide what an opportunity IS (that stays
+# Gemini's per-post `opportunity_type` classification, unchanged).
 
 
 @celery_app.task(name="app.workers.aggregator_tasks.run_daily_opportunity_scraper")
@@ -133,15 +126,15 @@ def _build_source_candidates(
     return candidates, by_id
 
 
-async def _priority_categories_from_coverage(db) -> tuple[set[str], bool]:
+async def _gapped_opportunity_types_from_coverage(db) -> tuple[set[str], bool]:
     """D1 integration (Step 12): reuses the REAL
     `compute_opportunity_coverage` (same function `research_orchestrator`
     itself calls for verification routing) -- no duplicated query.
-    Returns `(priority_categories, any_gap)`: which of this pipeline's
-    own configured-source category keyword buckets correspond to a
-    currently under-covered `OpportunityType`, and whether ANY gap
-    exists at all (used only to bias overall discovery depth upward --
-    never as evidence an opportunity exists)."""
+    Returns `(gapped_types, any_gap)`: the real, canonical `OpportunityType`
+    values D1 currently flags as under-covered, and whether ANY gap
+    exists at all across type/country/academic-level (used only to bias
+    overall discovery depth upward -- never as evidence an opportunity
+    exists)."""
     try:
         from app.api.v1.endpoints.admin_opportunities import compute_opportunity_coverage
 
@@ -154,19 +147,48 @@ async def _priority_categories_from_coverage(db) -> tuple[set[str], bool]:
     any_gap = bool(gapped_types) or any(b.is_gap for b in coverage.by_country) or any(
         b.is_gap for b in coverage.by_academic_level
     )
-    priority_categories: set[str] = set()
-    for opp_type, hints in _TYPE_CATEGORY_HINTS.items():
-        if opp_type not in gapped_types:
-            continue
-        priority_categories.update(hints)
-    return priority_categories, any_gap
+    return gapped_types, any_gap
 
 
-def _matches_priority(category: str | None, priority_hints: set[str]) -> bool:
-    if not category or not priority_hints:
+async def _priority_opportunity_types(db, *, gapped_types: set[str]) -> set[str]:
+    """Deliverable 5, Feature 2: extends D1's `gapped_types` with a real
+    D2 graph-navigation signal -- an `OpportunityType` that is genuinely
+    UNDER-CONNECTED in the real knowledge graph (few real neighbor edges
+    relative to the most-connected real neighbor type among currently
+    relevant opportunities) is a second, independent, real reason to
+    prioritize it this round, even when D1's own count-based gap check
+    doesn't (also) flag it. Purely additive -- never removes a D1 gap,
+    never invents a relationship the schema doesn't have (see
+    `ro.discovery_graph_navigation`'s own docstring)."""
+    try:
+        navigation = await ro.discovery_graph_navigation(db)
+    except Exception:
+        logger.exception("aggregator_tasks: D2 graph navigation signal computation failed -- treating as no signal")
+        return set(gapped_types)
+
+    neighbor_type_counts: dict[str, int] = navigation.get("neighbor_opportunity_types") or {}
+    if not neighbor_type_counts:
+        return set(gapped_types)
+
+    max_neighbor = max(neighbor_type_counts.values())
+    under_connected = {
+        opp_type.value
+        for opp_type in OpportunityType
+        if neighbor_type_counts.get(opp_type.value, 0) <= max_neighbor * 0.1
+    }
+    return set(gapped_types) | under_connected
+
+
+def _matches_priority(category: str | None, gapped_types: set[str]) -> bool:
+    """Deliverable 5, Feature 4: replaces the old substring-keyword
+    `_TYPE_CATEGORY_HINTS` matcher with the single, centralized
+    `normalize_category` -- a source's free-text/multilingual `category`
+    label is prioritized when it canonically maps onto an `OpportunityType`
+    D1/D2 currently flag, never via ad-hoc substring matching."""
+    if not category or not gapped_types:
         return False
-    lowered = category.lower()
-    return any(hint in lowered for hint in priority_hints)
+    canonical = normalize_category(category)
+    return canonical is not None and canonical.value in gapped_types
 
 
 async def _poll_source(
@@ -184,6 +206,13 @@ async def _poll_source(
     decides WHETHER/WHEN this function runs at all."""
     stats = {"processed": 0, "created": 0, "updated": 0, "errors": 0}
 
+    # Deliverable 5, Feature 1: fetch through the Source Adapter Layer
+    # (`app.services.source_adapters`) instead of branching on
+    # `source.source_kind` inline -- same real, unmodified
+    # `fetch_new_telegram_posts`/`fetch_new_facebook_posts` underneath,
+    # normalized into `RawDiscoveryResult`. An unsupported/unknown
+    # `source_kind` is a real, honest per-source error (counted, logged,
+    # trajectory-recorded) rather than a crash of the whole round.
     if source.source_kind == "telegram_channel":
         assert isinstance(config_obj, TelegramChannelConfig)
         source_info: dict[str, Any] = {
@@ -192,7 +221,6 @@ async def _poll_source(
             "source_base_url": source.source_base_url,
             "category": config_obj.category,
         }
-        raw_posts = fetch_new_telegram_posts(config_obj)
         label = config_obj.handle
     else:
         assert isinstance(config_obj, FacebookPageConfig)
@@ -202,8 +230,24 @@ async def _poll_source(
             "source_base_url": source.source_base_url,
             "target_age": config_obj.target_age,
         }
-        raw_posts = fetch_new_facebook_posts(config_obj)
         label = config_obj.page_id
+
+    try:
+        adapter = get_adapter(source.source_kind)
+        raw_results = adapter.fetch(config_obj)
+        raw_posts = [result.raw_text for result in raw_results]
+    except UnsupportedSourceKindError as exc:
+        logger.error("aggregator_tasks: %s", exc)
+        stats["errors"] += 1
+        await research_trajectory_memory.record_step(
+            session,
+            trajectory=trajectory,
+            action_type="query_source",
+            query=label,
+            source_domain=source.source_base_url,
+            metadata={"round": round_number, "source_kind": source.source_kind, "error": str(exc)},
+        )
+        return stats
 
     query_step = await research_trajectory_memory.record_step(
         session,
@@ -272,9 +316,28 @@ async def _run_adaptive_discovery_rounds(
     4-9). Wraps -- never replaces -- `_poll_source`'s real I/O. STOP
     means the loop `break`s: no further source is polled, no further
     extraction call occurs this run (Step 8)."""
-    priority_hints, any_gap = await _priority_categories_from_coverage(session)
+    gapped_types, any_gap = await _gapped_opportunity_types_from_coverage(session)
+    # Deliverable 5, Feature 2: D2 real graph navigation extends D1's
+    # gapped-type set with real, under-connected-in-the-graph types --
+    # see `_priority_opportunity_types`'s own docstring.
+    priority_types = await _priority_opportunity_types(session, gapped_types=gapped_types)
     priority_categories = {
-        source.category for source in all_sources if _matches_priority(source.category, priority_hints)
+        source.category for source in all_sources if _matches_priority(source.category, priority_types)
+    }
+    # Deliverable 5, Feature 3: D3 backward-looking discovery memory --
+    # real per-source historical yield/duplicate-rate hints from PAST
+    # runs, read back BEFORE this run's own first round so they can
+    # actually change this run's very first `plan_discovery_round` call
+    # (a real feedback loop, not merely logged; see
+    # `research_trajectory_memory.discovery_source_yield_hints`'s own
+    # docstring for why this reads `discovered_opportunities_count`
+    # rather than the discovery-irrelevant `outcome` field).
+    yield_hints = await research_trajectory_memory.discovery_source_yield_hints(session)
+    priority_source_ids = {
+        ro.normalize_source_id(label) for label in yield_hints["high_yield_source_labels"]
+    }
+    deprioritized_source_ids = {
+        ro.normalize_source_id(label) for label in yield_hints["low_yield_source_labels"]
     }
 
     objective = ro.build_discovery_objective(
@@ -319,6 +382,8 @@ async def _run_adaptive_discovery_rounds(
             already_polled_source_ids=already_polled,
             depth_policy=policy,
             priority_categories=priority_categories,
+            priority_source_ids=priority_source_ids,
+            deprioritized_source_ids=deprioritized_source_ids,
         )
 
         if not plan.sources_to_poll:
@@ -346,7 +411,7 @@ async def _run_adaptive_discovery_rounds(
         # Recompute the D1 signal after this round's real writes -- a
         # real "did this round move the gap" check (Step 7), not a
         # stale snapshot from before this round's own upserts.
-        priority_hints, any_gap = await _priority_categories_from_coverage(session)
+        gapped_types, any_gap = await _gapped_opportunity_types_from_coverage(session)
 
         sources_remaining = any(
             ro.normalize_source_id(s.source_id) not in already_polled for s in all_sources
@@ -416,6 +481,9 @@ async def _run_adaptive_discovery_rounds(
         "complexity_class": complexity.complexity_class.value,
         "complexity_score": complexity.score,
         "graph_related_count": graph_signal,
+        "priority_opportunity_types": sorted(priority_types),
+        "high_yield_source_labels": sorted(yield_hints["high_yield_source_labels"]),
+        "low_yield_source_labels": sorted(yield_hints["low_yield_source_labels"]),
         "total_rounds": round_number,
         "total_sources_configured": len(all_sources),
         "total_sources_polled": len(already_polled),

@@ -513,3 +513,87 @@ async def build_research_hints(db: AsyncSession, *, objective: str) -> dict:
             for trajectory, score in similar
         ],
     }
+
+
+async def discovery_source_yield_hints(db: AsyncSession, *, min_sample: int = 3, limit: int = 50) -> dict:
+    """D3 BACKWARD-LOOKING DISCOVERY MEMORY (Deliverable 5, Feature 3).
+
+    STEP 1 INVESTIGATION, confirmed gap: `build_research_hints`/
+    `get_source_performance` above are real, but keyed off each step's
+    `outcome` field (SUCCESSFUL/FAILED/etc.) -- and `_poll_source`
+    (`app/workers/aggregator_tasks.py`) always records a discovery
+    `process_result` step's outcome as NEUTRAL (never SUCCESSFUL/FAILED
+    on the discovery side; a discovered opportunity is only judged
+    later by the real, decoupled verification pass -- see that
+    function's own comment on this exact point). So `get_source_performance`
+    genuinely could not answer "which sources produced new opportunities
+    vs. duplicates during discovery" before this function -- every
+    discovery step's `positive_signal_count`/`negative_signal_count`
+    would be zero. This function reads a DIFFERENT, already-real field
+    instead: `discovered_opportunities_count` (0 or 1, set by
+    `complete_step` from the real `upsert_opportunity` `was_created`
+    flag) on every real `action_type="process_result"` step, grouped by
+    that step's own `query` (the real, stable per-run source label --
+    a Telegram handle or Facebook page id, see `_poll_source`).
+
+    Real, deterministic, statistical aggregation only (per this
+    deliverable's own instruction to prefer this over any "AI
+    summarizes everything" approach) -- `yield_rate` = real created /
+    real processed; `duplicate_rate` = real duplicates (processed minus
+    created) / real processed. `min_sample` guards against judging a
+    source off one or two posts (Deliverable 5 test: "no history behaves
+    normally" / "duplicate-heavy source deprioritized" both need a real
+    sample size, not a fluke).
+
+    Returns `{"source_stats": [...], "high_yield_source_labels": {...},
+    "low_yield_source_labels": {...}}` -- raw source LABELS (the same
+    string `DiscoverySourceCandidate.source_id` uses before
+    normalization), so the caller (`aggregator_tasks.py`) applies the
+    same `research_orchestrator.normalize_source_id` it already uses
+    everywhere else, rather than this module reaching into
+    `research_orchestrator` for that one helper."""
+    result = await db.execute(
+        select(ResearchTrajectoryStep).where(
+            ResearchTrajectoryStep.action_type == "process_result",
+            ResearchTrajectoryStep.query.is_not(None),
+        )
+    )
+    steps = result.scalars().all()
+
+    by_label: dict[str, list[ResearchTrajectoryStep]] = {}
+    for step in steps:
+        by_label.setdefault(step.query, []).append(step)
+
+    source_stats = []
+    high_yield_labels: set[str] = set()
+    low_yield_labels: set[str] = set()
+    for label, matching in by_label.items():
+        processed = len(matching)
+        created = sum(s.discovered_opportunities_count for s in matching)
+        duplicates = max(processed - created, 0)
+        errors = sum(1 for s in matching if s.outcome == TrajectoryOutcome.FAILED.value)
+        yield_rate = (created / processed) if processed else 0.0
+        duplicate_rate = (duplicates / processed) if processed else 0.0
+        source_stats.append(
+            {
+                "source_label": label,
+                "processed": processed,
+                "created": created,
+                "duplicates": duplicates,
+                "errors": errors,
+                "yield_rate": round(yield_rate, 4),
+                "duplicate_rate": round(duplicate_rate, 4),
+            }
+        )
+        if processed >= min_sample and yield_rate >= 0.5:
+            high_yield_labels.add(label)
+        if processed >= min_sample and duplicate_rate >= 0.7:
+            low_yield_labels.add(label)
+
+    source_stats.sort(key=lambda s: s["processed"], reverse=True)
+
+    return {
+        "source_stats": source_stats[:limit],
+        "high_yield_source_labels": high_yield_labels,
+        "low_yield_source_labels": low_yield_labels,
+    }

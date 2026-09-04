@@ -12,7 +12,12 @@ from sqlalchemy import select
 
 from app.api.deps import DbSession, RequireModerationAccess
 from app.models.research_trajectory import ResearchTrajectory, ResearchTrajectoryStep
-from app.schemas.research_orchestrator import DiscoveryTraceOut, ProviderPerformanceOut, RoutingDecisionOut
+from app.schemas.research_orchestrator import (
+    DiscoveryTraceOut,
+    ProviderPerformanceOut,
+    ProviderRegistryEntryOut,
+    RoutingDecisionOut,
+)
 from app.schemas.research_trajectory import (
     ResearchHintsOut,
     ResearchTrajectoryOut,
@@ -134,3 +139,19 @@ async def get_provider_performance(
     performance = await research_orchestrator.get_provider_performance(db)
     return [ProviderPerformanceOut(**p) for p in performance]
 
+
+
+@router.get("/providers", response_model=list[ProviderRegistryEntryOut])
+async def get_provider_registry(
+    _: RequireModerationAccess,
+) -> list[ProviderRegistryEntryOut]:
+    """Deliverable 5, Feature 5: the live provider capability registry
+    (`research_orchestrator.get_provider_registry`) -- which real
+    providers this codebase has wired up, what each is suitable for, and
+    whether its real API key is genuinely configured in THIS deployment
+    right now. In this dev sandbox every provider's `available` is
+    `False` (all four API key settings are empty strings) -- this
+    endpoint surfaces that honestly rather than hiding it; it does not
+    fabricate a second, "ready" provider."""
+    registry = research_orchestrator.get_provider_registry()
+    return [ProviderRegistryEntryOut(**entry) for entry in registry]

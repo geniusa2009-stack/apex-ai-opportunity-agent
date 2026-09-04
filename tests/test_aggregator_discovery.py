@@ -552,7 +552,7 @@ class TestDiscoveryIntegration:
             assert raw_text == malicious_text
             return _fields("https://example.com/injection-target")
 
-        with patch("app.workers.aggregator_tasks.fetch_new_telegram_posts", return_value=[malicious_text]):
+        with patch("app.services.source_adapters.fetch_new_telegram_posts", return_value=[malicious_text]):
             with patch("app.services.aggregator_service._extract_fields_via_gemini", new=AsyncMock(side_effect=_fake_extract)):
                 with patch("app.workers.aggregator_tasks.AsyncSessionLocal", db_session_factory), patch(
                     "app.workers.aggregator_tasks.engine", new=AsyncMock()

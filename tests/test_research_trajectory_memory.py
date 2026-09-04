@@ -657,7 +657,7 @@ class TestAggregatorPipelineIntegration:
         with patch("app.workers.aggregator_tasks.AsyncSessionLocal", db_session_factory), patch(
             "app.workers.aggregator_tasks.engine", new=AsyncMock()
         ), patch("app.workers.aggregator_tasks.load_sources_config", return_value=fake_config), patch(
-            "app.workers.aggregator_tasks.fetch_new_telegram_posts", return_value=["some raw post text"]
+            "app.services.source_adapters.fetch_new_telegram_posts", return_value=["some raw post text"]
         ), patch(
             "app.workers.aggregator_tasks.process_raw_post_via_ai", new=AsyncMock(side_effect=_fake_extraction)
         ):
@@ -711,7 +711,7 @@ class TestAggregatorPipelineIntegration:
         with patch("app.workers.aggregator_tasks.AsyncSessionLocal", db_session_factory), patch(
             "app.workers.aggregator_tasks.engine", new=AsyncMock()
         ), patch("app.workers.aggregator_tasks.load_sources_config", return_value=fake_config), patch(
-            "app.workers.aggregator_tasks.fetch_new_telegram_posts", return_value=["bad post"]
+            "app.services.source_adapters.fetch_new_telegram_posts", return_value=["bad post"]
         ), patch(
             "app.workers.aggregator_tasks.process_raw_post_via_ai",
             new=AsyncMock(side_effect=AggregatorError("Gemini call failed")),

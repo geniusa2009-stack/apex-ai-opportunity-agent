@@ -83,3 +83,21 @@ class DiscoveryTraceOut(BaseModel):
     updated: int
     errors: int
     rounds: list[dict]
+
+
+class ProviderRegistryEntryOut(BaseModel):
+    """Deliverable 5, Feature 5 (Real Provider Escalation Validation):
+    the live, real capability/availability state of one configured
+    provider/model pairing (`research_orchestrator.PROVIDER_CAPABILITIES`),
+    surfaced over the admin API so escalation-readiness is real and
+    observable rather than silent. `available` is computed live from
+    whether that provider's real API key setting is a genuinely
+    non-empty string -- never fabricated (see
+    `research_orchestrator._provider_available`)."""
+
+    provider: str
+    model: str
+    task_suitability: list[str]
+    reasoning_strength: str
+    priority: int
+    available: bool
