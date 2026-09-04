@@ -51,3 +51,35 @@ class ProviderPerformanceOut(BaseModel):
     times_escalated_from: int
     times_fallback_used: int
     last_selected_at: str | None
+
+
+class DiscoveryTraceOut(BaseModel):
+    """Real, persisted adaptive-discovery execution trace for one
+    aggregator run (Deliverable 4.2) -- read back from the
+    trajectory's own `trajectory_metadata["discovery_summary"]` (see
+    `app/workers/aggregator_tasks.py::_run_adaptive_discovery_rounds`).
+    At minimum inspectable, per this deliverable's own spec: discovery
+    depth, number of rounds, number of searches (sources polled),
+    candidate yield, duplicate rate, stop/escalation outcome, provider
+    used, trajectory ID."""
+
+    trajectory_id: str
+    objective: str
+    discovery_execution: str
+    initial_depth: str
+    final_depth: str
+    complexity_class: str
+    complexity_score: int
+    graph_related_count: int | None
+    total_rounds: int
+    total_sources_configured: int
+    total_sources_polled: int
+    escalation_count: int
+    stop_reason: str
+    provider: str
+    provider_task: str
+    processed: int
+    created: int
+    updated: int
+    errors: int
+    rounds: list[dict]

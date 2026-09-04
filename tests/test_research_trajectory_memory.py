@@ -682,13 +682,21 @@ class TestAggregatorPipelineIntegration:
                 .order_by(ResearchTrajectoryStep.step_number.asc())
             )
             steps = steps_result.scalars().all()
-            assert len(steps) == 2  # 1 query_source + 1 process_result
+            # Deliverable 4.2 (Adaptive Discovery Execution) adds one
+            # real `discovery_round` step per bounded round, recorded
+            # AFTER that round's real source-polls, for round-level
+            # planning/stop/escalation observability (see
+            # `app/workers/aggregator_tasks.py::_run_adaptive_discovery_rounds`)
+            # -- disclosed, deliberate step-count change from the
+            # pre-D4.2 "1 query_source + 1 process_result" shape.
+            assert len(steps) == 3  # 1 query_source + 1 process_result + 1 discovery_round
             assert steps[0].action_type == "query_source"
             assert steps[0].query == "@testchannel"
             assert steps[1].action_type == "process_result"
             assert steps[1].parent_step_id == steps[0].id
             assert steps[1].reference_id is not None
             assert steps[1].discovered_opportunities_count == 1
+            assert steps[2].action_type == "discovery_round"
 
     @pytest.mark.asyncio
     async def test_daily_scraper_run_records_failed_steps_on_extraction_error(self, db_session_factory):

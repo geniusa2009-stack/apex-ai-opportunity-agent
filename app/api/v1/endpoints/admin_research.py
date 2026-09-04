@@ -12,7 +12,7 @@ from sqlalchemy import select
 
 from app.api.deps import DbSession, RequireModerationAccess
 from app.models.research_trajectory import ResearchTrajectory, ResearchTrajectoryStep
-from app.schemas.research_orchestrator import ProviderPerformanceOut, RoutingDecisionOut
+from app.schemas.research_orchestrator import DiscoveryTraceOut, ProviderPerformanceOut, RoutingDecisionOut
 from app.schemas.research_trajectory import (
     ResearchHintsOut,
     ResearchTrajectoryOut,
@@ -100,6 +100,26 @@ async def get_routing_trace(
     if trace is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Routing trace not found")
     return RoutingDecisionOut(**trace)
+
+
+# --- Adaptive Discovery Execution additions (Deliverable 4.2) ---
+
+
+@router.get("/discovery/{trajectory_id}", response_model=DiscoveryTraceOut)
+async def get_discovery_trace(
+    trajectory_id: uuid.UUID,
+    db: DbSession,
+    _: RequireModerationAccess,
+) -> DiscoveryTraceOut:
+    """Real, persisted adaptive-discovery execution trace for one
+    aggregator run -- see `research_orchestrator.get_discovery_trace`'s
+    own docstring. 404 both when the trajectory doesn't exist and when
+    it exists but carries no discovery summary (e.g. a `route_and_verify`
+    -only trajectory from D4/D4.1)."""
+    trace = await research_orchestrator.get_discovery_trace(db, trajectory_id)
+    if trace is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Discovery trace not found")
+    return DiscoveryTraceOut(**trace)
 
 
 @router.get("/provider-performance", response_model=list[ProviderPerformanceOut])

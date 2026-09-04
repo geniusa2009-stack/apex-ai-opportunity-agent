@@ -1087,3 +1087,358 @@ async def get_provider_performance(db: AsyncSession) -> list[dict[str, Any]]:
             bucket["last_selected_at"] = decided_at
 
     return sorted(by_provider.values(), key=lambda b: b["times_selected_primary"], reverse=True)
+
+
+# =======================================================================
+# O. Discovery Objective & Adaptive Discovery Execution (Deliverable 4.2)
+# =======================================================================
+#
+# GROUND TRUTH (see this module's own D3/D4 sections above, and
+# `app/workers/aggregator_tasks.py` / `app/services/aggregator_service.py`
+# for the full picture): this codebase's real opportunity-discovery
+# pipeline has no web-search-engine concept. It polls a FIXED,
+# human-curated JSON list of Telegram channels / Facebook pages (today
+# via a disclosed MOCKED fetch), runs each raw post through one real
+# Gemini extraction call, and de-duplicates by `target_url`. There is no
+# query string to "generate" -- the configured sources ARE the plan.
+#
+# D4.2 therefore reinterprets D4.2's own "search/query" vocabulary onto
+# the real unit of work here:
+#   - "query"/"search"      -> one configured source (Telegram channel or
+#                               Facebook page) being polled in one round.
+#   - "query generation"    -> adaptive PRIORITIZATION/ORDERING of which
+#                               already-configured sources to poll next,
+#                               driven by D1 coverage gaps -- never a
+#                               fabricated text-search-query generator.
+#   - "query deduplication" -> never poll the same source twice within
+#                               one discovery run (`already_polled_source_ids`).
+#   - "search provider"     -> Gemini, via `process_raw_post_via_ai`,
+#                               already registered for
+#                               `ReasoningTaskType.EXTRACTION` in
+#                               `PROVIDER_CAPABILITIES` above. Exactly one
+#                               real extraction-capable provider exists in
+#                               this codebase today -- escalation therefore
+#                               follows the SAME honest
+#                               "no genuine alternative -> escalation
+#                               stops safely" posture Deliverable 4.1
+#                               established for verification.
+#
+# This section deliberately reuses D4's own `DEPTH_POLICIES` fields
+# rather than inventing a second, parallel budget system:
+#   - `DepthPolicy.max_research_steps`  -> max discovery ROUNDS this run.
+#   - `DepthPolicy.max_provider_calls`  -> max SOURCES polled per round
+#     (each source-poll can trigger one or more real Gemini extraction
+#     calls downstream, one per post -- this is the same "bound how much
+#     real provider work happens" meaning `max_provider_calls` already
+#     carries in the verification path, just applied to discovery's own
+#     real unit of provider-triggering work).
+#   - `DepthPolicy.max_escalation_depth` -> max number of times a
+#     discovery run may step UP one `ResearchDepthLevel` mid-run.
+#   - `DepthPolicy.allow_early_stop`     -> whether a fully-saturated
+#     (0 new / all duplicate) round may stop the run early.
+# No new policy dataclass, no new table.
+
+
+class DiscoveryObjective(BaseModel):
+    """Lightweight, typed discovery-objective representation (Step 3).
+    Deliberately NOT a new database table -- an in-memory/Pydantic model
+    exactly like `ResearchObjective` above, scoped to one aggregator run.
+
+    Structured fields only ever drive control flow (see this module's
+    own Security / Prompt Injection Boundary section) -- `notes` is a
+    human-readable label only.
+    """
+
+    objective_type: str = "discover_opportunities"
+    target_geography: str | None = None
+    target_opportunity_type: OpportunityType | None = None
+    target_academic_level: AcademicLevel | None = None
+    topic_domain: str | None = Field(default=None, description="Free-text label built from configured source categories.")
+    search_intent: str = Field(default="routine_refresh", description='"routine_refresh" | "gap_filling"')
+    freshness_required: bool = False
+    known_coverage_gap: bool = False
+    requested_depth: ResearchDepthLevel | None = None
+    notes: str | None = None
+
+
+def build_discovery_objective(
+    *,
+    source_categories: list[str],
+    coverage_is_gap: bool,
+    requested_depth: ResearchDepthLevel | None = None,
+    notes: str | None = None,
+) -> DiscoveryObjective:
+    """Builds a `DiscoveryObjective` for one aggregator run from the
+    REAL set of configured source categories and the REAL D1 coverage
+    signal -- never from any fetched post content."""
+    return DiscoveryObjective(
+        topic_domain=", ".join(sorted({c for c in source_categories if c})) or None,
+        search_intent="gap_filling" if coverage_is_gap else "routine_refresh",
+        known_coverage_gap=coverage_is_gap,
+        requested_depth=requested_depth,
+        notes=notes,
+    )
+
+
+def _discovery_to_research_objective(objective: DiscoveryObjective) -> ResearchObjective:
+    """Reuses D4's own `ResearchObjective`/`classify_complexity` rather
+    than duplicating a second complexity classifier for discovery -- a
+    real, deliberate mapping from the discovery-shaped fields onto the
+    same structured fields `classify_complexity` already reads."""
+    return ResearchObjective(
+        objective_type=objective.objective_type,
+        country=objective.target_geography,
+        opportunity_type=objective.target_opportunity_type,
+        target_academic_levels=[objective.target_academic_level] if objective.target_academic_level else None,
+        deadline_sensitive=objective.freshness_required,
+        geographic_scope="global" if not objective.target_geography else "single_country",
+        requested_depth=objective.requested_depth,
+        notes=objective.notes,
+    )
+
+
+def classify_discovery_complexity(
+    objective: DiscoveryObjective, *, coverage_is_gap: bool, graph_related_count: int | None = None
+) -> ComplexityAssessment:
+    """D4.2's own entry point into the REAL, existing D4 complexity
+    classifier -- no second scoring system. `coverage_is_gap` (D1) and
+    `graph_related_count` (D2) are passed through exactly as
+    `orchestrate_verification` already does for verification."""
+    research_objective = _discovery_to_research_objective(objective)
+    return classify_complexity(research_objective, coverage_is_gap=coverage_is_gap, graph_related_count=graph_related_count)
+
+
+@dataclasses.dataclass(frozen=True)
+class DiscoverySourceCandidate:
+    """One configured discovery source (a Telegram channel or Facebook
+    page) -- the real unit of "query" in this pipeline. `source_id` is
+    the real, stable identity used for dedup (`channel.handle`/
+    `page.page_id`); `category` is that source's own configured
+    category/target-age hint, used ONLY for planning-priority, never as
+    evidence."""
+
+    source_id: str
+    source_kind: str  # "telegram_channel" | "facebook_page"
+    category: str | None
+    source_base_url: str
+
+
+def normalize_source_id(source_id: str) -> str:
+    """Deterministic normalization for source-level deduplication (Step
+    6) -- whitespace/casing/leading-'@' only, no LLM involved, per spec."""
+    return source_id.strip().lower().lstrip("@")
+
+
+@dataclasses.dataclass
+class DiscoveryRoundPlan:
+    """One bounded round's real plan -- which already-configured sources
+    to poll next, in priority order, and which were skipped as
+    already-polled this run (Step 6 observability)."""
+
+    round_number: int
+    sources_to_poll: list[DiscoverySourceCandidate]
+    skipped_already_polled_source_ids: list[str]
+    priority_reasons: dict[str, str]
+    max_sources_this_round: int
+
+
+def plan_discovery_round(
+    *,
+    round_number: int,
+    all_sources: list[DiscoverySourceCandidate],
+    already_polled_source_ids: set[str],
+    depth_policy: DepthPolicy,
+    priority_categories: set[str] | None = None,
+) -> DiscoveryRoundPlan:
+    """Adaptive PRIORITIZATION/ORDERING of already-configured sources
+    (Step 5/12) -- never invents a new source or query string. Bounded
+    by `depth_policy.max_provider_calls` (see this section's own header
+    comment for why that field is the honest reuse for "sources per
+    round"). D1-flagged `priority_categories` move a source to the front
+    of this round's queue; original configured order is the deterministic
+    tiebreak otherwise, so planning stays reproducible."""
+    priority_categories = priority_categories or set()
+    max_sources_this_round = max(depth_policy.max_provider_calls, 0)
+
+    remaining: list[DiscoverySourceCandidate] = []
+    skipped: list[str] = []
+    for source in all_sources:
+        if normalize_source_id(source.source_id) in already_polled_source_ids:
+            skipped.append(source.source_id)
+        else:
+            remaining.append(source)
+
+    order_index = {source.source_id: i for i, source in enumerate(all_sources)}
+
+    def _priority_key(source: DiscoverySourceCandidate) -> tuple[int, int]:
+        is_priority = 0 if (source.category and source.category in priority_categories) else 1
+        return (is_priority, order_index[source.source_id])
+
+    ordered = sorted(remaining, key=_priority_key)
+    selected = ordered[:max_sources_this_round]
+
+    reasons: dict[str, str] = {}
+    for source in selected:
+        if source.category and source.category in priority_categories:
+            reasons[source.source_id] = "prioritized: category flagged under-covered by D1 coverage signal"
+        else:
+            reasons[source.source_id] = "default configured order"
+
+    return DiscoveryRoundPlan(
+        round_number=round_number,
+        sources_to_poll=selected,
+        skipped_already_polled_source_ids=skipped,
+        priority_reasons=reasons,
+        max_sources_this_round=max_sources_this_round,
+    )
+
+
+class DiscoveryEvidenceState(BaseModel):
+    """Real, structured round-outcome signals (Step 7) -- the discovery
+    analogue of D4's `EvidenceState`. Deliberately a SEPARATE, smaller
+    model rather than a forced reuse: verification-only fields like
+    `is_legitimate`/`source_authority_known` have no honest meaning for
+    "did this round of source-polling find anything new," so reusing
+    `EvidenceState` here would force a bad fit rather than genuinely
+    share code (`should_stop`/`should_escalate`'s own bodies read
+    verification-shaped fields that discovery has no equivalent for)."""
+
+    results_count: int = 0
+    new_candidate_count: int = 0
+    duplicate_count: int = 0
+    error_count: int = 0
+    distinct_domains_polled: int = 0
+    coverage_gap_remaining: bool = False
+    sources_remaining: bool = False
+    provider_call_failed: bool = False
+
+
+def evaluate_discovery_round(
+    *,
+    results_count: int,
+    new_candidate_count: int,
+    duplicate_count: int,
+    error_count: int,
+    distinct_domains_polled: int,
+    coverage_gap_remaining: bool,
+    sources_remaining: bool,
+) -> DiscoveryEvidenceState:
+    """Builds `DiscoveryEvidenceState` from REAL round counters only --
+    `upsert_opportunity`'s own real `was_created` flag drives
+    `new_candidate_count`/`duplicate_count` (Step 5: "duplicate rate" is
+    derived from the real dedup mechanism, never a parallel tracker)."""
+    return DiscoveryEvidenceState(
+        results_count=results_count,
+        new_candidate_count=new_candidate_count,
+        duplicate_count=duplicate_count,
+        error_count=error_count,
+        distinct_domains_polled=distinct_domains_polled,
+        coverage_gap_remaining=coverage_gap_remaining,
+        sources_remaining=sources_remaining,
+        provider_call_failed=error_count > 0 and new_candidate_count == 0 and duplicate_count == 0,
+    )
+
+
+def should_stop_discovery(evidence: DiscoveryEvidenceState, policy: DepthPolicy, *, round_number: int) -> tuple[bool, str]:
+    """Deterministic discovery stopping rule (Steps 7/8). This decision
+    is read by the REAL round loop in `app/workers/aggregator_tasks.py`
+    and, on STOP, no further source is polled and no further extraction
+    call occurs this run -- the decision is never merely logged."""
+    if not evidence.sources_remaining:
+        return True, "no configured sources remain unpolled this run"
+    if round_number >= policy.max_research_steps:
+        return True, f"maximum discovery rounds for this depth ({policy.max_research_steps}) reached"
+    if evidence.results_count == 0:
+        return True, "round produced zero results to evaluate -- stopping rather than guessing further"
+    if evidence.new_candidate_count == 0 and evidence.duplicate_count > 0:
+        if not policy.allow_early_stop:
+            return False, "round fully duplicated but this depth policy requires continued research"
+        return True, (
+            f"round saturated: 0 new candidates out of {evidence.duplicate_count} duplicate result(s) -- "
+            "discovery yield exhausted for now"
+        )
+    if evidence.provider_call_failed:
+        return True, "extraction provider failed for every result this round -- stopping rather than retrying blindly"
+    return False, "round produced new candidates -- continuing"
+
+
+def should_escalate_discovery(
+    evidence: DiscoveryEvidenceState,
+    complexity: ComplexityAssessment,
+    *,
+    attempt: int,
+    policy: DepthPolicy,
+) -> tuple[bool, list[str]]:
+    """Escalation triggers real to a discovery run (Step 7/9). Hard
+    limit: `attempt >= policy.max_escalation_depth` always returns
+    `False` regardless of how many other triggers fired -- same bounded
+    posture as D4's own `should_escalate`."""
+    reasons: list[str] = []
+    if evidence.coverage_gap_remaining:
+        reasons.append("coverage gap still open after this round (D1 signal, planning only)")
+    if evidence.provider_call_failed:
+        reasons.append("extraction provider failed this round")
+    if complexity.complexity_class == ResearchComplexityClass.CRITICAL:
+        reasons.append("objective classified as CRITICAL")
+
+    if attempt >= policy.max_escalation_depth:
+        reasons.append(
+            f"max escalation depth ({policy.max_escalation_depth}) already reached -- "
+            "staying at current depth for any remaining rounds rather than escalating further"
+        )
+        return False, reasons
+
+    return (len(reasons) > 0 and evidence.sources_remaining), reasons
+
+
+def next_discovery_depth(current: ResearchDepthLevel) -> ResearchDepthLevel | None:
+    """One real step up `ResearchDepthLevel`, or `None` at the ceiling
+    (`ESCALATED`) -- used by the round loop when `should_escalate_discovery`
+    fires and escalation budget remains."""
+    order = list(ResearchDepthLevel)
+    idx = order.index(current)
+    if idx + 1 >= len(order):
+        return None
+    return order[idx + 1]
+
+
+async def discovery_graph_signal(db: AsyncSession) -> int | None:
+    """D2 integration for DISCOVERY planning (Step 13): a real, coarse
+    "how connected is the existing knowledge graph overall" count --
+    total `EntityRelationship` rows. Discovery runs before any specific
+    `Opportunity` exists to key off of (unlike `_graph_related_count`,
+    which is per-opportunity and used for VERIFICATION routing), so this
+    intentionally asks a coarser, still-real question: a sparsely
+    connected graph is one more real signal (alongside D1 coverage) that
+    this run's objective may be under-explored -- feeds `classify_discovery_complexity`'s
+    own `graph_related_count` parameter exactly as `classify_complexity`
+    already consumes it for verification. NEVER surfaced as evidence an
+    opportunity exists or is legitimate -- planning only, same posture as
+    `_graph_related_count`."""
+    try:
+        result = await db.execute(select(EntityRelationship.id))
+        return len(result.scalars().all())
+    except Exception:
+        logger.exception("research_orchestrator: D2 discovery graph signal computation failed -- treating as unknown")
+        return None
+
+
+async def get_discovery_trace(db: AsyncSession, trajectory_id: uuid.UUID) -> dict[str, Any] | None:
+    """Real discovery execution trace for one trajectory (Deliverable
+    4.2, Step 23 observability) -- read back from the trajectory's own
+    `trajectory_metadata["discovery_summary"]`, written once at the end
+    of `_run_adaptive_discovery_rounds`. `None` both when the trajectory
+    doesn't exist and when it exists but was never a discovery run (e.g.
+    a `route_and_verify`-only trajectory from D4/D4.1) -- either way
+    there is no real discovery trace to return."""
+    trajectory = await db.get(ResearchTrajectory, trajectory_id)
+    if trajectory is None:
+        return None
+    summary = (trajectory.trajectory_metadata or {}).get("discovery_summary")
+    if summary is None:
+        return None
+    return {
+        "trajectory_id": str(trajectory_id),
+        "objective": trajectory.objective,
+        **summary,
+    }
