@@ -105,6 +105,28 @@ CREATE TABLE opportunities (
 """
 
 
+
+_CREATE_CLAIMS_TABLE_SQL = """
+CREATE TABLE claims (
+    id VARCHAR(36) PRIMARY KEY, opportunity_id VARCHAR(36) NOT NULL, claim_type VARCHAR(50) NOT NULL,
+    claim_value TEXT NOT NULL, normalized_value TEXT, status VARCHAR(20) NOT NULL DEFAULT 'unknown',
+    importance VARCHAR(20) NOT NULL DEFAULT 'normal',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
+_CREATE_EVIDENCE_TABLE_SQL = """
+CREATE TABLE evidence (
+    id VARCHAR(36) PRIMARY KEY, opportunity_id VARCHAR(36) NOT NULL, claim_id VARCHAR(36) NOT NULL,
+    source_id VARCHAR(36), source_url VARCHAR(2048), source_type VARCHAR(50),
+    source_authority VARCHAR(20) NOT NULL DEFAULT 'unknown', evidence_text TEXT NOT NULL,
+    evidence_hash VARCHAR(64) NOT NULL, retrieved_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    published_at DATETIME, valid_from DATETIME, valid_until DATETIME, supports_claim BOOLEAN,
+    extraction_method VARCHAR(50) NOT NULL DEFAULT 'manual', retrieval_method VARCHAR(50) NOT NULL DEFAULT 'automated',
+    evidence_metadata TEXT, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
 @pytest_asyncio.fixture
 async def db_engine():
     engine = create_async_engine(
@@ -118,6 +140,8 @@ async def db_engine():
         await conn.execute(text(_CREATE_ENTITY_RELATIONSHIPS_TABLE_SQL))
         await conn.execute(text(_CREATE_RESEARCH_TRAJECTORIES_SQL))
         await conn.execute(text(_CREATE_RESEARCH_TRAJECTORY_STEPS_SQL))
+        await conn.execute(text(_CREATE_CLAIMS_TABLE_SQL))
+        await conn.execute(text(_CREATE_EVIDENCE_TABLE_SQL))
     yield engine
     await engine.dispose()
 

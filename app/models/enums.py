@@ -913,3 +913,57 @@ class ReasoningTaskType(str, enum.Enum):
     TAGGING = "tagging"
     EXTRACTION = "extraction"
     CHAT = "chat"
+
+
+class SourceAuthority(str, enum.Enum):
+    """D6 (Evidence & Verification Intelligence): a deterministic
+    classification of how authoritative a piece of evidence's source is,
+    used by `app/services/evidence_verification.py`'s claim-evaluation
+    rules -- e.g. a third-party source alone cannot prove official
+    eligibility when an official/government source should exist.
+
+    DISCLOSED LIMITATION (see `classify_source_authority`'s own
+    docstring): this codebase has no existing source-authority resolver
+    at all (confirmed by D4.1's own hardcoded `source_authority_known
+    =False`). This is the smallest safe, deterministic version -- plain
+    domain-suffix pattern rules, not a real registry of verified
+    official organization domains. `OFFICIAL` in particular is
+    realistically rare/unreachable in v1: this codebase has no way to
+    confirm a domain structurally belongs to a specific opportunity's
+    own issuing organization, so nothing here fabricates that match.
+    """
+
+    OFFICIAL = "official"
+    GOVERNMENT = "government"
+    UNIVERSITY = "university"
+    KNOWN_INSTITUTION = "known_institution"
+    TRUSTED_THIRD_PARTY = "trusted_third_party"
+    UNKNOWN = "unknown"
+
+
+class EvidenceStatus(str, enum.Enum):
+    """D6: the deterministic status of a single `Claim` once its linked
+    `Evidence` rows are evaluated (`evidence_verification.evaluate_claim`).
+    Never chosen by an LLM -- always derived by backend logic from real
+    evidence rows."""
+
+    SUPPORTED = "supported"
+    CONTRADICTED = "contradicted"
+    UNSUPPORTED = "unsupported"
+    STALE = "stale"
+    CONFLICTED = "conflicted"
+    UNKNOWN = "unknown"
+
+
+class VerificationDecisionStatus(str, enum.Enum):
+    """D6: the deterministic, evidence-backed decision produced by
+    `evidence_verification.decide_verification` for one `Opportunity`.
+    `Opportunity.is_verified` may only become `True` when this decision
+    is `VERIFIED` -- see `app/workers/tasks.py::_verify_new_opportunities`
+    for the single real integration point."""
+
+    VERIFIED = "verified"
+    UNVERIFIED = "unverified"
+    HOLD = "hold"
+    STALE = "stale"
+    REJECTED = "rejected"

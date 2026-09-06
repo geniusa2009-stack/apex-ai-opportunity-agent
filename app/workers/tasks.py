@@ -11,6 +11,8 @@ from app.models import Opportunity
 from app.models.enums import AcademicLevel, Gender
 from app.services import entity_relationship_service, research_orchestrator, research_trajectory_memory
 from app.services.ai import ai_gateway
+from app.services import evidence_verification
+from app.models.enums import VerificationDecisionStatus
 
 logger = logging.getLogger(__name__)
 
@@ -206,7 +208,6 @@ async def _verify_new_opportunities(limit: int) -> dict:
                     opportunity.funding_details = verification.funding_details
                     opportunity.embedding = embedding
                     opportunity.ai_confidence_score = verification.confidence_score
-                    opportunity.is_verified = True
                     # Backfill Real Eligibility Data step additions -- see
                     # `VerifiedOpportunitySchema`'s own field docs
                     # (app/services/ai.py) for the "null is the correct
@@ -218,26 +219,69 @@ async def _verify_new_opportunities(limit: int) -> dict:
                     opportunity.target_academic_levels = _coerce_academic_levels(
                         verification.target_academic_levels, opportunity.id
                     )
-                    verified += 1
 
-                    # Simplified Knowledge Graph addition (Deliverable 2)
-                    # -- real, incremental edge population, bounded to
-                    # this one freshly-verified opportunity's own real
-                    # source_id/country matches. See
-                    # `entity_relationship_service`'s own module
-                    # docstring for the full design/scale reasoning.
-                    # Best-effort: a real failure here must never
-                    # discard an otherwise-successful verification.
+                    # D6 (Evidence & Verification Intelligence) integration
+                    # point -- this is the ONE real write site for
+                    # `is_verified`, and it no longer flips straight to
+                    # True off `verification.is_legitimate`/
+                    # `confidence_score` alone. The AI's structured output
+                    # above is only a CANDIDATE claim set; the backend now
+                    # runs it through a real, deterministic evidence
+                    # pipeline (`evidence_verification.py`) and only sets
+                    # `is_verified = True` when that pipeline's own
+                    # decision is VERIFIED. See that module's own
+                    # docstring for the full rule set.
                     try:
-                        await entity_relationship_service.sync_relationships_for_opportunity(
-                            session, opportunity
+                        d6_decision = await _run_d6_evidence_pipeline(
+                            session, opportunity=opportunity, verification=verification
                         )
                     except Exception:
                         logger.exception(
-                            "entity_relationship_service sync failed for opportunity %s "
-                            "-- verification itself still succeeded",
+                            "D6 evidence pipeline failed for opportunity %s -- treating as UNVERIFIED "
+                            "rather than falling back to the pre-D6 is_legitimate/confidence_score gate",
                             opportunity.id,
                         )
+                        d6_decision = None
+
+                    if d6_decision is not None and d6_decision.status == VerificationDecisionStatus.VERIFIED:
+                        opportunity.is_verified = True
+                        verified += 1
+
+                        # Simplified Knowledge Graph addition (Deliverable 2)
+                        # -- real, incremental edge population, bounded to
+                        # this one freshly-verified opportunity's own real
+                        # source_id/country matches. See
+                        # `entity_relationship_service`'s own module
+                        # docstring for the full design/scale reasoning.
+                        # Best-effort: a real failure here must never
+                        # discard an otherwise-successful verification.
+                        try:
+                            await entity_relationship_service.sync_relationships_for_opportunity(
+                                session, opportunity
+                            )
+                        except Exception:
+                            logger.exception(
+                                "entity_relationship_service sync failed for opportunity %s "
+                                "-- verification itself still succeeded",
+                                opportunity.id,
+                            )
+                    else:
+                        # AI thought this looked legitimate, but D6's real
+                        # evidence pipeline could not reach VERIFIED (no
+                        # supporting evidence, a contradiction, a stale-only
+                        # claim, or a conflict needing human HOLD review).
+                        # `is_verified` is deliberately left False --
+                        # cleaned title/deadline/etc. above are still saved
+                        # as useful reviewer-facing signal (same posture as
+                        # the flagging branch below), but the trust gate
+                        # itself is not crossed.
+                        logger.info(
+                            "D6: opportunity %s not verified -- decision=%s reason=%s",
+                            opportunity.id,
+                            d6_decision.status.value if d6_decision else "pipeline_error",
+                            d6_decision.reason if d6_decision else "evidence pipeline raised",
+                        )
+                        flagged += 1
                 else:
                     # Flagging mechanism: leave is_verified=False but record the
                     # score. That alone moves the row out of the "pending"
@@ -286,6 +330,80 @@ async def _verify_new_opportunities(limit: int) -> dict:
     summary = {"processed": processed, "verified": verified, "flagged": flagged, "errors": errors}
     logger.info("verify_new_opportunities: %s", summary)
     return summary
+
+
+# ---------------------------------------------------------------------
+# D6 (Evidence & Verification Intelligence) -- the real pipeline that
+# turns one AI verification call's candidate claim values into
+# durable Claim/Evidence rows and a deterministic VerificationDecision.
+# See `app/services/evidence_verification.py`'s own module docstring
+# for the full rule set this delegates to. This function is
+# deliberately dumb: it only maps REAL, already-extracted fields
+# (VerifiedOpportunitySchema + the opportunity's own real
+# source_id/target_url/country/raw_extracted_data) onto claim/evidence
+# rows -- it invents nothing and calls no second LLM.
+# ---------------------------------------------------------------------
+
+
+async def _run_d6_evidence_pipeline(session, *, opportunity, verification):
+    from app.services.evidence_verification import (
+        EvidenceRejectedError,
+        decide_verification,
+        get_or_create_claim,
+        record_evidence,
+    )
+
+    raw = opportunity.raw_extracted_data or {}
+    raw_description = raw.get("description") if isinstance(raw, dict) else None
+
+    candidate_claims: list[tuple[str, str | None, str | None]] = [
+        ("title", verification.title, None),
+        ("eligibility", verification.eligibility_criteria, None),
+        ("deadline", verification.deadline, None),
+        ("funding", verification.funding_details, None),
+        ("country", opportunity.country, None),
+        ("application_url", opportunity.target_url, opportunity.target_url),
+    ]
+
+    claims = []
+    for claim_type, claim_value, normalized_value in candidate_claims:
+        if not claim_value:
+            # No unsupported guesses: a null/empty extracted field
+            # produces no claim at all, rather than a claim with a
+            # fabricated value (constitution rule 8).
+            continue
+
+        claim = await get_or_create_claim(
+            session,
+            opportunity_id=opportunity.id,
+            claim_type=claim_type,
+            claim_value=str(claim_value),
+            normalized_value=normalized_value,
+        )
+        claims.append(claim)
+
+        evidence_text = raw_description or str(claim_value)
+        try:
+            await record_evidence(
+                session,
+                opportunity_id=opportunity.id,
+                claim_id=claim.id,
+                evidence_text=evidence_text,
+                source_id=opportunity.source_id,
+                source_url=opportunity.target_url,
+                extraction_method="ai_gateway_structured_output",
+                retrieval_method="automated",
+                supports_claim=True,
+            )
+        except EvidenceRejectedError:
+            logger.warning(
+                "D6: candidate evidence for opportunity %s claim %s rejected by backend validation "
+                "-- claim remains without evidence",
+                opportunity.id,
+                claim_type,
+            )
+
+    return await decide_verification(session, opportunity_id=opportunity.id, claims=claims)
 
 
 def _parse_deadline(raw: str | None, opportunity_id) -> datetime | None:
