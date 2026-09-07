@@ -412,12 +412,15 @@ class VerificationDecision:
     verification_version: str = "d6.1"
 
 
-async def decide_verification(
-    db: AsyncSession, *, opportunity_id, claims: list[Claim], now: dt.datetime | None = None
+def _build_verification_decision(
+    evaluations: list["ClaimEvaluation"], *, now: dt.datetime
 ) -> VerificationDecision:
-    """Deterministic aggregate verification decision from real,
-    per-claim evaluations. Never LLM-generated -- the reason string is
-    built purely from real evaluated claims (spec section 14).
+    """Pure aggregation of already-computed per-claim evaluations into one
+    `VerificationDecision` -- the exact rule set from `decide_verification`'s
+    own docstring, extracted so `decide_verification` (persists real
+    `Claim.status`) and `evaluate_verification_readonly` (mutates nothing,
+    admin-display only) share ONE decision implementation rather than two
+    copies of the same rules that could silently drift apart.
 
     - Any claim CONFLICTED -> HOLD (constitution rule 5: never silently
       choose between conflicting authoritative evidence).
@@ -428,9 +431,6 @@ async def decide_verification(
     - At least one claim SUPPORTED, and every claim is
       SUPPORTED/UNKNOWN (none CONTRADICTED/CONFLICTED/STALE) -> VERIFIED.
     """
-    now = now or dt.datetime.now(dt.timezone.utc)
-    evaluations = [await evaluate_claim(db, claim=c, now=now) for c in claims]
-
     all_supporting: list = []
     all_contradicting: list = []
     for ev in evaluations:
@@ -480,3 +480,45 @@ async def decide_verification(
         "UNVERIFIED: no claim has real supporting evidence. " + " ".join(reasons),
         evaluations, all_supporting, all_contradicting, now,
     )
+
+
+async def decide_verification(
+    db: AsyncSession, *, opportunity_id, claims: list[Claim], now: dt.datetime | None = None
+) -> VerificationDecision:
+    """Deterministic aggregate verification decision from real,
+    per-claim evaluations. Never LLM-generated -- the reason string is
+    built purely from real evaluated claims (spec section 14).
+
+    THE one real write path: persists each claim's real `EvidenceStatus`
+    onto `Claim.status` via `evaluate_claim` (see `_build_verification_
+    decision`'s own docstring for the aggregation rules)."""
+    now = now or dt.datetime.now(dt.timezone.utc)
+    evaluations = [await evaluate_claim(db, claim=c, now=now) for c in claims]
+    return _build_verification_decision(evaluations, now=now)
+
+
+async def evaluate_verification_readonly(
+    db: AsyncSession, *, opportunity_id, now: dt.datetime | None = None
+) -> VerificationDecision:
+    """Admin-display-only, read-only reconstruction of the CURRENT
+    verification decision for one opportunity's real, already-persisted
+    `Claim`/`Evidence` rows.
+
+    Deliberately does NOT call `evaluate_claim` (which persists
+    `Claim.status` onto the session) or re-run any AI extraction -- it
+    fetches the opportunity's real current claims and runs the exact
+    same pure evaluator (`_evaluate_claim_pure`) and the exact same
+    aggregation rules (`_build_verification_decision`) that the live
+    `decide_verification` write path uses, with zero side effects. Used
+    by `GET /admin/opportunities/{id}/verification` so an admin can see
+    "what would today's decision be" without mutating anything.
+
+    An opportunity with no claims at all (a legacy pre-D6 row, or one
+    the D6 pipeline hasn't reached yet) cleanly returns the same
+    UNVERIFIED/"no claims" decision `decide_verification` would -- never
+    a 500."""
+    now = now or dt.datetime.now(dt.timezone.utc)
+    result = await db.execute(select(Claim).where(Claim.opportunity_id == opportunity_id))
+    claims = list(result.scalars().all())
+    evaluations = [await _evaluate_claim_pure(db, claim=c, now=now) for c in claims]
+    return _build_verification_decision(evaluations, now=now)

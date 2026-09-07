@@ -144,16 +144,27 @@ from app.api.deps import (
     RequireSeniorModerationAccess,
     effective_admin_role,
 )
+from app.models.claim import Claim
 from app.models.enums import (
     AcademicLevel,
+    EvidenceStatus,
     ModerationAction,
     ModerationTargetType,
     OpportunityReviewStatus,
     OpportunityType,
     SourceType,
+    VerificationDecisionStatus,
 )
+from app.models.evidence import Evidence
 from app.models.opportunity import Opportunity
 from app.models.user import User
+from app.schemas.evidence import (
+    ClaimOut,
+    EvaluatedClaimOut,
+    EvidenceOut,
+    EvidenceStatsOut,
+    VerificationDecisionOut,
+)
 from app.schemas.opportunity import (
     AdminOpportunityCreate,
     AdminOpportunityDecisionRequest,
@@ -164,7 +175,7 @@ from app.schemas.opportunity import (
     OpportunityOut,
     PaginatedResponse,
 )
-from app.services import moderation_claim_service, moderation_log_service
+from app.services import evidence_verification, moderation_claim_service, moderation_log_service
 from app.services.aggregator_service import get_or_create_source
 
 # The one shared `Source` row every manually created `Opportunity`
@@ -514,3 +525,246 @@ async def get_opportunity_coverage(
     """Moderator-or-higher. See `compute_opportunity_coverage` for the
     real computation this endpoint just exposes over HTTP."""
     return await compute_opportunity_coverage(db)
+
+
+# ---------------------------------------------------------------------
+# D6 (Evidence & Verification Intelligence) admin read endpoints --
+# completing D6's own originally-scoped, then-deferred admin surface.
+# Additive observability only: read-only, `RequireModerationAccess`
+# (same tier as `get_opportunity_coverage`/`get_opportunity_review_queue`
+# above -- internal research/verification tooling, not public browsing,
+# but no need for Senior-Moderator-only either). None of these routes
+# write anything; the core evidence/claim/verification decision logic
+# itself lives entirely in `app/services/evidence_verification.py` and
+# is untouched here.
+#
+# Registered on THIS router (not `admin_research.py`) because every one
+# of these is opportunity-scoped under the already-established
+# `/admin/opportunities/{opportunity_id}/...` path prefix this file's
+# own `review-queue`/`coverage`/claim-decision routes already use --
+# consistent with the URL, not with which deliverable number introduced
+# the underlying data.
+# ---------------------------------------------------------------------
+
+
+@router.get(
+    "/admin/opportunities/{opportunity_id}/evidence",
+    response_model=list[EvidenceOut],
+)
+async def get_opportunity_evidence(
+    opportunity_id: uuid.UUID,
+    db: DbSession,
+    _: RequireModerationAccess,
+    claim_id: uuid.UUID | None = Query(default=None),
+) -> list[EvidenceOut]:
+    """Moderator-or-higher. All real, persisted `Evidence` rows for one
+    opportunity (optionally narrowed to one `claim_id`), most recent
+    first. 404 when the opportunity itself doesn't exist; a real
+    opportunity with no evidence yet (e.g. a legacy pre-D6 row) cleanly
+    returns `[]`, never a 500 -- see `Evidence`'s own module docstring
+    for why this is the real backward-compatibility shape. Never
+    exposes `evidence_metadata` -- see `app/schemas/evidence.py`'s own
+    module docstring."""
+    opportunity = await db.get(Opportunity, opportunity_id)
+    if opportunity is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Opportunity not found")
+
+    stmt = select(Evidence).where(Evidence.opportunity_id == opportunity_id)
+    if claim_id is not None:
+        stmt = stmt.where(Evidence.claim_id == claim_id)
+    stmt = stmt.order_by(Evidence.retrieved_at.desc())
+    result = await db.execute(stmt)
+    rows = result.scalars().all()
+    return [EvidenceOut.model_validate(row) for row in rows]
+
+
+@router.get(
+    "/admin/opportunities/{opportunity_id}/claims",
+    response_model=list[ClaimOut],
+)
+async def get_opportunity_claims(
+    opportunity_id: uuid.UUID,
+    db: DbSession,
+    _: RequireModerationAccess,
+) -> list[ClaimOut]:
+    """Moderator-or-higher. All real, persisted `Claim` rows for one
+    opportunity, each with a real `evidence_count` (a genuine
+    `COUNT(*)` against the `evidence` table, via an outer join+group-by
+    -- never fabricated). 404 when the opportunity itself doesn't
+    exist; a real opportunity with no claims yet cleanly returns `[]`."""
+    opportunity = await db.get(Opportunity, opportunity_id)
+    if opportunity is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Opportunity not found")
+
+    result = await db.execute(
+        select(Claim, func.count(Evidence.id))
+        .outerjoin(Evidence, Evidence.claim_id == Claim.id)
+        .where(Claim.opportunity_id == opportunity_id)
+        .group_by(Claim.id)
+        .order_by(Claim.created_at.asc())
+    )
+    rows = result.all()
+    return [
+        ClaimOut(
+            id=claim.id,
+            opportunity_id=claim.opportunity_id,
+            claim_type=claim.claim_type,
+            claim_value=claim.claim_value,
+            normalized_value=claim.normalized_value,
+            status=claim.status,
+            importance=claim.importance,
+            created_at=claim.created_at,
+            updated_at=claim.updated_at,
+            evidence_count=evidence_count,
+        )
+        for claim, evidence_count in rows
+    ]
+
+
+@router.get(
+    "/admin/opportunities/{opportunity_id}/verification",
+    response_model=VerificationDecisionOut,
+)
+async def get_opportunity_verification(
+    opportunity_id: uuid.UUID,
+    db: DbSession,
+    _: RequireModerationAccess,
+) -> VerificationDecisionOut:
+    """Moderator-or-higher. The real, CURRENT verification decision for
+    one opportunity, reconstructed read-only from its real, already-
+    persisted claims/evidence via `evidence_verification.
+    evaluate_verification_readonly` -- does not re-run AI extraction and
+    writes nothing. 404 only when the opportunity itself doesn't exist;
+    a real opportunity with no claims yet cleanly returns the same
+    UNVERIFIED/"no claims" decision the live pipeline would, never a
+    500."""
+    opportunity = await db.get(Opportunity, opportunity_id)
+    if opportunity is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Opportunity not found")
+
+    decision = await evidence_verification.evaluate_verification_readonly(db, opportunity_id=opportunity_id)
+    return VerificationDecisionOut(
+        status=decision.status.value,
+        reason=decision.reason,
+        evaluated_claims=[
+            EvaluatedClaimOut(
+                claim_id=ev.claim_id,
+                claim_type=ev.claim_type,
+                status=ev.status.value,
+                reason=ev.reason,
+                supporting_evidence_ids=ev.supporting_evidence_ids,
+                contradicting_evidence_ids=ev.contradicting_evidence_ids,
+            )
+            for ev in decision.evaluated_claims
+        ],
+        supporting_evidence_ids=decision.supporting_evidence_ids,
+        contradicting_evidence_ids=decision.contradicting_evidence_ids,
+        evaluated_at=decision.evaluated_at,
+        verification_version=decision.verification_version,
+    )
+
+
+@router.get(
+    "/admin/opportunities/evidence-stats",
+    response_model=EvidenceStatsOut,
+)
+async def get_evidence_stats(db: DbSession, _: RequireModerationAccess) -> EvidenceStatsOut:
+    """Moderator-or-higher. Real, freshly-computed DB aggregation counts
+    for the D6 observability counters named in the original spec --
+    plain SQLAlchemy `GROUP BY`/`COUNT(*)` queries, same posture as
+    `admin_stats.py`/`moderation_stats_service.py` (no metrics library
+    exists anywhere in this codebase). See `EvidenceStatsOut`'s own
+    docstring for exactly which fields are exact-from-persisted-data vs.
+    live-recomputed vs. honestly `None` (`evidence_duplicate_total` has
+    no persisted signal at all -- see that docstring)."""
+    caveats: list[str] = []
+
+    evidence_created_total = (await db.execute(select(func.count(Evidence.id)))).scalar_one()
+
+    caveats.append(
+        "evidence_duplicate_total: no persisted signal exists for a dedup hit in "
+        "evidence_verification.record_evidence's early-return path -- reported as null, not fabricated."
+    )
+
+    status_rows = (await db.execute(select(Claim.status, func.count(Claim.id)).group_by(Claim.status))).all()
+    status_counts = {claim_status: count for claim_status, count in status_rows}
+
+    evaluated_result = await db.execute(
+        select(func.count(func.distinct(Claim.id)))
+        .select_from(Claim)
+        .outerjoin(Evidence, Evidence.claim_id == Claim.id)
+        .where((Claim.status != EvidenceStatus.UNKNOWN.value) | (Evidence.id.isnot(None)))
+    )
+    claims_evaluated_total = evaluated_result.scalar_one()
+
+    verification_verified_total = (
+        await db.execute(select(func.count(Opportunity.id)).where(Opportunity.is_verified.is_(True)))
+    ).scalar_one()
+
+    # `VerificationDecision` itself is never persisted anywhere queryable
+    # (only its VERIFIED outcome's side effect, `is_verified=True`, is --
+    # see `EvidenceStatsOut`'s own docstring) -- live-recompute the
+    # HOLD/UNVERIFIED/STALE/REJECTED breakdown over every currently-
+    # unverified opportunity that has at least one real claim. Read-only,
+    # nothing written.
+    caveats.append(
+        "verification_hold_total/verification_unverified_total/verification_stale_total/"
+        "verification_rejected_total are live-recomputed via evaluate_verification_readonly over "
+        "currently-unverified opportunities with real claims -- no persisted VerificationDecision "
+        "field exists to query directly."
+    )
+
+    unverified_opp_ids_result = await db.execute(
+        select(Claim.opportunity_id)
+        .join(Opportunity, Opportunity.id == Claim.opportunity_id)
+        .where(Opportunity.is_verified.is_(False))
+        .distinct()
+    )
+    unverified_opp_ids = [row[0] for row in unverified_opp_ids_result.all()]
+
+    hold_total = 0
+    unverified_total = 0
+    stale_total = 0
+    rejected_total = 0
+    verified_but_unflagged = 0
+    for opp_id in unverified_opp_ids:
+        decision = await evidence_verification.evaluate_verification_readonly(db, opportunity_id=opp_id)
+        if decision.status == VerificationDecisionStatus.HOLD:
+            hold_total += 1
+        elif decision.status == VerificationDecisionStatus.STALE:
+            stale_total += 1
+        elif decision.status == VerificationDecisionStatus.REJECTED:
+            rejected_total += 1
+        elif decision.status == VerificationDecisionStatus.VERIFIED:
+            # Recomputes VERIFIED but `is_verified` is still False -- e.g.
+            # evidence changed since the pipeline last ran. Counted with
+            # the persisted verified total too, since it reflects the real
+            # current, recomputed truth.
+            verified_but_unflagged += 1
+        else:
+            unverified_total += 1
+
+    if verified_but_unflagged:
+        caveats.append(
+            f"{verified_but_unflagged} opportunity(ies) recompute to VERIFIED right now but "
+            "is_verified is still False (evidence likely changed since the pipeline last ran) -- "
+            "included in verification_verified_total."
+        )
+
+    return EvidenceStatsOut(
+        evidence_created_total=evidence_created_total,
+        evidence_duplicate_total=None,
+        claims_evaluated_total=claims_evaluated_total,
+        claims_supported_total=status_counts.get(EvidenceStatus.SUPPORTED.value, 0),
+        claims_contradicted_total=status_counts.get(EvidenceStatus.CONTRADICTED.value, 0),
+        claims_stale_total=status_counts.get(EvidenceStatus.STALE.value, 0),
+        claims_unsupported_total=status_counts.get(EvidenceStatus.UNSUPPORTED.value, 0),
+        claims_conflicted_total=status_counts.get(EvidenceStatus.CONFLICTED.value, 0),
+        claims_unknown_total=status_counts.get(EvidenceStatus.UNKNOWN.value, 0),
+        verification_verified_total=verification_verified_total + verified_but_unflagged,
+        verification_hold_total=hold_total,
+        verification_unverified_total=unverified_total,
+        verification_stale_total=stale_total,
+        verification_rejected_total=rejected_total,
+        caveats=caveats,
+    )
