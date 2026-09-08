@@ -507,6 +507,21 @@ async def hunt_contradictions_for_claim(
             # CONTRADICTS candidates may become Evidence rows).
             continue
         try:
+            # Phase 1 (Evidence Temporal Fidelity): both `retrieved_at`
+            # and `published_at` are deliberately left unpassed here --
+            # `record_evidence`'s own `now()` default IS the honest
+            # retrieval timestamp (this DDG search+classify happens
+            # synchronously, right now, no batching delay to correct
+            # for), and no real source-claimed publication date is ever
+            # available: `web_explorer_gateway.run_search` uses DDG's
+            # `source="text"` mode, whose results carry only
+            # {snippet, title, link} -- no date field. DDG's own
+            # `source="news"` mode does return a real `date`, but
+            # switching to it would change WHAT results come back (news
+            # articles only vs. general web pages), a real
+            # discovery/recall change to D7's search surface -- out of
+            # scope for a pure temporal-fidelity phase (see
+            # `app.services.temporal_evidence`'s module docstring).
             evidence = await record_evidence(
                 db,
                 opportunity_id=opportunity.id,

@@ -731,6 +731,14 @@ async def get_evidence_stats(db: DbSession, _: RequireModerationAccess) -> Evide
 
     evidence_created_total = (await db.execute(select(func.count(Evidence.id)))).scalar_one()
 
+    # Phase 1 (Evidence Temporal Fidelity) observability: real,
+    # freshly-computed counts -- see `EvidenceStatsOut`'s own docstring
+    # for why the "without" count is expected to dominate today.
+    evidence_with_published_at_total = (
+        await db.execute(select(func.count(Evidence.id)).where(Evidence.published_at.isnot(None)))
+    ).scalar_one()
+    evidence_without_published_at_total = evidence_created_total - evidence_with_published_at_total
+
     caveats.append(
         "evidence_duplicate_total: no persisted signal exists for a dedup hit in "
         "evidence_verification.record_evidence's early-return path -- reported as null, not fabricated."
@@ -804,6 +812,8 @@ async def get_evidence_stats(db: DbSession, _: RequireModerationAccess) -> Evide
     return EvidenceStatsOut(
         evidence_created_total=evidence_created_total,
         evidence_duplicate_total=None,
+        evidence_with_published_at_total=evidence_with_published_at_total,
+        evidence_without_published_at_total=evidence_without_published_at_total,
         claims_evaluated_total=claims_evaluated_total,
         claims_supported_total=status_counts.get(EvidenceStatus.SUPPORTED.value, 0),
         claims_contradicted_total=status_counts.get(EvidenceStatus.CONTRADICTED.value, 0),

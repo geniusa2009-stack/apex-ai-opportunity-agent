@@ -173,10 +173,20 @@ class EvidenceStatsOut(BaseModel):
       never persisted anywhere queryable (only its `VERIFIED` outcome's
       side effect, `is_verified=True`, is), so there is no cheaper,
       already-persisted-data query available for this breakdown.
+    - `evidence_with_published_at_total`/`evidence_without_published_at_total`
+      (Phase 1: Evidence Temporal Fidelity) are exact, real
+      `COUNT(*) WHERE published_at IS [NOT] NULL` over the `evidence`
+      table. Expected finding, not a bug: `evidence_without_published_at_total`
+      is effectively ALL evidence today, because no real source anywhere
+      in this pipeline currently supplies a genuine source-claimed
+      publication date -- see `app.services.temporal_evidence`'s own
+      module docstring for the full audit of why.
     """
 
     evidence_created_total: int
     evidence_duplicate_total: int | None
+    evidence_with_published_at_total: int
+    evidence_without_published_at_total: int
     claims_evaluated_total: int
     claims_supported_total: int
     claims_contradicted_total: int

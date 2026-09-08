@@ -405,9 +405,23 @@ async def _run_d6_evidence_pipeline(session, *, opportunity, verification):
         get_or_create_claim,
         record_evidence,
     )
+    from app.services.temporal_evidence import extract_retrieved_at_from_raw_scrape
 
     raw = opportunity.raw_extracted_data or {}
     raw_description = raw.get("description") if isinstance(raw, dict) else None
+
+    # Phase 1 (Evidence Temporal Fidelity): a real, source-adjacent
+    # `retrieved_at` when this opportunity's raw scrape carries one (set
+    # by the spider at the actual moment of scraping) -- strictly more
+    # accurate than "whenever this batch pipeline happens to run." `None`
+    # (absent/invalid) leaves `record_evidence`'s own honest `now()`
+    # default untouched. `published_at` is deliberately NOT derived here:
+    # no real source-claimed publication date exists anywhere in this
+    # pipeline today (see `temporal_evidence`'s own module docstring) --
+    # inventing one from `opportunity.created_at`/`updated_at` would be
+    # exactly the retrieval-time-as-publication-time fabrication this
+    # phase forbids.
+    retrieved_at = extract_retrieved_at_from_raw_scrape(raw)
 
     candidate_claims: list[tuple[str, str | None, str | None]] = [
         ("title", verification.title, None),
@@ -447,6 +461,7 @@ async def _run_d6_evidence_pipeline(session, *, opportunity, verification):
                 extraction_method="ai_gateway_structured_output",
                 retrieval_method="automated",
                 supports_claim=True,
+                retrieved_at=retrieved_at,
             )
         except EvidenceRejectedError:
             logger.warning(
