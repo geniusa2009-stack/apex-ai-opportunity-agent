@@ -119,6 +119,18 @@ CREATE TABLE evidence (
 """
 
 
+
+_CREATE_CONTRADICTIONS_SQL = """
+CREATE TABLE contradictions (
+    id VARCHAR(36) PRIMARY KEY, opportunity_id VARCHAR(36) NOT NULL, claim_id VARCHAR(36) NOT NULL,
+    supporting_evidence_id VARCHAR(36), contradicting_evidence_id VARCHAR(36) NOT NULL,
+    contradiction_type VARCHAR(30) NOT NULL, severity VARCHAR(20) NOT NULL,
+    source_authority VARCHAR(20) NOT NULL DEFAULT 'unknown',
+    detected_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, explanation TEXT NOT NULL,
+    contradiction_metadata TEXT
+)
+"""
+
 @pytest_asyncio.fixture
 async def db_session_factory():
     engine = create_async_engine(
@@ -131,6 +143,7 @@ async def db_session_factory():
         await conn.execute(text(_CREATE_OPPORTUNITIES_SQL))
         await conn.execute(text(_CREATE_CLAIMS_SQL))
         await conn.execute(text(_CREATE_EVIDENCE_SQL))
+        await conn.execute(text(_CREATE_CONTRADICTIONS_SQL))
     session_factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
     yield session_factory
     await engine.dispose()

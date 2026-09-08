@@ -967,3 +967,41 @@ class VerificationDecisionStatus(str, enum.Enum):
     HOLD = "hold"
     STALE = "stale"
     REJECTED = "rejected"
+
+
+class ContradictionType(str, enum.Enum):
+    """D7 (Contradiction Hunter & Adversarial Verification): the closed
+    set of contradiction categories this codebase can actually detect --
+    one per real claim_type in `evidence_verification.ALLOWED_CLAIM_TYPES`
+    that D7 actively hunts against (see `contradiction_hunter.py`'s own
+    `PRIORITY_CLAIM_TYPES`).
+
+    DISCLOSED SCOPING (same posture as `ALLOWED_CLAIM_TYPES` itself): no
+    AGE_CONFLICT / APPLICATION_STATUS_CONFLICT / PROGRAM_DATE_CONFLICT /
+    LOCATION_CONFLICT members exist here -- this codebase's real claim
+    vocabulary has no age / application-status / program-dates / location
+    claim_type to attack (see D6's own disclosed claim-type omission), so
+    those contradiction types would have no real evidence path and would
+    only create the illusion of coverage. NATIONALITY_CONFLICT is mapped
+    from claim_type="country" (D5.1's `country_hint`) -- the closest real
+    equivalent this codebase has to a nationality/geographic-eligibility
+    claim; it is not backed by a literal "nationality" field.
+    """
+
+    ELIGIBILITY_CONFLICT = "eligibility_conflict"
+    DEADLINE_CONFLICT = "deadline_conflict"
+    FUNDING_CONFLICT = "funding_conflict"
+    URL_CONFLICT = "url_conflict"
+    NATIONALITY_CONFLICT = "nationality_conflict"
+    OTHER = "other"
+
+
+class ContradictionSeverity(str, enum.Enum):
+    """D7: deterministic severity of one real `Contradiction` row -- see
+    `app/services/contradiction_hunter.py::_classify_severity`'s own
+    docstring for the exact, pure rule set. Never LLM-chosen."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"

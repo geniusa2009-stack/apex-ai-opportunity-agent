@@ -9,9 +9,15 @@ from app.core.config import settings
 from app.db.session import AsyncSessionLocal, engine
 from app.models import Opportunity
 from app.models.enums import AcademicLevel, Gender
-from app.services import entity_relationship_service, research_orchestrator, research_trajectory_memory
+from app.services import (
+    contradiction_hunter,
+    entity_relationship_service,
+    research_orchestrator,
+    research_trajectory_memory,
+)
 from app.services.ai import ai_gateway
 from app.services import evidence_verification
+from app.models.claim import Claim
 from app.models.enums import VerificationDecisionStatus
 
 logger = logging.getLogger(__name__)
@@ -243,7 +249,53 @@ async def _verify_new_opportunities(limit: int) -> dict:
                         )
                         d6_decision = None
 
+                    # D7 (Contradiction Hunter & Adversarial Verification)
+                    # integration point (spec sections 17/18) -- only
+                    # attacks a decision that D6 already reached VERIFIED
+                    # (no point adversarially searching against a decision
+                    # that isn't VERIFIED yet), and only when D4's own
+                    # depth policy for THIS objective
+                    # (`DEPTH_POLICIES[decision.depth].contradiction_hunting`)
+                    # says it earned that scrutiny -- the exact, pre-built
+                    # D4 hook `contradiction_hunter.py` reads directly, no
+                    # second budget/flag system. `is_verified` below is
+                    # gated on `final_decision` (POST-D7), not `d6_decision`
+                    # (PRE-D7): a real, backend-validated contradiction D7
+                    # finds can still downgrade an otherwise-VERIFIED
+                    # opportunity to HOLD/UNVERIFIED/CONFLICTED. Best-effort,
+                    # same posture as every other optional pass in this
+                    # loop -- a D7 failure must NEVER cause `is_verified=
+                    # True` where D6 alone would not have set it, so any
+                    # exception here simply leaves `final_decision` as D6's
+                    # own already-computed decision.
+                    final_decision = d6_decision
                     if d6_decision is not None and d6_decision.status == VerificationDecisionStatus.VERIFIED:
+                        try:
+                            claims_result = await session.execute(
+                                select(Claim).where(Claim.opportunity_id == opportunity.id)
+                            )
+                            claims_for_hunt = list(claims_result.scalars().all())
+                            hunt_result = await contradiction_hunter.hunt_contradictions_for_opportunity(
+                                session,
+                                opportunity=opportunity,
+                                claims=claims_for_hunt,
+                                decision=routing[0] if routing is not None else None,
+                                trajectory=routing[1] if routing is not None else None,
+                            )
+                            if hunt_result.ran:
+                                final_decision = await evidence_verification.decide_verification(
+                                    session, opportunity_id=opportunity.id, claims=claims_for_hunt
+                                )
+                        except Exception:
+                            logger.exception(
+                                "D7 contradiction hunter failed for opportunity %s -- D6's own decision "
+                                "stands unchanged (a D7 failure never upgrades OR downgrades is_verified "
+                                "on its own; only a real, recorded contradiction can)",
+                                opportunity.id,
+                            )
+                            final_decision = d6_decision
+
+                    if final_decision is not None and final_decision.status == VerificationDecisionStatus.VERIFIED:
                         opportunity.is_verified = True
                         verified += 1
 
@@ -267,19 +319,20 @@ async def _verify_new_opportunities(limit: int) -> dict:
                             )
                     else:
                         # AI thought this looked legitimate, but D6's real
-                        # evidence pipeline could not reach VERIFIED (no
-                        # supporting evidence, a contradiction, a stale-only
-                        # claim, or a conflict needing human HOLD review).
-                        # `is_verified` is deliberately left False --
-                        # cleaned title/deadline/etc. above are still saved
-                        # as useful reviewer-facing signal (same posture as
-                        # the flagging branch below), but the trust gate
-                        # itself is not crossed.
+                        # evidence pipeline (as possibly refined by D7's
+                        # adversarial contradiction hunt) could not reach
+                        # VERIFIED (no supporting evidence, a contradiction,
+                        # a stale-only claim, or a conflict needing human
+                        # HOLD review). `is_verified` is deliberately left
+                        # False -- cleaned title/deadline/etc. above are
+                        # still saved as useful reviewer-facing signal (same
+                        # posture as the flagging branch below), but the
+                        # trust gate itself is not crossed.
                         logger.info(
-                            "D6: opportunity %s not verified -- decision=%s reason=%s",
+                            "D6/D7: opportunity %s not verified -- decision=%s reason=%s",
                             opportunity.id,
-                            d6_decision.status.value if d6_decision else "pipeline_error",
-                            d6_decision.reason if d6_decision else "evidence pipeline raised",
+                            final_decision.status.value if final_decision else "pipeline_error",
+                            final_decision.reason if final_decision else "evidence pipeline raised",
                         )
                         flagged += 1
                 else:

@@ -21,6 +21,7 @@ from app.models.case_note import CaseNote
 from app.models.chat import ChatMessage, ChatParticipant, ChatRoom
 from app.models.chat_moderation import ChatMessageReport, ChatMessageReportEntry
 from app.models.claim import Claim
+from app.models.contradiction import Contradiction
 from app.models.evidence import Evidence
 from app.models.dangerous_action_confirmation import DangerousActionConfirmation
 from app.models.entity_relationship import EntityRelationship
@@ -62,6 +63,7 @@ __all__ = [
     "EntityRelationship",
     "Claim",
     "Evidence",
+    "Contradiction",
     "ResearchTrajectory",
     "ResearchTrajectoryStep",
     "Alumnus",

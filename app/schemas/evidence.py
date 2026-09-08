@@ -84,6 +84,26 @@ class EvaluatedClaimOut(BaseModel):
     contradicting_evidence_ids: list[uuid.UUID]
 
 
+class ContradictionOut(BaseModel):
+    """One real, persisted `Contradiction` row (D7 -- see
+    `app/models/contradiction.py`'s own module docstring). Never exposes
+    `contradiction_metadata` -- same "no current real content to justify
+    the exposure risk" posture as `EvidenceOut.evidence_metadata` above."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    opportunity_id: uuid.UUID
+    claim_id: uuid.UUID
+    supporting_evidence_id: uuid.UUID | None
+    contradicting_evidence_id: uuid.UUID
+    contradiction_type: str
+    severity: str
+    source_authority: str
+    detected_at: dt.datetime
+    explanation: str
+
+
 class VerificationDecisionOut(BaseModel):
     """The real, current verification decision for one opportunity --
     reconstructed READ-ONLY from that opportunity's real, already-
@@ -91,7 +111,13 @@ class VerificationDecisionOut(BaseModel):
     `evidence_verification.evaluate_verification_readonly`. Mirrors
     `evidence_verification.VerificationDecision` exactly; this is a
     read/recompute-for-display endpoint, not a new decision path -- it
-    can never itself flip `Opportunity.is_verified`."""
+    can never itself flip `Opportunity.is_verified`.
+
+    D7 ADDITION: `contradictions` -- the opportunity's real, persisted
+    `Contradiction` rows (see `app/api/v1/endpoints/admin_opportunities.py
+    ::get_opportunity_verification`, extended rather than duplicated per
+    D7 spec section 20). Defaults to an empty list so this stays a
+    backward-compatible superset of the D6 shape, not a breaking change."""
 
     status: str
     reason: str
@@ -100,6 +126,7 @@ class VerificationDecisionOut(BaseModel):
     contradicting_evidence_ids: list[uuid.UUID]
     evaluated_at: dt.datetime
     verification_version: str
+    contradictions: list[ContradictionOut] = []
 
 
 class EvidenceStatsOut(BaseModel):

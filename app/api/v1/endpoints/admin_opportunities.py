@@ -145,6 +145,7 @@ from app.api.deps import (
     effective_admin_role,
 )
 from app.models.claim import Claim
+from app.models.contradiction import Contradiction
 from app.models.enums import (
     AcademicLevel,
     EvidenceStatus,
@@ -160,6 +161,7 @@ from app.models.opportunity import Opportunity
 from app.models.user import User
 from app.schemas.evidence import (
     ClaimOut,
+    ContradictionOut,
     EvaluatedClaimOut,
     EvidenceOut,
     EvidenceStatsOut,
@@ -643,6 +645,19 @@ async def get_opportunity_verification(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Opportunity not found")
 
     decision = await evidence_verification.evaluate_verification_readonly(db, opportunity_id=opportunity_id)
+
+    # D7 addition (spec section 20: "extend rather than duplicate"): the
+    # opportunity's real, persisted `Contradiction` rows, scoped by this
+    # same path's `opportunity_id` -- same IDOR-safe scoping every other
+    # endpoint in this section uses.
+    contradiction_rows = (
+        await db.execute(
+            select(Contradiction)
+            .where(Contradiction.opportunity_id == opportunity_id)
+            .order_by(Contradiction.detected_at.desc())
+        )
+    ).scalars().all()
+
     return VerificationDecisionOut(
         status=decision.status.value,
         reason=decision.reason,
@@ -661,7 +676,42 @@ async def get_opportunity_verification(
         contradicting_evidence_ids=decision.contradicting_evidence_ids,
         evaluated_at=decision.evaluated_at,
         verification_version=decision.verification_version,
+        contradictions=[ContradictionOut.model_validate(row) for row in contradiction_rows],
     )
+
+
+@router.get(
+    "/admin/opportunities/{opportunity_id}/contradictions",
+    response_model=list[ContradictionOut],
+)
+async def get_opportunity_contradictions(
+    opportunity_id: uuid.UUID,
+    db: DbSession,
+    _: RequireModerationAccess,
+) -> list[ContradictionOut]:
+    """Moderator-or-higher. All real, persisted `Contradiction` rows for
+    one opportunity (D7 -- Contradiction Hunter & Adversarial
+    Verification), most recently detected first. 404 when the
+    opportunity itself doesn't exist; a real opportunity with no
+    contradictions (the overwhelming common case -- most claims are
+    never contradicted) cleanly returns `[]`, never a 500.
+
+    IDOR-safe by construction, same pattern as `get_opportunity_evidence`/
+    `get_opportunity_claims` above: the query is always scoped by THIS
+    path's own `opportunity_id`, never by any claim/evidence/contradiction
+    id a caller could supply elsewhere -- a contradiction belonging to a
+    different opportunity can never be read back through this path."""
+    opportunity = await db.get(Opportunity, opportunity_id)
+    if opportunity is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Opportunity not found")
+
+    result = await db.execute(
+        select(Contradiction)
+        .where(Contradiction.opportunity_id == opportunity_id)
+        .order_by(Contradiction.detected_at.desc())
+    )
+    rows = result.scalars().all()
+    return [ContradictionOut.model_validate(row) for row in rows]
 
 
 @router.get(
