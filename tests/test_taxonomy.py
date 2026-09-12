@@ -65,3 +65,43 @@ class TestNormalizeCountry:
     def test_empty_or_none_geography_returns_none(self):
         assert normalize_country(None) is None
         assert normalize_country("") is None
+
+    def test_phase4_real_vetted_source_countries(self):
+        # Phase 4 (Taxonomy / Geography Scalability): these countries
+        # are not speculative -- each was named in Phase 3A's own real
+        # source-vetting notes for @opcorners/@FullOpportunities, or
+        # observed directly in Phase 3B.1's real live-fetched sample
+        # text ("Youth Forum on UN Global Goals 2026 Switzerland").
+        assert normalize_country("China") == "CN"
+        assert normalize_country("الصين") == "CN"
+        assert normalize_country("Saudi Arabia") == "SA"
+        assert normalize_country("KSA") == "SA"
+        assert normalize_country("السعودية") == "SA"
+        assert normalize_country("Hong Kong") == "HK"
+        assert normalize_country("South Korea") == "KR"
+        assert normalize_country("Republic of Korea") == "KR"
+        assert normalize_country("Finland") == "FI"
+        assert normalize_country("Hungary") == "HU"
+        assert normalize_country("Romania") == "RO"
+        assert normalize_country("Japan") == "JP"
+        assert normalize_country("اليابان") == "JP"
+        assert normalize_country("Singapore") == "SG"
+        assert normalize_country("Australia") == "AU"
+        assert normalize_country("Switzerland") == "CH"
+        assert normalize_country("سويسرا") == "CH"
+        assert normalize_country("Georgia") == "GE"
+
+    def test_bare_korea_is_not_guessed(self):
+        # Deliberate, disclosed non-mapping: bare "Korea" is genuinely
+        # ambiguous between North and South Korea with no real signal
+        # to disambiguate -- this must stay None, never a guess.
+        assert normalize_country("Korea") is None
+
+    def test_existing_pre_phase4_entries_unchanged(self):
+        # Confirms the Phase 4 addition is purely additive: every
+        # pre-existing D5.1 entry still resolves identically.
+        assert normalize_country("France") == "FR"
+        assert normalize_country("Kenya") == "KE"
+        assert normalize_country("Germany") == "DE"
+        assert normalize_country("United States") == "US"
+        assert normalize_country("UK") == "GB"

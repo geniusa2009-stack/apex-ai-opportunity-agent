@@ -39,9 +39,10 @@ Geography ("Global Architecture Requirement A"): `Opportunity.country`
 no canonical country-code system anywhere in this codebase (confirmed:
 zero `pycountry`/`babel`/ISO-3166 dependency in `requirements.txt`).
 Building a full ISO-3166 database from scratch, or adding a new pinned
-third-party dependency, is real overbuilding risk for a system whose
-real current data contains exactly one real country value ("Egypt")
-plus a "Global" sentinel. `COUNTRY_ALIASES` below is therefore a small,
+third-party dependency, is real overbuilding risk for a system whose real, vetted source content
+(Phase 3A/3B's own vetting trail) names a genuinely broader, but still
+bounded, real set of countries -- not a full global range. `COUNTRY_ALIASES`
+below is therefore a small,
 explicit, extensible static table -- NOT a full country database --
 covering what this codebase's real data/sources actually use today,
 with a documented, one-line-per-country extension point. This resolver
@@ -178,6 +179,50 @@ COUNTRY_ALIASES: dict[str, str] = {
     "united kingdom": "GB",
     "uk": "GB",
     "great britain": "GB",
+    # Phase 4 (Taxonomy / Geography Scalability): these entries are NOT
+    # a speculative expansion -- each country below is one this
+    # codebase's own real, vetted source-vetting trail already named as
+    # real content genuinely observed at a real, live source: Phase 3A's
+    # own vetting notes for `@opcorners` ("recent posts spanning the US,
+    # China, UK, Germany, Saudi Arabia, Hong Kong, South Korea") and
+    # `@FullOpportunities` ("UK, Finland, Hungary, Germany, Romania,
+    # Japan, Singapore, Australia, Georgia"), plus Phase 3B.1's own real
+    # live-fetched `@opcorners` sample text ("Youth Forum on UN Global
+    # Goals 2026 Switzerland"). English forms only, except where an
+    # Arabic form is one this codebase already has clear, safe
+    # precedent for (mirroring the Egypt/France/Kenya entries above) --
+    # no machine-translated or guessed multilingual form was added.
+    "china": "CN",
+    "الصين": "CN",
+    "saudi arabia": "SA",
+    "ksa": "SA",
+    "السعودية": "SA",
+    "المملكة العربية السعودية": "SA",
+    "hong kong": "HK",
+    # "korea" alone is deliberately NOT mapped -- North/South Korea are
+    # both real, distinct ISO-3166 entries and this codebase has no
+    # real signal to disambiguate bare "Korea" honestly; only the
+    # unambiguous, actually-observed "South Korea" form is mapped.
+    "south korea": "KR",
+    "republic of korea": "KR",
+    "finland": "FI",
+    "hungary": "HU",
+    "romania": "RO",
+    "japan": "JP",
+    "اليابان": "JP",
+    "singapore": "SG",
+    "australia": "AU",
+    "switzerland": "CH",
+    "سويسرا": "CH",
+    # KNOWN, DISCLOSED AMBIGUITY: "Georgia" the country (ISO "GE") and
+    # Georgia the U.S. state share the identical English name with no
+    # reliable disambiguating signal in free text alone. Mapped to the
+    # country per this codebase's actual vetting context (an
+    # international scholarship-source vetting note, not a US-state
+    # context), but this is a real, disclosed limitation of a plain
+    # string-keyed table, not a resolved edge case -- a future,
+    # context-aware resolver would be needed to truly disambiguate this.
+    "georgia": "GE",
 }
 
 
