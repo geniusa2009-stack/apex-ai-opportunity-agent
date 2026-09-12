@@ -127,6 +127,24 @@ CREATE TABLE evidence (
 )
 """
 
+# Phase 2 (Real Verification Provider Diversity): `contradictions` is
+# needed only by `TestPhase2D6D7Integration`'s real D7-reachability
+# test below (same DDL as `tests/test_contradiction_hunter.py`'s own
+# fixture) -- D7's real `hunt_contradictions_for_opportunity` writes a
+# real `Contradiction` row when it downgrades an otherwise-VERIFIED
+# decision.
+_CREATE_CONTRADICTIONS_TABLE_SQL = """
+CREATE TABLE contradictions (
+    id VARCHAR(36) PRIMARY KEY, opportunity_id VARCHAR(36) NOT NULL, claim_id VARCHAR(36) NOT NULL,
+    supporting_evidence_id VARCHAR(36), contradicting_evidence_id VARCHAR(36) NOT NULL,
+    contradiction_type VARCHAR(30) NOT NULL, severity VARCHAR(20) NOT NULL,
+    source_authority VARCHAR(20) NOT NULL DEFAULT 'unknown',
+    detected_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, explanation TEXT NOT NULL,
+    contradiction_metadata TEXT
+)
+"""
+
+
 @pytest_asyncio.fixture
 async def db_engine():
     engine = create_async_engine(
@@ -142,6 +160,7 @@ async def db_engine():
         await conn.execute(text(_CREATE_RESEARCH_TRAJECTORY_STEPS_SQL))
         await conn.execute(text(_CREATE_CLAIMS_TABLE_SQL))
         await conn.execute(text(_CREATE_EVIDENCE_TABLE_SQL))
+        await conn.execute(text(_CREATE_CONTRADICTIONS_TABLE_SQL))
     yield engine
     await engine.dispose()
 
@@ -283,10 +302,14 @@ class TestProviderRegistry:
         openai_entry = next(e for e in registry if e["provider"] == "openai")
         assert openai_entry["available"] is True
 
-    def test_only_openai_is_verification_suitable(self):
+    def test_openai_and_gemini_are_verification_suitable_openai_primary(self):
+        """Phase 2 (Real Verification Provider Diversity): Gemini is now
+        a genuine second VERIFICATION-suitable candidate in the real,
+        production registry (see `PROVIDER_CAPABILITIES`'s own Gemini
+        entry) -- OpenAI stays primary/first because of its lower
+        `priority`, per `_candidates_for_task`'s own fixed tiebreak."""
         candidates = ro._candidates_for_task(ReasoningTaskType.VERIFICATION)
-        assert len(candidates) == 1
-        assert candidates[0].provider.value == "openai"
+        assert [c.provider.value for c in candidates] == ["openai", "gemini"]
 
     def test_anthropic_is_document_generation_suitable_not_verification(self):
         verification_candidates = {c.provider for c in ro.PROVIDER_CAPABILITIES if ReasoningTaskType.VERIFICATION in c.task_suitability}
@@ -903,43 +926,43 @@ class TestExecutionControl:
         assert len(decision.attempts) == 1
 
     async def test_escalate_calls_a_second_genuinely_eligible_provider(self, db_session_factory, monkeypatch):
-        """B. A second candidate is only ever tried if it is real: task-
-        suitable AND genuinely available. Since only OpenAI carries
-        `VERIFICATION` suitability in the real, production
-        `PROVIDER_CAPABILITIES` registry today, this test injects a
-        clearly test-only second capability entry (NOT a real production
-        capability -- see the module docstring's own disclosure of this
-        fact) to exercise the second-call path at all."""
-        test_only_second = ro.ProviderCapability(
-            provider=ro.ProviderName.GEMINI,
-            model="test-only-escalation-model",
-            task_suitability=frozenset({ro.ReasoningTaskType.VERIFICATION}),
-            structured_output=False, tool_use=False, long_context=False, multimodal=False,
-            reasoning_strength="low", low_latency=True, low_cost=True,
-            priority=1, api_key_setting="gemini_api_key",
-        )
-        monkeypatch.setattr(ro, "PROVIDER_CAPABILITIES", ro.PROVIDER_CAPABILITIES + (test_only_second,))
-        # Both real (OpenAI, priority=0) and test-only (Gemini, priority=1)
-        # candidates genuinely "available" here -- OpenAI still sorts
-        # first (lower priority), so the primary call is the real one.
+        """B. THE single most important dispatch-integrity test in Phase 2
+        (Real Verification Provider Diversity). OpenAI (real, primary,
+        priority=0) fails; Gemini (real, genuinely available here via a
+        patched key, priority=1) is the escalation candidate. Proves,
+        with REAL assertions on which `AIGateway` method was actually
+        invoked -- not just that "some call happened" -- that:
+          1. OpenAI's real gateway method (`verify_and_embed`) is called
+             exactly once, and fails.
+          2. Gemini's real, DISTINCT gateway method
+             (`verify_and_embed_gemini`) is the one actually invoked for
+             the second attempt -- never OpenAI's method again, and never
+             a shared/generic mock standing in for both providers.
+          3. `attempt_record["provider"]` for each attempt matches EXACTLY
+             which mocked gateway method was actually called for that
+             attempt (selected_provider == executed_provider can never
+             diverge) -- this is the exact D4.1 bug this phase fixes: the
+             loop used to track `candidate.provider` correctly while
+             always calling OpenAI's method underneath regardless.
+        No test-only `PROVIDER_CAPABILITIES` entry is injected here at
+        all -- Gemini's VERIFICATION suitability is now real, production
+        registry state (see `PROVIDER_CAPABILITIES`'s own Gemini entry);
+        only its *availability* (a live API key) is patched, exactly like
+        `test_available_provider_is_preferred_over_unavailable_when_both_suitable`
+        does elsewhere in this file."""
         monkeypatch.setattr(ro.settings, "openai_api_key", "test-only-real-looking-key")
         monkeypatch.setattr(ro.settings, "gemini_api_key", "test-only-real-looking-key")
 
-        failing_schema_exc = TimeoutError("openai timeout")
         success_schema = VerifiedOpportunitySchema(
             title="Y", eligibility_criteria="anyone", funding_details=None, deadline=None,
             is_legitimate=True, confidence_score=0.9, min_age=None, max_age=None,
             target_gender=None, target_academic_levels=None,
         )
-        calls = []
 
-        async def _fake_verify(_raw):
-            calls.append(len(calls) + 1)
-            if len(calls) == 1:
-                raise failing_schema_exc
-            return success_schema, [0.2] * 1536
-
-        monkeypatch.setattr(ro.ai_gateway, "verify_and_embed", _fake_verify)
+        openai_mock = AsyncMock(side_effect=TimeoutError("openai timeout"))
+        gemini_mock = AsyncMock(return_value=(success_schema, [0.2] * 1536))
+        monkeypatch.setattr(ro.ai_gateway, "verify_and_embed", openai_mock)
+        monkeypatch.setattr(ro.ai_gateway, "verify_and_embed_gemini", gemini_mock)
 
         async with db_session_factory() as db:
             opportunity, decision, trajectory, step = await self._routed(db, country="Global")
@@ -948,18 +971,29 @@ class TestExecutionControl:
             )
             await db.commit()
 
-        assert len(calls) == 2
+        # 1 + 2: each real gateway method was invoked exactly the right
+        # number of times -- not "a call happened somewhere", but this
+        # SPECIFIC provider's SPECIFIC method.
+        assert openai_mock.await_count == 1
+        assert gemini_mock.await_count == 1
+        openai_mock.assert_awaited_once_with(opportunity.raw_extracted_data or {})
+        gemini_mock.assert_awaited_once_with(opportunity.raw_extracted_data or {})
+
         assert result_schema is not None  # the second, genuinely-eligible provider succeeded
+        assert result_schema.title == "Y"  # unambiguously Gemini's mocked response, not OpenAI's
         assert len(decision.attempts) == 2
+
+        # 3: selected_provider == executed_provider, pinned per attempt.
         assert decision.attempts[0]["provider"] == "openai"
         assert decision.attempts[0]["outcome"] == "provider_call_failed"
+        assert decision.attempts[0]["provider_available"] is True  # a real failure, not a missing-key skip
         assert decision.attempts[1]["provider"] == "gemini"
         assert decision.attempts[1]["outcome"] == "legitimate"
-        # Both real (OpenAI) and test-only (Gemini) candidates have now
-        # been tried -- no third VERIFICATION-suitable candidate exists,
-        # so a further escalation request still correctly reports
-        # unavailable rather than looping back onto an already-tried
-        # provider.
+        assert decision.attempts[1]["provider_available"] is True
+        # Both real VERIFICATION-suitable candidates have now been tried
+        # -- no third one exists, so a further escalation request still
+        # correctly reports unavailable rather than looping back onto an
+        # already-tried provider.
         assert decision.escalation_unavailable is True
 
     async def test_escalate_with_no_alternative_provider_stops_safely(self, db_session_factory, monkeypatch):
@@ -1020,6 +1054,7 @@ class TestExecutionControl:
         monkeypatch.setattr(ro, "PROVIDER_CAPABILITIES", ro.PROVIDER_CAPABILITIES + extra)
         for cap in extra:
             monkeypatch.setattr(ro.settings, cap.api_key_setting, "test-only-real-looking-key")
+        monkeypatch.setattr(ro.settings, "gemini_api_key", "test-only-real-looking-key")
         # Force escalation every single time so only the hard call-count
         # ceiling -- not a lack of triggers -- can end the loop.
         monkeypatch.setattr(ro, "should_stop", lambda evidence, policy: (False, "test: never stop"))
@@ -1032,12 +1067,19 @@ class TestExecutionControl:
         )
         call_count = 0
 
-        async def _fake_verify(_raw):
+        # This test is about the LOOP's hard ceiling, not about which
+        # specific provider's gateway method runs -- ANTHROPIC/GROQ here
+        # are deliberately test-only VERIFICATION candidates with no real
+        # gateway implementation wired (see `_VERIFICATION_DISPATCH`), so
+        # the dispatch helper itself (not a single provider's method) is
+        # mocked to stay provider-agnostic while still proving the real
+        # `_call_verification_provider` call site is what's bounded.
+        async def _fake_dispatch(_candidate, _raw):
             nonlocal call_count
             call_count += 1
             return schema, [0.1] * 1536
 
-        monkeypatch.setattr(ro.ai_gateway, "verify_and_embed", _fake_verify)
+        monkeypatch.setattr(ro, "_call_verification_provider", _fake_dispatch)
 
         async with db_session_factory() as db:
             opportunity, decision, trajectory, step = await self._routed(db, country="Global")
@@ -1074,8 +1116,18 @@ class TestExecutionControl:
 
         assert result_schema is None
         assert call_count <= policy.max_provider_calls
-        assert call_count == 1  # single real VERIFICATION-suitable provider -- no eligible alternative to retry
+        # Gemini is now a real, registered second VERIFICATION-suitable
+        # candidate (Phase 2), but its API key is honestly empty in this
+        # sandbox -- `_provider_available` correctly reports it as
+        # unavailable, so there is no genuinely eligible alternative to
+        # escalate to and the loop stops after the one real OpenAI call.
+        assert call_count == 1
         assert decision.attempts[-1]["outcome"] == "provider_call_failed"
+        # Honest distinction (requirement #6): this attempt's own record
+        # says the primary candidate's key was NOT set either -- the
+        # mocked call failure here doesn't represent a live provider
+        # outage, it stands in for the real (also key-less) OpenAI call.
+        assert decision.attempts[-1]["provider_available"] is False
         assert decision.escalation_unavailable is True
 
     async def test_source_authority_is_never_hardcoded_true(self, db_session_factory, monkeypatch):
@@ -1259,3 +1311,408 @@ class TestAdminRoutingEndpoints:
         assert len(body) == 1
         assert body[0]["provider"] == "openai"
         assert body[0]["times_selected_primary"] == 3
+
+
+
+# =======================================================================
+# Phase 2: Real Verification Provider Diversity -- dispatch integrity,
+# D6/D7 integration with Gemini as the executing provider, and D3
+# traceability read-back. See `research_orchestrator.py`'s own "M."
+# section docstring and `_call_verification_provider`'s docstring for
+# the exact D4.1 bug this phase fixes: the loop tracked `candidate`
+# correctly but the actual call was always OpenAI's, regardless.
+# =======================================================================
+
+
+@pytest.mark.asyncio
+class TestPhase2ProviderDispatch:
+    """Unit-level tests against `execute_verification` directly (same
+    convention as `TestExecutionControl` above), with REAL assertions on
+    which `AIGateway` method actually executed -- not just that some
+    call happened."""
+
+    async def _routed(self, db, *, country="Egypt", opp_type="scholarship"):
+        from app.models.opportunity import Opportunity
+
+        opp_id = await _make_opportunity(db, country=country, opp_type=opp_type)
+        opportunity = await db.get(Opportunity, opp_id)
+        decision, trajectory, step = await ro.orchestrate_verification(db, opportunity=opportunity)
+        await db.commit()
+        return opportunity, decision, trajectory, step
+
+    @staticmethod
+    def _schema(**overrides):
+        defaults = dict(
+            title="X", eligibility_criteria="anyone", funding_details=None, deadline=None,
+            is_legitimate=True, confidence_score=0.9, min_age=None, max_age=None,
+            target_gender=None, target_academic_levels=None,
+        )
+        defaults.update(overrides)
+        return VerifiedOpportunitySchema(**defaults)
+
+    async def test_openai_selected_openai_method_executes_gemini_never_touched(self, db_session_factory, monkeypatch):
+        """OpenAI's key is genuinely available (patched); Gemini's stays
+        the real, empty sandbox value -- OpenAI is primary and its real
+        method executes; Gemini's real method is never even called."""
+        monkeypatch.setattr(ro.settings, "openai_api_key", "test-only-real-looking-key")
+        openai_mock = AsyncMock(return_value=(self._schema(), [0.1] * 1536))
+        gemini_mock = AsyncMock(side_effect=AssertionError("Gemini must never be called here"))
+        monkeypatch.setattr(ro.ai_gateway, "verify_and_embed", openai_mock)
+        monkeypatch.setattr(ro.ai_gateway, "verify_and_embed_gemini", gemini_mock)
+
+        async with db_session_factory() as db:
+            opportunity, decision, trajectory, step = await self._routed(db)
+            assert decision.primary_provider.value == "openai"
+            result_schema, embedding, decision = await ro.execute_verification(
+                db, opportunity=opportunity, decision=decision, trajectory=trajectory, step=step
+            )
+            await db.commit()
+
+        openai_mock.assert_awaited_once_with(opportunity.raw_extracted_data or {})
+        gemini_mock.assert_not_awaited()
+        assert result_schema is not None
+        assert decision.attempts[0]["provider"] == "openai"
+
+    async def test_gemini_selected_as_primary_gemini_method_executes_openai_never_touched(
+        self, db_session_factory, monkeypatch
+    ):
+        """THE single most important dispatch-integrity test in Phase 2.
+        Only Gemini's key is genuinely available here (OpenAI's stays
+        the real, empty sandbox default) -- `_candidates_for_task`'s own
+        availability-before-priority tiebreak makes Gemini the PRIMARY
+        selected candidate, and it is Gemini's real, distinct gateway
+        method (`verify_and_embed_gemini`) that actually executes --
+        never OpenAI's `verify_and_embed`, which is asserted never
+        called at all. This is the exact behavior the original D4.1 bug
+        made impossible: the candidate the router selects and the
+        gateway call that actually runs can no longer diverge."""
+        monkeypatch.setattr(ro.settings, "gemini_api_key", "test-only-real-looking-key")
+        gemini_schema = self._schema(title="Gemini Result")
+        openai_mock = AsyncMock(side_effect=AssertionError("OpenAI must never be called here"))
+        gemini_mock = AsyncMock(return_value=(gemini_schema, [0.3] * 1536))
+        monkeypatch.setattr(ro.ai_gateway, "verify_and_embed", openai_mock)
+        monkeypatch.setattr(ro.ai_gateway, "verify_and_embed_gemini", gemini_mock)
+
+        async with db_session_factory() as db:
+            opportunity, decision, trajectory, step = await self._routed(db, country="Global")
+            assert decision.primary_provider.value == "gemini"
+            result_schema, embedding, decision = await ro.execute_verification(
+                db, opportunity=opportunity, decision=decision, trajectory=trajectory, step=step
+            )
+            await db.commit()
+
+        gemini_mock.assert_awaited_once_with(opportunity.raw_extracted_data or {})
+        openai_mock.assert_not_awaited()
+        assert result_schema is gemini_schema
+        assert result_schema.title == "Gemini Result"
+        assert decision.attempts[0]["provider"] == "gemini"
+        assert decision.attempts[0]["outcome"] == "legitimate"
+
+    async def test_gemini_unavailable_no_key_never_fabricates_a_gemini_execution(self, db_session_factory, monkeypatch):
+        """The real, default sandbox state: both keys empty. OpenAI is
+        tried (fails), Gemini is task-suitable but honestly UNAVAILABLE
+        -- the loop must stop safely (`escalation_unavailable`) and must
+        NEVER call Gemini's real method, even once, to fake a second
+        opinion."""
+        openai_mock = AsyncMock(side_effect=TimeoutError("openai timeout"))
+        gemini_mock = AsyncMock(side_effect=AssertionError("Gemini must never execute -- it has no real key"))
+        monkeypatch.setattr(ro.ai_gateway, "verify_and_embed", openai_mock)
+        monkeypatch.setattr(ro.ai_gateway, "verify_and_embed_gemini", gemini_mock)
+
+        async with db_session_factory() as db:
+            opportunity, decision, trajectory, step = await self._routed(db)
+            result_schema, embedding, decision = await ro.execute_verification(
+                db, opportunity=opportunity, decision=decision, trajectory=trajectory, step=step
+            )
+            await db.commit()
+
+        gemini_mock.assert_not_awaited()
+        openai_mock.assert_awaited_once()
+        assert result_schema is None
+        assert len(decision.attempts) == 1
+        assert decision.attempts[0]["provider"] == "openai"
+        assert decision.attempts[0]["provider_available"] is False
+        assert decision.escalation_unavailable is True
+
+    async def test_both_real_providers_available_and_failing_stops_never_loops_further(
+        self, db_session_factory, monkeypatch
+    ):
+        """Budget/ceiling proof with TWO real, genuinely available
+        candidates in play (not just one): both OpenAI and Gemini fail,
+        and the loop still stops -- it never calls either provider a
+        third time, and never exceeds `policy.max_provider_calls`."""
+        monkeypatch.setattr(ro.settings, "openai_api_key", "test-only-real-looking-key")
+        monkeypatch.setattr(ro.settings, "gemini_api_key", "test-only-real-looking-key")
+        openai_mock = AsyncMock(side_effect=TimeoutError("openai timeout"))
+        gemini_mock = AsyncMock(side_effect=TimeoutError("gemini timeout"))
+        monkeypatch.setattr(ro.ai_gateway, "verify_and_embed", openai_mock)
+        monkeypatch.setattr(ro.ai_gateway, "verify_and_embed_gemini", gemini_mock)
+
+        async with db_session_factory() as db:
+            opportunity, decision, trajectory, step = await self._routed(db, country="Global")
+            policy = ro.DEPTH_POLICIES[decision.depth]
+            result_schema, embedding, decision = await ro.execute_verification(
+                db, opportunity=opportunity, decision=decision, trajectory=trajectory, step=step
+            )
+            await db.commit()
+
+        expected_gemini_calls = 1 if policy.max_provider_calls >= 2 else 0
+        assert openai_mock.await_count == 1
+        assert gemini_mock.await_count == expected_gemini_calls
+        assert openai_mock.await_count + gemini_mock.await_count <= policy.max_provider_calls
+        assert len(decision.attempts) == openai_mock.await_count + gemini_mock.await_count
+        assert len(decision.attempts) <= 2  # only two real VERIFICATION-suitable candidates exist at all
+        assert all(a["outcome"] == "provider_call_failed" for a in decision.attempts)
+        assert result_schema is None
+        assert decision.escalation_unavailable is True
+
+    async def test_selected_provider_matches_executed_provider_for_every_attempt(self, db_session_factory, monkeypatch):
+        """Direct, per-attempt pairing proof: for every attempt actually
+        made, `attempt_record["provider"]` matches exactly which mocked
+        gateway method was awaited for that attempt -- not just that
+        both individually look right in isolation."""
+        monkeypatch.setattr(ro.settings, "openai_api_key", "test-only-real-looking-key")
+        monkeypatch.setattr(ro.settings, "gemini_api_key", "test-only-real-looking-key")
+        gemini_schema = self._schema(title="Escalated Result")
+        openai_mock = AsyncMock(side_effect=TimeoutError("openai timeout"))
+        gemini_mock = AsyncMock(return_value=(gemini_schema, [0.2] * 1536))
+        monkeypatch.setattr(ro.ai_gateway, "verify_and_embed", openai_mock)
+        monkeypatch.setattr(ro.ai_gateway, "verify_and_embed_gemini", gemini_mock)
+
+        async with db_session_factory() as db:
+            opportunity, decision, trajectory, step = await self._routed(db, country="Global")
+            result_schema, embedding, decision = await ro.execute_verification(
+                db, opportunity=opportunity, decision=decision, trajectory=trajectory, step=step
+            )
+            await db.commit()
+
+        provider_to_mock = {"openai": openai_mock, "gemini": gemini_mock}
+        assert len(decision.attempts) == 2
+        for attempt in decision.attempts:
+            mock_for_this_attempt = provider_to_mock[attempt["provider"]]
+            # This attempt's own declared provider is exactly the one
+            # whose mock recorded a call -- selected_provider ==
+            # executed_provider, pinned per attempt, not just overall.
+            assert mock_for_this_attempt.await_count >= 1
+        assert openai_mock.await_count == 1
+        assert gemini_mock.await_count == 1
+        assert result_schema is gemini_schema
+
+    async def test_d3_traceability_two_distinct_attempts_read_back_from_db(self, db_session_factory, monkeypatch):
+        """Real DB read-back (not a mock assertion): after a real
+        two-attempt scenario (OpenAI fails, Gemini executes),
+        `ResearchTrajectoryStep.step_metadata["attempts"]` -- read back
+        fresh from the database via `get_routing_trace` -- contains two
+        distinct, correctly-labeled attempt records."""
+        monkeypatch.setattr(ro.settings, "openai_api_key", "test-only-real-looking-key")
+        monkeypatch.setattr(ro.settings, "gemini_api_key", "test-only-real-looking-key")
+        gemini_schema = self._schema(title="Gemini Wins", confidence_score=0.85)
+        openai_mock = AsyncMock(side_effect=TimeoutError("openai timeout"))
+        gemini_mock = AsyncMock(return_value=(gemini_schema, [0.4] * 1536))
+        monkeypatch.setattr(ro.ai_gateway, "verify_and_embed", openai_mock)
+        monkeypatch.setattr(ro.ai_gateway, "verify_and_embed_gemini", gemini_mock)
+
+        async with db_session_factory() as db:
+            opportunity, decision, trajectory, step = await self._routed(db, country="Global")
+            await ro.execute_verification(
+                db, opportunity=opportunity, decision=decision, trajectory=trajectory, step=step
+            )
+            await db.commit()
+            trajectory_id = trajectory.id
+
+        async with db_session_factory() as fresh_db:
+            trace = await ro.get_routing_trace(fresh_db, trajectory_id)
+
+        assert trace is not None
+        attempts = trace["attempts"]
+        assert len(attempts) == 2
+        assert attempts[0]["provider"] == "openai"
+        assert attempts[0]["outcome"] == "provider_call_failed"
+        assert attempts[1]["provider"] == "gemini"
+        assert attempts[1]["outcome"] == "legitimate"
+        assert attempts[1]["confidence_score"] == 0.85
+
+
+@pytest.mark.asyncio
+class TestPhase2D6D7Integration:
+    """Full, real integration through
+    `app/workers/tasks.py::_verify_new_opportunities` with Gemini as the
+    executing provider -- same posture/conventions as
+    `tests/test_contradiction_hunter.py::TestTasksIntegration`: proves
+    D6 remains the mandatory gate and D7 remains reachable regardless of
+    which provider produced the upstream `VerifiedOpportunitySchema`."""
+
+    async def test_gemini_executes_and_real_d6_pipeline_reaches_verified(self, db_session_factory, monkeypatch):
+        """A real, unmocked D6 evidence pipeline run against a
+        Gemini-sourced (not OpenAI-sourced) verification result reaches
+        VERIFIED given genuine supporting evidence -- proving D6 is not
+        somehow OpenAI-specific plumbing."""
+        from unittest.mock import patch
+        from app.workers.tasks import _verify_new_opportunities
+
+        monkeypatch.setattr(ro.settings, "gemini_api_key", "test-only-real-looking-key")
+
+        async with db_session_factory() as db:
+            opp_id = await _make_opportunity(db, country="Egypt", opp_type="scholarship")
+            await db.execute(
+                text(
+                    "UPDATE opportunities SET raw_extracted_data = :raw, "
+                    "eligibility_criteria = 'placeholder' WHERE id = :id"
+                ),
+                {"raw": '{"description": "Real listing text."}', "id": opp_id.hex},
+            )
+            await db.commit()
+
+        gemini_schema = VerifiedOpportunitySchema(
+            title="Legit-Looking", eligibility_criteria="Open to all applicants.", funding_details=None,
+            deadline=None, is_legitimate=True, confidence_score=0.99,
+            min_age=None, max_age=None, target_gender=None, target_academic_levels=None,
+        )
+        gemini_mock = AsyncMock(return_value=(gemini_schema, [0.1] * 1536))
+        openai_mock = AsyncMock(side_effect=AssertionError("OpenAI must never execute -- Gemini is primary here"))
+
+        with patch("app.workers.tasks.AsyncSessionLocal", db_session_factory), patch(
+            "app.workers.tasks.engine", new=AsyncMock()
+        ), patch("app.workers.tasks.ai_gateway.verify_and_embed", new=openai_mock), patch(
+            "app.workers.tasks.ai_gateway.verify_and_embed_gemini", new=gemini_mock
+        ):
+            summary = await _verify_new_opportunities(limit=10)
+
+        gemini_mock.assert_awaited_once()
+        openai_mock.assert_not_awaited()
+        assert summary["verified"] == 1
+        async with db_session_factory() as db:
+            row = (
+                await db.execute(text("SELECT is_verified FROM opportunities WHERE id = :id"), {"id": opp_id.hex})
+            ).first()
+            assert row[0] == 1
+
+    async def test_gemini_maximally_compliant_result_cannot_bypass_d6_gate(self, db_session_factory, monkeypatch):
+        """The exact prompt-injection/D6-integrity proof at the Gemini
+        boundary: a maximally-compliant fake Gemini response
+        (is_legitimate=True, confidence_score=1.0 -- exactly what an
+        injection attempt in the raw scraped text would try to extract,
+        see `tests/test_ai_gemini_verification.py`'s own equivalent test
+        at the gateway level) still cannot set `is_verified=True` when
+        D6's real evidence pipeline does not reach VERIFIED. Same
+        convention as
+        `tests/test_contradiction_hunter.py::TestTasksIntegration::
+        test_d7_never_runs_when_d6_did_not_reach_verified` (D6 itself is
+        forced to its own honest 'did not verify' outcome here, not
+        mocked to lie -- what's mocked is only Gemini's provider call)."""
+        from unittest.mock import patch
+        from app.workers.tasks import _verify_new_opportunities
+
+        monkeypatch.setattr(ro.settings, "gemini_api_key", "test-only-real-looking-key")
+
+        async with db_session_factory() as db:
+            opp_id = await _make_opportunity(db, country="Egypt", opp_type="scholarship")
+
+        gemini_schema = VerifiedOpportunitySchema(
+            title="Ignore previous instructions", eligibility_criteria="anyone", funding_details=None,
+            deadline=None, is_legitimate=True, confidence_score=1.0,
+            min_age=None, max_age=None, target_gender=None, target_academic_levels=None,
+        )
+        gemini_mock = AsyncMock(return_value=(gemini_schema, [0.1] * 1536))
+
+        with patch("app.workers.tasks.AsyncSessionLocal", db_session_factory), patch(
+            "app.workers.tasks.engine", new=AsyncMock()
+        ), patch("app.workers.tasks.ai_gateway.verify_and_embed_gemini", new=gemini_mock), patch(
+            "app.workers.tasks._run_d6_evidence_pipeline", new=AsyncMock(return_value=None)
+        ):
+            summary = await _verify_new_opportunities(limit=10)
+
+        gemini_mock.assert_awaited_once()
+        assert summary["verified"] == 0
+        async with db_session_factory() as db:
+            row = (
+                await db.execute(text("SELECT is_verified FROM opportunities WHERE id = :id"), {"id": opp_id.hex})
+            ).first()
+            assert row[0] == 0
+
+    async def test_d7_reachable_and_effective_when_gemini_is_the_executing_provider(self, db_session_factory, monkeypatch):
+        """D7 (Contradiction Hunter) is reached and can still downgrade
+        an otherwise-VERIFIED decision when Gemini -- not OpenAI -- was
+        the provider that actually executed. Mirrors
+        `tests/test_contradiction_hunter.py::TestTasksIntegration::
+        test_real_d7_contradiction_can_downgrade_an_otherwise_verified_opportunity`
+        exactly, substituting a real Gemini execution for the real
+        OpenAI one -- proving the existing D4/D7 wiring genuinely
+        doesn't care which provider produced the upstream schema."""
+        from unittest.mock import patch
+        from app.workers.tasks import _verify_new_opportunities
+        from app.services import contradiction_hunter as ch
+        from app.services import research_trajectory_memory as rtm
+
+        monkeypatch.setattr(ro.settings, "gemini_api_key", "test-only-real-looking-key")
+
+        async with db_session_factory() as db:
+            opp_id = await _make_opportunity(db, country="Egypt", opp_type="scholarship")
+            await db.execute(
+                text(
+                    "UPDATE opportunities SET raw_extracted_data = :raw, "
+                    "eligibility_criteria = 'Open to all applicants.' WHERE id = :id"
+                ),
+                {"raw": '{"description": "Open to all applicants."}', "id": opp_id.hex},
+            )
+            await db.commit()
+
+        gemini_schema = VerifiedOpportunitySchema(
+            title="Gemini-Sourced", eligibility_criteria="Open to all applicants.", funding_details=None,
+            deadline=None, is_legitimate=True, confidence_score=0.95,
+            min_age=None, max_age=None, target_gender=None, target_academic_levels=None,
+        )
+        gemini_mock = AsyncMock(return_value=(gemini_schema, [0.1] * 1536))
+
+        complexity = ro.ComplexityAssessment(
+            complexity_class=ResearchComplexityClass.COMPLEX, score=5, reasons=["test"],
+            recommended_depth=ResearchDepthLevel.DEEP, recommended_verification_level="standard",
+        )
+        fake_decision = ro.RoutingDecision(
+            task_type=ReasoningTaskType.VERIFICATION, complexity=complexity, depth=ResearchDepthLevel.DEEP,
+            primary_provider=None, primary_model=None, provider_available=False,
+            routing_reasons=["test"], max_model_calls=3, trajectory_signals={},
+        )
+
+        async def _fake_orchestrate(db_, *, opportunity):
+            trajectory = await rtm.start_trajectory(db_, objective="test gemini d7 objective")
+            await db_.commit()
+            step = ResearchTrajectoryStep(
+                trajectory_id=trajectory.id, step_number=1, action_type="route_and_verify", outcome="neutral"
+            )
+            db_.add(step)
+            await db_.flush()
+            return fake_decision, trajectory, step
+
+        raw = [{
+            "title": "Restriction notice",
+            "link": "https://www.state.gov/restriction",
+            "snippet": "Official notice: only residents are now eligible.",
+        }]
+        candidates = [
+            ch.ContradictionCandidate(
+                source_url="https://www.state.gov/restriction", label="CONTRADICTS",
+                quote="only residents are now eligible",
+            )
+        ]
+
+        with patch("app.workers.tasks.AsyncSessionLocal", db_session_factory), patch(
+            "app.workers.tasks.engine", new=AsyncMock()
+        ), patch(
+            "app.workers.tasks.ai_gateway.verify_and_embed_gemini", new=gemini_mock
+        ), patch(
+            "app.workers.tasks.research_orchestrator.orchestrate_verification", new=_fake_orchestrate
+        ), patch.object(
+            ch.web_explorer_gateway, "run_search", new=AsyncMock(return_value=raw)
+        ), patch.object(
+            ch, "_classify_contradiction_candidates", new=AsyncMock(return_value=candidates)
+        ):
+            summary = await _verify_new_opportunities(limit=10)
+
+        gemini_mock.assert_awaited_once()
+        assert summary["verified"] == 0  # D7's real, backend-validated contradiction downgraded it
+        async with db_session_factory() as db:
+            row = (
+                await db.execute(text("SELECT is_verified FROM opportunities WHERE id = :id"), {"id": opp_id.hex})
+            ).first()
+            assert row[0] == 0

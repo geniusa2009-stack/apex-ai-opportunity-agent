@@ -3,6 +3,9 @@ import logging
 
 import anthropic
 from anthropic import AsyncAnthropic
+from google import genai
+from google.genai import errors as genai_errors
+from google.genai import types as genai_types
 from openai import AsyncOpenAI
 from openai import APIConnectionError as OpenAIAPIConnectionError
 from openai import APITimeoutError as OpenAIAPITimeoutError
@@ -38,6 +41,16 @@ _retry_anthropic_call = retry(
     retry=retry_if_exception_type(
         (anthropic.APIConnectionError, anthropic.APITimeoutError, anthropic.RateLimitError)
     ),
+)
+
+# Same retry posture as the other Gemini-backed services in this codebase
+# (`contradiction_hunter.py`, `web_explorer.py`): `errors.ClientError` (429s)
+# and `errors.ServerError` (5xx) both inherit from `errors.APIError`.
+_retry_gemini_call = retry(
+    reraise=True,
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=20),
+    retry=retry_if_exception_type(genai_errors.APIError),
 )
 
 
@@ -282,6 +295,13 @@ class AIGateway:
 
     - OpenAI: structured-output verification (`verify_opportunity`) and
       embeddings (`generate_embedding`), unchanged from Step 2.1.
+    - Gemini: a genuine second, independently-callable structured-output
+      verification implementation (`verify_opportunity_gemini`) of the
+      SAME `VerifiedOpportunitySchema` contract -- added in Phase 2
+      (Real Verification Provider Diversity) so `research_orchestrator.
+      py`'s D4 escalation logic has a real second provider to dispatch
+      to instead of always calling OpenAI regardless of which candidate
+      it nominally selected.
     - Anthropic (Claude): long-form document generation
       (`generate_cv`, `generate_motivation_letter`,
       `generate_recommendation_letter`) -- added in this step for its
@@ -304,6 +324,13 @@ class AIGateway:
 
     def _anthropic_client(self) -> AsyncAnthropic:
         return AsyncAnthropic(api_key=settings.anthropic_api_key)
+
+    def _gemini_client(self) -> genai.Client:
+        # Fresh client per call -- same `google-genai`-fresh-client-per-call
+        # posture as every other Gemini-backed service in this codebase
+        # (`contradiction_hunter.py::_classify_contradiction_candidates`,
+        # `web_explorer.py::WebExplorerGateway._client`).
+        return genai.Client(api_key=settings.gemini_api_key)
 
     # ---------------------------------------------------------------
     # OpenAI: structured verification + embeddings
@@ -345,7 +372,13 @@ class AIGateway:
         Celery verification task (app/workers/tasks.py)."""
         verification = await self.verify_opportunity(raw_data)
 
-        embedding_text = (
+        embedding_text = self._embedding_text(verification)
+        embedding = await self.generate_embedding(embedding_text)
+        return verification, embedding
+
+    @staticmethod
+    def _embedding_text(verification: VerifiedOpportunitySchema) -> str:
+        return (
             " ".join(
                 part
                 for part in (
@@ -357,12 +390,62 @@ class AIGateway:
             )
             or verification.title
         )
-        embedding = await self.generate_embedding(embedding_text)
-        return verification, embedding
 
     @staticmethod
     def _format_raw_data(raw_data: dict) -> str:
         return f"Raw scraped data (JSON):\n{json.dumps(raw_data, indent=2, default=str)}"
+
+    # ---------------------------------------------------------------
+    # Gemini: structured verification (Phase 2: Real Verification
+    # Provider Diversity). A genuine second, independently-callable
+    # implementation of the SAME `VerifiedOpportunitySchema` contract
+    # OpenAI's `verify_opportunity` produces -- reused as-is (not a
+    # parallel schema) so D6/D7 never need to know which provider
+    # produced the schema they consume. Mirrors the real, working
+    # Gemini structured-output precedent already in this codebase
+    # (`contradiction_hunter.py::_classify_contradiction_candidates`,
+    # `web_explorer.py::WebExplorerGateway._summarize`): a fresh
+    # `genai.Client` per call, `response_mime_type="application/json"`
+    # + `response_schema=VerifiedOpportunitySchema`, then
+    # `model_validate_json` on `response.text` -- raising a clear,
+    # honest error on an empty/unparseable response rather than ever
+    # fabricating a default verification result.
+    # ---------------------------------------------------------------
+
+    @_retry_gemini_call
+    async def verify_opportunity_gemini(self, raw_data: dict) -> VerifiedOpportunitySchema:
+        client = self._gemini_client()
+        response = await client.aio.models.generate_content(
+            model=settings.gemini_verification_model,
+            contents=[_VERIFICATION_SYSTEM_PROMPT, self._format_raw_data(raw_data)],
+            config=genai_types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=VerifiedOpportunitySchema,
+            ),
+        )
+        if not response.text:
+            raise ValueError("Gemini returned no content for opportunity verification")
+        return VerifiedOpportunitySchema.model_validate_json(response.text)
+
+    async def verify_and_embed_gemini(
+        self, raw_data: dict
+    ) -> tuple[VerifiedOpportunitySchema, list[float]]:
+        """Gemini-sourced verification, then embed the cleaned text --
+        same shape/contract as `verify_and_embed` so callers (the D4.1
+        bounded attempt loop in `research_orchestrator.py`) can treat
+        both providers' convenience methods identically. The embedding
+        step itself deliberately still goes through OpenAI's
+        `generate_embedding`: there is no Gemini-specific embedding
+        requirement anywhere downstream (D6/D7 only ever consume the
+        1536-dim vector by shape, never by which provider produced the
+        verification text it was built from), so reusing the existing,
+        already-correctly-sized embedding call here is the honest
+        choice over standing up a second, parallel embedding pipeline
+        for no real behavioral difference."""
+        verification = await self.verify_opportunity_gemini(raw_data)
+        embedding_text = self._embedding_text(verification)
+        embedding = await self.generate_embedding(embedding_text)
+        return verification, embedding
 
     # ---------------------------------------------------------------
     # Anthropic: document generation

@@ -200,16 +200,34 @@ PROVIDER_CAPABILITIES: tuple[ProviderCapability, ...] = (
         provider=ProviderName.GEMINI,
         model=settings.gemini_grading_model,
         task_suitability=frozenset(
-            {ReasoningTaskType.GRADING, ReasoningTaskType.PLANNING, ReasoningTaskType.TAGGING, ReasoningTaskType.EXTRACTION}
+            {
+                ReasoningTaskType.GRADING,
+                ReasoningTaskType.PLANNING,
+                ReasoningTaskType.TAGGING,
+                ReasoningTaskType.EXTRACTION,
+                # Phase 2 (Real Verification Provider Diversity): Gemini is
+                # now a genuine, independently-callable second candidate
+                # for VERIFICATION too (`ai_gateway.verify_opportunity_gemini`,
+                # dispatched to by `execute_verification`'s
+                # `_call_verification_provider` helper) -- not just a
+                # label. `priority=1` below (vs OpenAI's `priority=0`)
+                # keeps OpenAI the primary/first-selected candidate per
+                # `_candidates_for_task`'s own fixed tiebreak
+                # (availability, then priority, then provider name) --
+                # Gemini only becomes primary if OpenAI becomes
+                # unavailable/removed from the registry outright, and is
+                # otherwise reachable purely via escalation.
+                ReasoningTaskType.VERIFICATION,
+            }
         ),
-        structured_output=False,
+        structured_output=True,  # `client.aio.models.generate_content(..., response_schema=...)` -- see app/services/ai.py::verify_opportunity_gemini
         tool_use=False,
         long_context=False,
         multimodal=True,  # gemini_vision_model / gemini_document_checker_model sibling settings
         reasoning_strength="medium",
         low_latency=True,
         low_cost=True,
-        priority=0,
+        priority=1,
         api_key_setting="gemini_api_key",
     ),
     ProviderCapability(
@@ -897,17 +915,28 @@ async def record_routing_outcome(
 # integration in `app/workers/tasks.py` called `ai_gateway.verify_and_embed`
 # unconditionally and only consulted those decisions afterward, purely to
 # annotate the trajectory trace. `execute_verification` is the D4.1 fix:
-# it is the ONLY call site that invokes the real `ai_gateway.verify_and_embed`
-# for a routed verification objective, and it does so inside a small,
-# strictly bounded attempt loop that actually obeys `should_stop`/
-# `should_escalate` and the existing `DepthPolicy` (`max_provider_calls`/
+# it is the ONLY call site that invokes a real provider gateway call for a
+# routed verification objective, and it does so inside a small, strictly
+# bounded attempt loop that actually obeys `should_stop`/`should_escalate`
+# and the existing `DepthPolicy` (`max_provider_calls`/
 # `max_escalation_depth` -- no new configuration system, per spec).
 #
 # Loop shape, each iteration = one REAL provider attempt:
 #   1. Pick the next untried, task-suitable candidate from the existing
 #      `PROVIDER_CAPABILITIES` registry (the same one `route_research`
 #      already uses) -- never a fabricated provider.
-#   2. Call the real, unmodified `ai_gateway.verify_and_embed`.
+#   2. Call `_call_verification_provider(candidate, ...)` -- see that
+#      function's own docstring below. This is Phase 2's (Real
+#      Verification Provider Diversity) fix to a real D4.1 bug: the
+#      original loop tracked `candidate`/`attempt_record["provider"]`
+#      correctly but the actual call inside the loop body was an
+#      unconditional `ai_gateway.verify_and_embed(...)` regardless of
+#      which candidate the loop nominally selected -- invisible only
+#      because `PROVIDER_CAPABILITIES` had exactly one VERIFICATION
+#      candidate (OpenAI) at the time. The candidate the loop selects and
+#      the gateway call it actually makes can now never diverge -- see
+#      `tests/test_research_orchestrator.py::TestExecutionControl`'s
+#      dispatch-integrity assertions.
 #   3. Build a real `EvidenceState` from the actual result (or the actual
 #      exception) -- `source_authority_known` is honestly `False` here
 #      (see the comment inline below for why, and D4.1's report).
@@ -921,15 +950,63 @@ async def record_routing_outcome(
 #   7. `attempt_num < policy.max_provider_calls` is a hard, real ceiling
 #      on the loop regardless of how many escalation triggers fire.
 #
-# In this codebase today `_candidates_for_task(VERIFICATION)` has
-# exactly one entry (OpenAI -- see `PROVIDER_CAPABILITIES`'s own
-# docstring). So the realistic, correctly-tested path is exactly what
-# the deliverable spec calls out as CORRECT behavior: one real OpenAI
-# attempt -> evaluate -> escalation requested (because source authority
-# is honestly unknown) -> no eligible alternative provider -> stop. That
-# is not a partial implementation of multi-model verification; it is
-# the honest result of there being one real verification-capable
-# provider wired into this codebase.
+# In this dev sandbox all four provider API keys are empty, so
+# `_provider_available` honestly reports both OpenAI and Gemini as
+# UNAVAILABLE today -- the realistic, correctly-tested path here remains
+# exactly what the original D4.1 spec called out as CORRECT behavior:
+# one real OpenAI attempt -> evaluate -> escalation requested (because
+# source authority is honestly unknown) -> no genuinely AVAILABLE
+# alternative provider (Gemini is task-suitable now, but not available
+# without a real key) -> stop. `PROVIDER_CAPABILITIES` now genuinely
+# has two VERIFICATION-suitable candidates and a real, distinct second
+# code path exists for the second one -- this sandbox's empty keys are
+# an environment fact, not a shortcoming of the dispatch logic (see
+# `tests/test_research_orchestrator.py` for tests that patch
+# availability to exercise the real second-provider path directly).
+
+
+# Phase 2 (Real Verification Provider Diversity): the ONLY place a
+# `ProviderCapability.provider` is translated into a real gateway call.
+# Deliberately a tiny, explicit dict-of-callables -- NOT a generic
+# provider-adapter class hierarchy -- because there are exactly two real
+# verification-capable providers wired into this codebase today and a
+# generic framework for two entries would be over-engineering this
+# module's own D4.1 spec explicitly warns against. Isolated into its own
+# small, separately-testable function (rather than inlined in the loop)
+# so `execute_verification`'s control flow (stop/escalate/budget) stays
+# readable and so tests can mock a provider's real gateway method
+# directly and assert on it -- see
+# `tests/test_research_orchestrator.py::TestExecutionControl`'s
+# dispatch-integrity tests.
+_VERIFICATION_DISPATCH: dict[ProviderName, str] = {
+    ProviderName.OPENAI: "verify_and_embed",
+    ProviderName.GEMINI: "verify_and_embed_gemini",
+}
+
+
+async def _call_verification_provider(
+    candidate: ProviderCapability, raw_data: dict
+) -> tuple[VerifiedOpportunitySchema, list[float]]:
+    """Dispatches to the REAL `AIGateway` method for `candidate.provider`
+    -- never the OpenAI call regardless of which candidate was selected
+    (the exact D4.1 bug this function exists to fix). Raises
+    `NotImplementedError` for a provider that is registered in
+    `PROVIDER_CAPABILITIES` as VERIFICATION-suitable but has no real
+    gateway implementation wired here yet; the caller's existing
+    try/except already treats any exception from this call as a real,
+    honestly-recorded `provider_call_failed` attempt outcome -- an
+    unimplemented provider degrades exactly like a real provider outage,
+    it never silently succeeds or falls back to a different provider's
+    call under the wrong attempt label."""
+    method_name = _VERIFICATION_DISPATCH.get(candidate.provider)
+    if method_name is None:
+        raise NotImplementedError(
+            f"no real verification gateway implementation is wired for provider "
+            f"{candidate.provider.value!r} (registered in PROVIDER_CAPABILITIES "
+            "but not in _VERIFICATION_DISPATCH)"
+        )
+    method = getattr(ai_gateway, method_name)
+    return await method(raw_data)
 
 
 async def execute_verification(
@@ -941,10 +1018,12 @@ async def execute_verification(
     step: ResearchTrajectoryStep,
 ) -> tuple[VerifiedOpportunitySchema | None, list[float] | None, RoutingDecision]:
     """Bounded execution controller. Wraps -- never replaces -- the real
-    `ai_gateway.verify_and_embed`. Returns `(None, None, decision)` when
-    every attempted provider ultimately failed or no suitable candidate
-    was ever available, so the caller (`app/workers/tasks.py`) applies
-    its own existing, unchanged error-counting/skip semantics."""
+    per-provider `AIGateway` verification methods (dispatched via
+    `_call_verification_provider`, never a single hardcoded provider
+    call). Returns `(None, None, decision)` when every attempted
+    provider ultimately failed or no suitable candidate was ever
+    available, so the caller (`app/workers/tasks.py`) applies its own
+    existing, unchanged error-counting/skip semantics."""
     policy = DEPTH_POLICIES[decision.depth]
     candidates = _candidates_for_task(decision.task_type)
 
@@ -960,14 +1039,23 @@ async def execute_verification(
         attempt_num += 1
         tried.add(candidate.provider)
 
+        # Distinguished, per requirement, from a genuine call failure below:
+        # this is the REAL, live availability check (`_provider_available`
+        # -- a non-empty API key setting, nothing fabricated), recorded on
+        # the attempt itself so a "not available" attempt is never
+        # confused in logs/traces with "available but the call errored".
+        candidate_was_available = _provider_available(candidate)
         attempt_record: dict[str, Any] = {
             "attempt": attempt_num,
             "provider": candidate.provider.value,
             "model": candidate.model,
+            "provider_available": candidate_was_available,
         }
 
         try:
-            schema, embedding = await ai_gateway.verify_and_embed(opportunity.raw_extracted_data or {})
+            schema, embedding = await _call_verification_provider(
+                candidate, opportunity.raw_extracted_data or {}
+            )
             evidence = EvidenceState(
                 confidence_score=schema.confidence_score,
                 is_legitimate=schema.is_legitimate,
@@ -992,10 +1080,26 @@ async def execute_verification(
             evidence = EvidenceState(provider_call_failed=True, provider_call_error=str(exc)[:500])
             attempt_record["outcome"] = "provider_call_failed"
             attempt_record["failure_reason"] = evidence.provider_call_error
-            logger.exception(
-                "execute_verification: provider call failed for opportunity %s (attempt %s, provider %s)",
-                opportunity.id, attempt_num, candidate.provider.value,
-            )
+            if candidate_was_available:
+                # Real outage/error on a provider whose key IS configured --
+                # never logs the key value/Authorization header itself, only
+                # the provider name and the (already-truncated) error text.
+                logger.exception(
+                    "execute_verification: provider call failed for opportunity %s (attempt %s, provider %s, "
+                    "provider was reported available -- this is a real call failure, not a missing-key skip)",
+                    opportunity.id, attempt_num, candidate.provider.value,
+                )
+            else:
+                # Honest "no key configured" case -- distinct from a live
+                # call failure per this phase's own requirement. Still
+                # logged via `.exception` (not silently swallowed) since a
+                # candidate that should never have been selected without a
+                # key reaching this branch is itself worth surfacing.
+                logger.exception(
+                    "execute_verification: provider call failed for opportunity %s (attempt %s, provider %s, "
+                    "provider was NOT available -- no API key configured in this environment)",
+                    opportunity.id, attempt_num, candidate.provider.value,
+                )
 
         stopped, _stop_reason = should_stop(evidence, policy)
         escalate, _escalation_reasons = should_escalate(

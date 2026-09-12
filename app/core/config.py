@@ -75,6 +75,15 @@ class Settings(BaseSettings):
     # on this from Step 3.4, which already covered this exact substitution.
     gemini_grading_model: str = "gemini-2.5-flash"
 
+    # Gemini structured verification (Phase 2: Real Verification Provider
+    # Diversity). A genuine second, independently-callable provider for
+    # `ReasoningTaskType.VERIFICATION` alongside OpenAI's
+    # `ai_verification_model` -- kept as its own setting (not reused from
+    # `gemini_grading_model`) so this specific, structured-output-bearing
+    # call can be tuned/swapped independently of grading, per the same
+    # independent-tuning rationale as every other `gemini_*_model` setting.
+    gemini_verification_model: str = "gemini-2.5-flash"
+
     # Gemini roadmap planning (Step 3.9 / Feature 5). Same model default
     # as the other Gemini features again, on its own setting for the same
     # independent-tuning reason -- see the gemini_grading_model note above.
