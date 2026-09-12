@@ -12,32 +12,45 @@ function, mixing planning/looping logic with per-provider fetch
 mechanics. This module extracts a minimal, stable adapter boundary so
 `_poll_source` calls THROUGH an interface instead of branching itself.
 
-STEP 2 SCOPE, DISCLOSED: exactly two real adapters exist here, wrapping
-the two REAL, EXISTING, UNMODIFIED fetch functions
-(`aggregator_service.fetch_new_telegram_posts`/`fetch_new_facebook_posts`
--- both still MOCKED per that module's own disclosed scope, no live
-network credentials exist in this sandbox for either). No third,
-fabricated adapter (RSS/website/API) is added here -- there is no real
-third source type configured anywhere in this codebase
-(`app/data/opportunity_sources.json` only has `telegram_channels`/
-`facebook_pages`), and no credentials exist to build and live-validate
-a genuine third integration. What this module DOES provide is the
-boundary itself: `SourceAdapter` (a `Protocol`, structurally typed --
-no base-class inheritance required) plus `ADAPTERS`, a small registry
-keyed by `source_kind`. Adding a genuine third source kind later means
-writing one new adapter class and one new registry entry -- `_poll_source`
-itself needs no further changes.
+STEP 2 SCOPE, DISCLOSED (original, pre-Phase-3B): exactly two real
+adapters existed here, wrapping the two REAL, EXISTING, UNMODIFIED fetch
+functions (`aggregator_service.fetch_new_telegram_posts`/
+`fetch_new_facebook_posts` -- both still MOCKED per that module's own
+disclosed scope). What this module DOES provide is the boundary itself:
+`SourceAdapter` (a `Protocol`, structurally typed -- no base-class
+inheritance required) plus `ADAPTERS`, a small registry keyed by
+`source_kind`. Adding a genuine new source kind means writing one new
+adapter class and one new registry entry -- `_poll_source` itself needs
+no further changes.
 
-Existing behavior is unchanged: both adapters call the same real fetch
-functions with the same real config objects and return the same real
-raw post text, just wrapped in `RawDiscoveryResult` for a uniform
-return shape across source kinds (a lightweight normalization step,
-not a new data model -- no new persistence, no new fields beyond what
+PHASE 3B UPDATE: exactly ONE genuinely LIVE adapter has been added --
+`LiveTelegramSourceAdapter`, registered under the distinct kind
+`"telegram_channel_live"` (see that class's own docstring for exactly
+which channel(s) are routed to it, and `app/services
+/telegram_live_client.py` for the real, bounded fetch/parse/retry
+implementation and this phase's own honest disclosure of what "live"
+does and does not mean in the sandbox this was built in). The two
+pre-existing MOCKED adapters (`TelegramSourceAdapter`/
+`FacebookSourceAdapter`) are completely UNCHANGED -- every source not
+explicitly opted into the live kind keeps today's exact mocked
+behavior. A real Facebook Graph API adapter
+(`app/services/facebook_graph_client.py`) was also built this phase,
+but is deliberately NOT registered here -- see that module's own
+docstring for why (no configured credential exists to use it live).
+
+Existing behavior for the two pre-existing adapters is unchanged: both
+still call the same real fetch functions with the same real config
+objects and return the same real raw post text, just wrapped in
+`RawDiscoveryResult` for a uniform return shape across source kinds
+(a lightweight normalization step, not a new data model -- no new
+required persistence beyond what
 `_poll_source` already used inline).
 """
 from __future__ import annotations
 
 import dataclasses
+import datetime as dt
+import logging
 from typing import Protocol
 
 from app.services.aggregator_service import (
@@ -46,6 +59,9 @@ from app.services.aggregator_service import (
     fetch_new_facebook_posts,
     fetch_new_telegram_posts,
 )
+from app.services.telegram_live_client import fetch_telegram_channel_live
+
+logger = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -54,10 +70,24 @@ class RawDiscoveryResult:
     content (Security / Prompt Injection Boundary, per this
     deliverable's own spec): `raw_text` is DATA to be extracted from by
     the existing AI extraction pipeline, never instructions, and this
-    dataclass carries no field that could be mistaken for one."""
+    dataclass carries no field that could be mistaken for one.
+
+    Phase 3B addition: four OPTIONAL provenance/temporal fields, all
+    defaulting to `None` so the two pre-existing, still-mocked adapters
+    (`TelegramSourceAdapter`/`FacebookSourceAdapter`) construct this
+    dataclass exactly as before -- unchanged behavior, unchanged tests.
+    A REAL adapter (`LiveTelegramSourceAdapter`) populates them from
+    genuine source-provided signals only -- never fabricated. See
+    `app.schemas.opportunity.OpportunityCreate`'s own matching fields
+    for where these end up persisted (via the existing, unmodified
+    `raw_extracted_data` JSONB catch-all -- no migration needed)."""
 
     raw_text: str
     source_kind: str
+    external_item_id: str | None = None
+    item_url: str | None = None
+    published_at: dt.datetime | None = None
+    retrieved_at: dt.datetime | None = None
 
 
 class SourceAdapter(Protocol):
@@ -85,6 +115,42 @@ class TelegramSourceAdapter:
         ]
 
 
+class LiveTelegramSourceAdapter:
+    """Phase 3B: the REAL adapter -- wraps
+    `telegram_live_client.fetch_telegram_channel_live`, a genuine,
+    bounded, retried, rate-limit-aware fetch of a channel's real public
+    `t.me/s/<handle>` preview page. Registered under a DISTINCT
+    `source_kind` (`"telegram_channel_live"`) from the pre-existing,
+    still-mocked `"telegram_channel"` -- only a `TelegramChannelConfig`
+    explicitly marked `live=True` in `app/data/opportunity_sources.json`
+    is ever routed here (see `aggregator_tasks._build_source_candidates`);
+    every other configured Telegram channel is completely unaffected by
+    this class's existence.
+
+    `retrieved_at` is stamped as real "now" at the moment this adapter
+    ran -- distinct from each message's own `published_at` (the
+    channel's own claimed post time), matching Phase 1's
+    `temporal_evidence` module's own `published_at`/`retrieved_at`
+    semantics."""
+
+    source_kind = "telegram_channel_live"
+
+    def fetch(self, config: TelegramChannelConfig) -> list[RawDiscoveryResult]:
+        retrieved_at = dt.datetime.now(dt.timezone.utc)
+        messages = fetch_telegram_channel_live(config.handle)
+        return [
+            RawDiscoveryResult(
+                raw_text=message.raw_text,
+                source_kind=self.source_kind,
+                external_item_id=message.external_item_id,
+                item_url=message.item_url,
+                published_at=message.published_at,
+                retrieved_at=retrieved_at,
+            )
+            for message in messages
+        ]
+
+
 class FacebookSourceAdapter:
     """Wraps the real, existing, UNMODIFIED
     `fetch_new_facebook_posts` -- unchanged behavior, just normalized
@@ -105,6 +171,7 @@ class FacebookSourceAdapter:
 # new adapter class + one new entry here.
 ADAPTERS: dict[str, SourceAdapter] = {
     "telegram_channel": TelegramSourceAdapter(),
+    "telegram_channel_live": LiveTelegramSourceAdapter(),
     "facebook_page": FacebookSourceAdapter(),
 }
 

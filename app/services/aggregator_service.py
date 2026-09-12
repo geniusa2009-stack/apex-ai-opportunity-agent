@@ -94,6 +94,14 @@ class AggregatorError(Exception):
 class TelegramChannelConfig(BaseModel):
     handle: str = Field(min_length=1, description="e.g. '@tadrebat_1', including the leading @.")
     category: str = Field(min_length=1, description="e.g. 'Scholarships', 'Internships_Training'.")
+    # Phase 3B: opt-in flag, defaults False so all 20 pre-existing
+    # channels keep today's mocked `fetch_new_telegram_posts` behavior
+    # unchanged. Only a channel explicitly marked `"live": true` in
+    # app/data/opportunity_sources.json is polled through the real
+    # `LiveTelegramSourceAdapter` (source_adapters.py) instead -- see
+    # that module's own docstring for why this is a deliberate, narrow,
+    # reversible per-channel switch rather than a blanket cutover.
+    live: bool = False
 
 
 class FacebookPageConfig(BaseModel):
@@ -389,16 +397,30 @@ def _parse_deadline(raw: str | None) -> datetime | None:
         return None
 
 
-def _resolve_target_url(ai_link: str | None, source_base_url: str) -> str:
+def _resolve_target_url(ai_link: str | None, source_base_url: str, item_url: str | None = None) -> str:
     """`Opportunity.target_url` is a real `NOT NULL` column. A raw social
     post frequently has no literal link in it at all (this step's own ask
     acknowledges the model may return null here) -- rather than crash the
     whole pipeline run or fabricate a fake URL, this falls back to the
     SOURCE's own base URL (the channel/page itself), so the resulting
     Opportunity still points somewhere real a student could actually
-    follow up on."""
+    follow up on.
+
+    Phase 3B addition: `item_url` (the specific post's OWN canonical URL,
+    e.g. `https://t.me/opcorners/12345` -- real provenance a live source
+    adapter can supply, see `RawDiscoveryResult.item_url`) is preferred
+    over the generic channel/page `source_base_url` when the AI itself
+    found no explicit link in the post text -- a real, more precise
+    fallback than pointing every such opportunity at the same channel
+    homepage. Precedence: AI-extracted link > the post's own item URL >
+    the generic source base URL. `item_url=None` (the default, and the
+    ONLY value the still-mocked fetch path ever produces) preserves this
+    function's exact pre-Phase-3B behavior -- this parameter is
+    additive, never a behavior change for any existing caller."""
     if ai_link and ai_link.strip():
         return ai_link.strip()
+    if item_url and item_url.strip():
+        return item_url.strip()
     return source_base_url
 
 
@@ -436,7 +458,9 @@ async def process_raw_post_via_ai(raw_text: str, source_info: dict) -> Opportuni
     return OpportunityCreate(
         title=extracted.title,
         description=extracted.description,
-        target_url=_resolve_target_url(extracted.original_link, source_info["source_base_url"]),
+        target_url=_resolve_target_url(
+            extracted.original_link, source_info["source_base_url"], source_info.get("item_url")
+        ),
         opportunity_type=_coerce_opportunity_type(extracted.opportunity_type),
         deadline=_parse_deadline(extracted.deadline),
         country=country,
@@ -445,6 +469,18 @@ async def process_raw_post_via_ai(raw_text: str, source_info: dict) -> Opportuni
         source_name=source_info["source_name"],
         source_type=source_info["source_type"],
         source_base_url=source_info["source_base_url"],
+        # Phase 3B: real per-item provenance/temporal signals, present
+        # only when the adapter that fetched this item supplied them
+        # (see RawDiscoveryResult / LiveTelegramSourceAdapter). All four
+        # keys are absent from `source_info` on every pre-Phase-3B call
+        # site (the still-mocked fetch path), so `.get(...)` correctly
+        # yields None there -- unchanged behavior for every existing
+        # source. Never fabricated: `source_info` only ever carries a
+        # real value here because a real adapter put one there.
+        external_item_id=source_info.get("external_item_id"),
+        item_url=source_info.get("item_url"),
+        source_published_at=source_info.get("published_at"),
+        retrieved_at=source_info.get("retrieved_at"),
     )
 
 

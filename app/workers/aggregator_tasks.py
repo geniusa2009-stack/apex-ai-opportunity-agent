@@ -102,10 +102,18 @@ def _build_source_candidates(
     by_id: dict[str, TelegramChannelConfig | FacebookPageConfig] = {}
 
     for channel in config.telegram_channels:
+        # Phase 3B: a channel explicitly marked `"live": true` in
+        # app/data/opportunity_sources.json is routed to the real
+        # LiveTelegramSourceAdapter (source_kind="telegram_channel_live")
+        # instead of the pre-existing mocked adapter. Every other field
+        # here (category, source_base_url, D1/D2/D3/D4.2 planning) is
+        # completely unaffected by this choice -- the planner/round loop
+        # only ever sees a `source_kind` string and calls
+        # `get_adapter(source_kind)`, exactly as before.
         candidates.append(
             ro.DiscoverySourceCandidate(
                 source_id=channel.handle,
-                source_kind="telegram_channel",
+                source_kind="telegram_channel_live" if channel.live else "telegram_channel",
                 category=channel.category,
                 source_base_url=f"https://t.me/{channel.handle.lstrip('@')}",
             )
@@ -213,7 +221,11 @@ async def _poll_source(
     # normalized into `RawDiscoveryResult`. An unsupported/unknown
     # `source_kind` is a real, honest per-source error (counted, logged,
     # trajectory-recorded) rather than a crash of the whole round.
-    if source.source_kind == "telegram_channel":
+    # Phase 3B: "telegram_channel_live" is a REAL adapter over the same
+    # TelegramChannelConfig shape as the pre-existing mocked
+    # "telegram_channel" -- same source_info construction, only the
+    # underlying fetch differs (see source_adapters.LiveTelegramSourceAdapter).
+    if source.source_kind in ("telegram_channel", "telegram_channel_live"):
         assert isinstance(config_obj, TelegramChannelConfig)
         source_info: dict[str, Any] = {
             "source_name": config_obj.handle,
@@ -235,7 +247,6 @@ async def _poll_source(
     try:
         adapter = get_adapter(source.source_kind)
         raw_results = adapter.fetch(config_obj)
-        raw_posts = [result.raw_text for result in raw_results]
     except UnsupportedSourceKindError as exc:
         logger.error("aggregator_tasks: %s", exc)
         stats["errors"] += 1
@@ -248,6 +259,38 @@ async def _poll_source(
             metadata={"round": round_number, "source_kind": source.source_kind, "error": str(exc)},
         )
         return stats
+    except Exception as exc:
+        # Phase 3B, Error Isolation (Section 14): a REAL adapter can now
+        # raise real, classified failures (network timeout, rate limit,
+        # malformed response, an unconfigured credential -- see
+        # telegram_live_client.py / facebook_graph_client.py's own
+        # exception hierarchies). Exactly ONE broken source must never
+        # abort the whole discovery round: this is recorded as a real,
+        # honest per-source failure (never a silent zero-item success)
+        # and the round loop continues to the NEXT source exactly as the
+        # pre-existing UnsupportedSourceKindError path already did.
+        # `str(exc)` never includes secrets -- both live-client modules'
+        # own exception messages are audited to reference only public
+        # identifiers (handle/page_id/status code), never a token.
+        logger.warning(
+            "aggregator_tasks: adapter fetch failed for %s (%s): %s",
+            label, source.source_kind, exc,
+        )
+        stats["errors"] += 1
+        await research_trajectory_memory.record_step(
+            session,
+            trajectory=trajectory,
+            action_type="query_source",
+            query=label,
+            source_domain=source.source_base_url,
+            metadata={
+                "round": round_number,
+                "source_kind": source.source_kind,
+                "error": str(exc),
+                "error_class": type(exc).__name__,
+            },
+        )
+        return stats
 
     query_step = await research_trajectory_memory.record_step(
         session,
@@ -255,10 +298,10 @@ async def _poll_source(
         action_type="query_source",
         query=label,
         source_domain=source_info["source_base_url"],
-        metadata={"round": round_number, "source_kind": source.source_kind},
+        metadata={"round": round_number, "source_kind": source.source_kind, "items_fetched": len(raw_results)},
     )
 
-    for raw_text in raw_posts:
+    for result in raw_results:
         stats["processed"] += 1
         result_step = await research_trajectory_memory.record_step(
             session,
@@ -267,10 +310,26 @@ async def _poll_source(
             query=label,
             source_domain=source_info["source_base_url"],
             parent_step_id=query_step.id,
-            metadata={"round": round_number},
+            metadata={"round": round_number, "external_item_id": result.external_item_id},
         )
         try:
-            opportunity_data = await process_raw_post_via_ai(raw_text, source_info)
+            # Phase 3B: per-item provenance/temporal fields ride along
+            # ONLY when the adapter that produced this result actually
+            # supplied them (the two pre-existing mocked adapters never
+            # do, so `source_info` here is byte-identical to before this
+            # phase for every non-live source -- see
+            # RawDiscoveryResult's own docstring).
+            item_source_info = dict(source_info)
+            if result.external_item_id is not None:
+                item_source_info["external_item_id"] = result.external_item_id
+            if result.item_url is not None:
+                item_source_info["item_url"] = result.item_url
+            if result.published_at is not None:
+                item_source_info["published_at"] = result.published_at
+            if result.retrieved_at is not None:
+                item_source_info["retrieved_at"] = result.retrieved_at
+
+            opportunity_data = await process_raw_post_via_ai(result.raw_text, item_source_info)
             opportunity, was_created = await upsert_opportunity(session, opportunity_data)
             stats["created"] += int(was_created)
             stats["updated"] += int(not was_created)

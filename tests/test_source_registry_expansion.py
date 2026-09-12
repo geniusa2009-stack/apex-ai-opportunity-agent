@@ -138,9 +138,16 @@ class TestNewSourcesFlowThroughD4_2Unmodified:
         assert _NEW_FACEBOOK_PAGE_IDS <= candidate_ids
 
         opcorners = next(c for c in candidates if c.source_id == "@opcorners")
-        assert opcorners.source_kind == "telegram_channel"
+        # Phase 3B: @opcorners is this project's one deliberately
+        # live-enabled representative source (see
+        # app/services/telegram_live_client.py) -- it now resolves to
+        # the real adapter's kind, not the mocked one.
+        assert opcorners.source_kind == "telegram_channel_live"
         assert opcorners.source_base_url == "https://t.me/opcorners"
         assert by_id["@opcorners"].handle == "@opcorners"
+
+        full_opportunities = next(c for c in candidates if c.source_id == "@FullOpportunities")
+        assert full_opportunities.source_kind == "telegram_channel"
 
     def test_new_facebook_sources_produce_real_discovery_candidates(self):
         config = load_sources_config()

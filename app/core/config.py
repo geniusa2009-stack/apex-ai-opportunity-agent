@@ -640,6 +640,29 @@ class Settings(BaseSettings):
     # started from.
     opportunity_sources_config_path: str = "app/data/opportunity_sources.json"
 
+    # --- Phase 3B: Real Source Adapters & Live Discovery Execution ---
+    #
+    # `LiveTelegramSourceAdapter` (app/services/telegram_live_client.py)
+    # fetches a channel's real, public `https://t.me/s/<handle>` preview
+    # page -- no credentials needed, no auth bypass (a public page
+    # Telegram itself serves). These three settings are the SAME kind of
+    # "bounded execution" control D4.2's own `_HARD_ROUND_CEILING` is for
+    # the round loop -- here scoped to one adapter's one fetch call, so a
+    # single misbehaving channel (an unbounded post history) can never
+    # turn into an unbounded network loop regardless of what D4.2 asks
+    # for. Real per-request/connect/read timeouts, never "wait forever."
+    telegram_live_fetch_timeout_seconds: float = 10.0
+    telegram_live_fetch_max_pages: int = 3
+    telegram_live_fetch_max_items: int = 60
+
+    # `FacebookGraphAPISourceAdapter` (app/services/facebook_graph_client.py):
+    # empty-by-default, same honest-availability convention as
+    # `research_orchestrator._provider_available`'s AI-provider keys --
+    # in this dev sandbox this is empty, so that adapter is honestly
+    # UNCONFIGURED (see that module's own docstring) rather than silently
+    # falling back to fabricated/mocked data.
+    facebook_graph_api_access_token: str = ""
+
     # --- Smart Notifications Engine ---
     #
     # Transactional email dispatch (`app/workers/notification_tasks.py`'s

@@ -66,5 +66,8 @@ class TestAdapterRegistry:
         with pytest.raises(UnsupportedSourceKindError):
             get_adapter("rss_feed")
 
-    def test_registry_has_exactly_the_two_real_configured_kinds(self):
-        assert set(ADAPTERS.keys()) == {"telegram_channel", "facebook_page"}
+    def test_registry_has_exactly_the_three_real_configured_kinds(self):
+        # Phase 3B added "telegram_channel_live" (LiveTelegramSourceAdapter)
+        # alongside the two pre-existing, still-mocked kinds -- see
+        # source_adapters.py's own module docstring.
+        assert set(ADAPTERS.keys()) == {"telegram_channel", "telegram_channel_live", "facebook_page"}

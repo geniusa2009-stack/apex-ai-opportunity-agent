@@ -181,6 +181,59 @@ class OpportunityCreate(BaseModel):
         "so `upsert_opportunity` can get-or-create the right `Source` row.",
     )
 
+    # --- Phase 3B: Real Source Adapters & Live Discovery Execution ---
+    #
+    # All four fields below are OPTIONAL and default to `None` -- every
+    # existing caller of `OpportunityCreate` (the Scrapy pipeline, the
+    # still-mocked Telegram/Facebook fetch path) constructs this schema
+    # with none of them set, and that stays valid and unchanged. They
+    # exist so a REAL source adapter's own provenance/timestamp signals
+    # (see `app.services.source_adapters.RawDiscoveryResult`) survive
+    # past extraction instead of being silently dropped on the floor.
+    #
+    # DB DISCIPLINE (Phase 3B, per its own instruction not to add a
+    # migration unless genuinely necessary): `Opportunity` has no
+    # dedicated columns for these -- `upsert_opportunity`'s existing,
+    # UNCHANGED `raw_extracted_data=data.model_dump(mode="json")` call
+    # (this schema's own designed "internal scrape payload" catch-all,
+    # see that column's own schema-file docstring) already persists
+    # every field on this model verbatim, so these four ride along for
+    # free with zero schema/migration change. They are NOT queryable
+    # columns -- a future phase that needs to query on them (e.g. "show
+    # me opportunities with a real, non-proxy source timestamp") would
+    # need a real migration then; that is explicitly out of scope here.
+    external_item_id: str | None = Field(
+        default=None,
+        max_length=500,
+        description="The source's own stable per-item identifier (e.g. a Telegram "
+        "message id), when the adapter that fetched this item exposed one. Never "
+        "fabricated -- None when no such identifier exists.",
+    )
+    item_url: str | None = Field(
+        default=None,
+        max_length=2048,
+        description="The specific post/item's own canonical URL (e.g. "
+        "https://t.me/<channel>/<id>), distinct from `source_base_url` (the "
+        "channel/page itself). Used as a `_resolve_target_url` fallback ranked "
+        "between the AI-extracted link and the generic source base URL.",
+    )
+    source_published_at: datetime | None = Field(
+        default=None,
+        description="The SOURCE's own claimed publish/update time for this exact "
+        "item, when the adapter could read one directly off a structured field "
+        "(e.g. Telegram's own <time datetime=...> element) -- never inferred from "
+        "prose, never an LLM guess, never retrieval time. `None` when no such "
+        "genuine source timestamp exists, per Phase 1's temporal_evidence module "
+        "posture (parsed via that module's own `parse_source_timestamp`).",
+    )
+    retrieved_at: datetime | None = Field(
+        default=None,
+        description="The real moment APEX's own adapter fetched this item -- "
+        "distinct from `source_published_at`. `None` falls back to this row's own "
+        "`created_at` (TimestampMixin), same posture as Phase 1's Evidence "
+        "`retrieved_at or now()` convention.",
+    )
+
 
 # =============================================================================
 # Review of Aggregated Opportunities Before Publish

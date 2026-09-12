@@ -179,6 +179,22 @@ class TestAIPromptParsing:
         assert _resolve_target_url(None, "https://t.me/fallback") == "https://t.me/fallback"
         assert _resolve_target_url("   ", "https://t.me/fallback") == "https://t.me/fallback"
 
+    def test_resolve_target_url_prefers_item_url_over_generic_source_base_url(self):
+        """Phase 3B addition: when the AI found no link in the post body,
+        the specific item's OWN URL (real provenance from a live source
+        adapter) is preferred over the generic channel/page URL."""
+        assert _resolve_target_url(
+            None, "https://t.me/opcorners", item_url="https://t.me/opcorners/12345"
+        ) == "https://t.me/opcorners/12345"
+
+    def test_resolve_target_url_ai_link_still_wins_over_item_url(self):
+        assert _resolve_target_url(
+            "https://example.com/apply", "https://t.me/opcorners", item_url="https://t.me/opcorners/12345"
+        ) == "https://example.com/apply"
+
+    def test_resolve_target_url_item_url_none_preserves_old_behavior(self):
+        assert _resolve_target_url(None, "https://t.me/fallback", item_url=None) == "https://t.me/fallback"
+
 
 # ---------------------------------------------------------------------
 # Sources config + mocked fetch functions
