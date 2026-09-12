@@ -10,12 +10,18 @@
     {"handle": "@shbab_btsad_shbab", "category": "Youth_Opportunities"},
     {"handle": "@NewtonEducationalCenter", "category": "Educational_Courses"},
     {"handle": "@doctorelmina7", "category": "Scholarships"},
-    {"handle": "@grabscholarship", "category": "Scholarships"}
+    {"handle": "@grabscholarship", "category": "Scholarships"},
+    {"handle": "@opcorners", "category": "Scholarships"},
+    {"handle": "@FullOpportunities", "category": "General"},
+    {"handle": "@africademics", "category": "Scholarships"}
   ],
   "facebook_pages": [
     {"page_id": "EgyptDigitalCubs", "name": "أشبال مصر الرقمية", "target_age": "prep_secondary"},
     {"page_id": "ITIEgypt", "name": "معهد تكنولوجيا المعلومات", "target_age": "graduates"},
     {"page_id": "SawirisFoundation", "name": "مؤسسة ساويرس", "target_age": "university"},
-    {"page_id": "USEmbassyCairo", "name": "السفارة الأمريكية", "target_age": "all"}
+    {"page_id": "USEmbassyCairo", "name": "السفارة الأمريكية", "target_age": "all"},
+    {"page_id": "officialchevening", "name": "Chevening Scholarships (UK FCDO)", "target_age": "graduates"},
+    {"page_id": "MastercardFoundation", "name": "Mastercard Foundation", "target_age": "university"},
+    {"page_id": "yseali", "name": "YSEALI (Young Southeast Asian Leaders Initiative)", "target_age": "all"}
   ]
 }
