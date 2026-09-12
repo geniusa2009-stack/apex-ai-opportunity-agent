@@ -117,6 +117,54 @@ class TestParsePreviewHtml:
         messages = parse_preview_html(html)
         assert len(messages[0].raw_text) <= 8_000
 
+    def test_self_closed_br_before_closing_tags_does_not_desync_depth(self):
+        # LIVE-DISCOVERED REGRESSION (Phase 3B.1): real `t.me/s/<handle>`
+        # markup writes line breaks as SELF-CLOSED `<br/>`, not bare
+        # `<br>`. `html.parser` fires a synthetic `handle_endtag("br")`
+        # for a self-closed void element (it does NOT for a bare
+        # `<br>`), which this parser's `_depth` bookkeeping did not
+        # originally account for: `handle_starttag` correctly skips the
+        # depth increment for void tags, but `handle_endtag` decremented
+        # `_depth` unconditionally, so each `<br/>` closed the
+        # surrounding structure one level early with no matching
+        # increment. Live validation against the real `@opcorners`
+        # channel found this closed `tgme_widget_message_text` after the
+        # FIRST `<br/>` (silently truncating `raw_text`) and then closed
+        # the whole message block before the parser ever reached the
+        # real `<time datetime=...>` element in the footer -- so
+        # `published_at` came back `None` for every single live item
+        # despite the source genuinely providing a real timestamp. This
+        # fixture reproduces the real structure (self-closed `<br/>`,
+        # multiple line breaks, inline `<i>/<b>` emoji markup, and a
+        # `<time>` element that appears AFTER the text div closes) to
+        # guard against the same depth-desync regression recurring.
+        html = _page(
+            '<div class="tgme_widget_message text" data-post="opcorners/700">'
+            '<div class="tgme_widget_message_bubble">'
+            '<div class="tgme_widget_message_text js-message_text" dir="auto">'
+            'Youth Forum <i class="emoji"><b>\U0001F1E8\U0001F1ED</b></i> (Fully Funded)<br/><br/>'
+            'Apply: <a href="https://example.org/apply">https://example.org/apply</a><br/><br/>'
+            'A 4-day in person program.'
+            '</div>'
+            '<span class="tgme_widget_message_meta">'
+            '<a class="tgme_widget_message_date" href="https://t.me/opcorners/700">'
+            '<time datetime="2026-09-03T14:44:37+00:00" class="time">14:44</time>'
+            '</a>'
+            '</span>'
+            '</div>'
+            '</div>'
+        )
+        messages = parse_preview_html(html)
+        assert len(messages) == 1
+        msg = messages[0]
+        # The full text must survive -- not truncated at the first <br/>.
+        assert "Apply:" in msg.raw_text
+        assert "4-day in person program" in msg.raw_text
+        assert msg.raw_text.count("\n") >= 3
+        # The real, source-provided timestamp must be captured -- not
+        # None, which is what the live-discovered bug produced.
+        assert msg.published_at == dt.datetime(2026, 9, 3, 14, 44, 37, tzinfo=dt.timezone.utc)
+
 
 # ---------------------------------------------------------------------
 # SECURITY: PROMPT INJECTION / SCRIPT CONTENT (Section 19/27)

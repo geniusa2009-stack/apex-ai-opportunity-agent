@@ -306,6 +306,28 @@ class _TelegramPreviewParser(HTMLParser):
         if not self._in_message:
             return
 
+        if tag in self._VOID_TAGS:
+            # `html.parser` fires a synthetic `handle_endtag` for a
+            # self-closed void element (e.g. real Telegram markup's
+            # `<br/>`, which appears multiple times per message body)
+            # even though `handle_starttag` correctly never incremented
+            # `_depth` for it (see the void-tag branch above). Without
+            # this matching skip here, every such `<br/>` decremented
+            # `_depth` with no corresponding increment -- a REAL bug
+            # this phase's live validation against the actual t.me
+            # page discovered (LIVE-DISCOVERED, Phase 3B.1): it closed
+            # `tgme_widget_message_text` (and eventually the whole
+            # message block) several tags too early, silently
+            # truncating `raw_text` and causing the parser to flush the
+            # message before ever reaching the real `<time datetime=...>`
+            # element in the message footer -- so `published_at` came
+            # back `None` even though the source genuinely provided a
+            # real timestamp. The prior hand-authored unit-test fixtures
+            # never exercised a message body containing a self-closed
+            # `<br/>` before its closing tags, which is why 29 passing
+            # unit tests did not catch this.
+            return
+
         if self._in_text_div and self._depth == self._text_div_depth:
             self._in_text_div = False
 
