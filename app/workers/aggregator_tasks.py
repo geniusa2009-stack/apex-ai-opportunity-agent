@@ -337,22 +337,57 @@ async def _poll_source(
                 item_source_info["retrieved_at"] = result.retrieved_at
 
             opportunity_data = await process_raw_post_via_ai(result.raw_text, item_source_info)
-            opportunity, was_created = await upsert_opportunity(session, opportunity_data)
+
+            # EXCEPTION HANDLER SAFETY REVIEW finding (real, reproduced):
+            # `upsert_opportunity`/`complete_step` below are real DB
+            # writes (`db.flush()`) on THIS round's single, long-lived,
+            # not-yet-committed `session` -- the whole run commits ONCE,
+            # at the very end (see `_run_daily_opportunity_scraper`).
+            # A genuine flush-time DB failure here (a real constraint
+            # violation, a real type-coercion error -- reproduced with a
+            # standalone script forcing exactly this) leaves the ORM
+            # Session needing an explicit `rollback()` before further
+            # use; without one, the FAILED-outcome `complete_step` call
+            # in the `except` blocks below would itself immediately
+            # raise `sqlalchemy.exc.PendingRollbackError` -- UNCAUGHT,
+            # since it runs inside the except handler itself -- which
+            # would propagate out of this whole task, aborting EVERY
+            # source/round processed so far THIS RUN (never committed)
+            # over a single bad item. That directly contradicts this
+            # module's own repeatedly-documented isolation guarantee
+            # ("exactly ONE broken source must never abort the whole
+            # discovery round").
+            #
+            # Fix: a SAVEPOINT (`session.begin_nested()`) around just
+            # this item's real writes. On failure, only this savepoint
+            # is rolled back -- the outer, still-uncommitted transaction
+            # (everything the run has genuinely accomplished so far)
+            # stays intact and the session remains usable, so the
+            # `except` blocks' own FAILED-outcome `complete_step` write
+            # succeeds normally instead of cascading into a second,
+            # unhandled exception. `stats["created"]`/`["updated"]` are
+            # only incremented once the whole savepoint (upsert AND its
+            # own step-completion write) has actually committed, not
+            # merely attempted -- a minor, strictly-more-correct side
+            # effect of grouping these two real writes atomically,
+            # not a behavior change to what "created"/"updated" count.
+            async with session.begin_nested():
+                opportunity, was_created = await upsert_opportunity(session, opportunity_data)
+                result_step.reference_id = str(opportunity.id)
+                # NEUTRAL, not SUCCESSFUL: unchanged from pre-D4.2 behavior --
+                # a discovered opportunity is only a real research-efficiency
+                # success once the real, decoupled verification pass judges
+                # it (`apply_verification_outcome`).
+                await research_trajectory_memory.complete_step(
+                    session,
+                    step=result_step,
+                    trajectory=trajectory,
+                    outcome=TrajectoryOutcome.NEUTRAL,
+                    discovered_opportunities_count=int(was_created),
+                    discovered_entities_count=1,
+                )
             stats["created"] += int(was_created)
             stats["updated"] += int(not was_created)
-            result_step.reference_id = str(opportunity.id)
-            # NEUTRAL, not SUCCESSFUL: unchanged from pre-D4.2 behavior --
-            # a discovered opportunity is only a real research-efficiency
-            # success once the real, decoupled verification pass judges
-            # it (`apply_verification_outcome`).
-            await research_trajectory_memory.complete_step(
-                session,
-                step=result_step,
-                trajectory=trajectory,
-                outcome=TrajectoryOutcome.NEUTRAL,
-                discovered_opportunities_count=int(was_created),
-                discovered_entities_count=1,
-            )
         except AggregatorError as exc:
             logger.exception("aggregator_tasks: AI extraction failed for %s", label)
             stats["errors"] += 1

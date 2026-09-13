@@ -568,3 +568,84 @@ class TestDiscoveryIntegration:
             polled = result.scalars().all()
             assert len(polled) < 6
             assert {s.query for s in polled}.issubset({f"@chan{i}" for i in range(6)})
+
+    async def test_real_db_write_failure_during_upsert_does_not_abort_the_whole_run(
+        self, db_session_factory, monkeypatch
+    ):
+        """EXCEPTION HANDLER SAFETY REVIEW (post-final-audit LOW finding,
+        exception handlers not individually vetted): reproduces a REAL
+        `upsert_opportunity` flush-time DB failure (a genuine ORM
+        unit-of-work error, not an `AggregatorError` raised before any
+        write) for exactly one source, and proves it does not cascade.
+
+        Before the fix this session introduced, a flush failure here
+        left the shared, single-commit-at-the-end `session` needing an
+        explicit `rollback()`; the `except Exception` handler's own
+        FAILED-outcome `complete_step` call then immediately raised an
+        UNCAUGHT `sqlalchemy.exc.PendingRollbackError`, which propagated
+        out of the entire task -- aborting every other source polled
+        this run (never committed), not just the one broken source.
+        `app/workers/aggregator_tasks.py` now wraps the per-item real
+        writes in a SAVEPOINT (`session.begin_nested()`) so only that
+        item's changes roll back on failure."""
+        import uuid as _uuid
+
+        import app.workers.aggregator_tasks as at
+        from app.models.opportunity import Opportunity
+
+        monkeypatch.setattr(at, "load_sources_config", lambda: _config(3))
+
+        real_upsert = at.upsert_opportunity
+        poison_state = {"done": False}
+
+        async def _poisoning_upsert(db, data):
+            if not poison_state["done"]:
+                poison_state["done"] = True
+                # A REAL ORM flush failure (title=None violates the
+                # real `opportunities.title NOT NULL` constraint) --
+                # not an application-level validation error raised
+                # before any write, unlike `AggregatorError` above.
+                bad = Opportunity(
+                    title=None,
+                    target_url="https://example.com/poison-item",
+                    source_id=str(_uuid.uuid4()),
+                    type="scholarship",
+                )
+                db.add(bad)
+                await db.flush()
+            return await real_upsert(db, data)
+
+        monkeypatch.setattr(at, "upsert_opportunity", _poisoning_upsert)
+
+        call_count = {"n": 0}
+
+        async def _fake_extract(raw_text, source_info):
+            call_count["n"] += 1
+            return _fields(f"https://example.com/opp-{call_count['n']}")
+
+        with patch("app.services.aggregator_service._extract_fields_via_gemini", new=AsyncMock(side_effect=_fake_extract)):
+            with patch("app.workers.aggregator_tasks.AsyncSessionLocal", db_session_factory), patch(
+                "app.workers.aggregator_tasks.engine", new=AsyncMock()
+            ):
+                # The bug this test guards against manifested as an
+                # unhandled exception escaping this call entirely --
+                # asserting a clean "completed" status (not merely "no
+                # exception raised") is the real proof of isolation.
+                summary = await at._run_daily_opportunity_scraper()
+
+        assert summary["status"] == "completed"
+        # Exactly the one poisoned source failed; the other two (real
+        # DB writes, on the SAME session, AFTER the failure) succeeded --
+        # proof the session recovered rather than staying poisoned.
+        assert summary["errors"] == 1
+        assert summary["created"] == 2
+        assert summary["processed"] == 3
+
+        async with db_session_factory() as db:
+            result = await db.execute(select(ResearchTrajectoryStep).where(ResearchTrajectoryStep.action_type == "process_result"))
+            steps = result.scalars().all()
+            outcomes = sorted(s.outcome for s in steps)
+            # One real, honest FAILED step recorded for the poisoned
+            # item -- never silently dropped, never a fabricated success.
+            assert outcomes.count("failed") == 1
+            assert outcomes.count("neutral") == 2
