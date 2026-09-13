@@ -1324,7 +1324,7 @@ class DiscoverySourceCandidate:
     evidence."""
 
     source_id: str
-    source_kind: str  # "telegram_channel" | "facebook_page"
+    source_kind: str  # "telegram_channel" | "telegram_channel_live" | "facebook_page" | "facebook_page_live"
     category: str | None
     source_base_url: str
 

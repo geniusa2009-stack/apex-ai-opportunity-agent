@@ -110,6 +110,19 @@ class FacebookPageConfig(BaseModel):
     target_age: str | None = Field(
         default=None, description="e.g. 'prep_secondary', 'university', 'graduates', 'all'."
     )
+    # Facebook adapter remediation (post-final-audit FINDING-MED-1): same
+    # opt-in, reversible, per-source convention as
+    # `TelegramChannelConfig.live` above. Defaults False so all 7
+    # pre-existing pages keep today's mocked `fetch_new_facebook_posts`
+    # behavior unchanged. Only a page explicitly marked `"live": true` in
+    # app/data/opportunity_sources.json would ever be routed to the real
+    # `FacebookGraphAPISourceAdapter` (source_adapters.py) instead -- and
+    # even then, that adapter still refuses to run without a real,
+    # configured `settings.facebook_graph_api_access_token`
+    # (see facebook_graph_client.is_configured()). No page in the
+    # registry is flipped to `live: true` by this change -- see the
+    # remediation report's "Source Registry Policy" section for why.
+    live: bool = False
 
 
 class SourcesConfig(BaseModel):

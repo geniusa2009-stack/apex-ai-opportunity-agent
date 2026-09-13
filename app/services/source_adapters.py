@@ -34,9 +34,16 @@ pre-existing MOCKED adapters (`TelegramSourceAdapter`/
 `FacebookSourceAdapter`) are completely UNCHANGED -- every source not
 explicitly opted into the live kind keeps today's exact mocked
 behavior. A real Facebook Graph API adapter
-(`app/services/facebook_graph_client.py`) was also built this phase,
-but is deliberately NOT registered here -- see that module's own
-docstring for why (no configured credential exists to use it live).
+(`app/services/facebook_graph_client.py`) was also built this phase.
+POST-AUDIT UPDATE: it is now registered here as
+`FacebookGraphAPISourceAdapter` under the distinct kind
+`"facebook_page_live"` (see that class's own docstring) -- resolving
+final-audit FINDING-MED-1. No configured page in
+`app/data/opportunity_sources.json` is marked `live: true` for
+Facebook yet (no real Graph API credential exists in this
+environment), so this remains registered-but-dormant exactly like an
+un-flipped Telegram channel; see that module's own docstring for the
+credential-gating detail.
 
 Existing behavior for the two pre-existing adapters is unchanged: both
 still call the same real fetch functions with the same real config
@@ -60,6 +67,7 @@ from app.services.aggregator_service import (
     fetch_new_telegram_posts,
 )
 from app.services.telegram_live_client import fetch_telegram_channel_live
+from app.services.facebook_graph_client import fetch_facebook_page_posts_live
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +173,61 @@ class FacebookSourceAdapter:
         ]
 
 
+class FacebookGraphAPISourceAdapter:
+    """Post-final-audit remediation of FINDING-MED-1: wires the real,
+    already-existing `app.services.facebook_graph_client` (built in
+    Phase 3B but never registered here) into this same adapter
+    boundary, mirroring exactly how `LiveTelegramSourceAdapter` sits
+    alongside `TelegramSourceAdapter`.
+
+    Registered under a DISTINCT `source_kind`
+    (`"facebook_page_live"`) from the pre-existing, still-mocked
+    `"facebook_page"` -- only a `FacebookPageConfig` explicitly marked
+    `live=True` in `app/data/opportunity_sources.json` is ever routed
+    here (see `aggregator_tasks._build_source_candidates`); every other
+    configured Facebook page is completely unaffected by this class's
+    existence.
+
+    This class performs NO network access itself and NO fallback --
+    it is a thin, one-method wrapper. All real HTTP behavior (the
+    official Graph API request, credential gating, retry/timeout
+    bounds, error classification) lives entirely in
+    `facebook_graph_client.py`, unmodified by this remediation. If that
+    module is not configured (`is_configured()` is False -- no real
+    token), `fetch_facebook_page_posts_live` raises
+    `SourceNotConfiguredError` immediately, with no network call at
+    all; this adapter does not catch it -- exactly like
+    `LiveTelegramSourceAdapter`, the generic `except Exception:` in
+    `aggregator_tasks._poll_source` is what isolates that failure to
+    this one source, records an honest reason, and lets discovery
+    continue with every other source unaffected. There is no scraping
+    fallback anywhere in this path: an unconfigured or failing Graph
+    API call never falls back to HTML scraping or to the older mocked
+    `FacebookSourceAdapter`.
+
+    `retrieved_at` is stamped as real "now" at the moment this adapter
+    ran -- distinct from each post's own `published_at` (Graph API's
+    real `created_time`), matching `LiveTelegramSourceAdapter`'s own
+    provenance semantics."""
+
+    source_kind = "facebook_page_live"
+
+    def fetch(self, config: FacebookPageConfig) -> list[RawDiscoveryResult]:
+        retrieved_at = dt.datetime.now(dt.timezone.utc)
+        posts = fetch_facebook_page_posts_live(config)
+        return [
+            RawDiscoveryResult(
+                raw_text=post["raw_text"],
+                source_kind=self.source_kind,
+                external_item_id=post.get("external_item_id"),
+                item_url=post.get("item_url"),
+                published_at=post.get("published_at"),
+                retrieved_at=retrieved_at,
+            )
+            for post in posts
+        ]
+
+
 # Registry keyed by the same `source_kind` strings
 # `DiscoverySourceCandidate.source_kind` already uses
 # (`research_orchestrator.py`). Adding a genuine new source kind is one
@@ -173,6 +236,7 @@ ADAPTERS: dict[str, SourceAdapter] = {
     "telegram_channel": TelegramSourceAdapter(),
     "telegram_channel_live": LiveTelegramSourceAdapter(),
     "facebook_page": FacebookSourceAdapter(),
+    "facebook_page_live": FacebookGraphAPISourceAdapter(),
 }
 
 

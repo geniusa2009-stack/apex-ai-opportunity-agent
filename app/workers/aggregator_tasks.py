@@ -121,10 +121,17 @@ def _build_source_candidates(
         by_id[channel.handle] = channel
 
     for page in config.facebook_pages:
+        # Post-audit remediation (FINDING-MED-1): same opt-in routing
+        # convention as the Telegram loop above. A page explicitly
+        # marked "live": true is routed to the real
+        # FacebookGraphAPISourceAdapter (source_kind="facebook_page_live");
+        # everything else keeps today's exact mocked "facebook_page"
+        # behavior. No page in the current registry sets this flag (see
+        # the remediation report's Source Registry Policy section).
         candidates.append(
             ro.DiscoverySourceCandidate(
                 source_id=page.page_id,
-                source_kind="facebook_page",
+                source_kind="facebook_page_live" if page.live else "facebook_page",
                 category=page.target_age,
                 source_base_url=f"https://www.facebook.com/{page.page_id}",
             )
