@@ -42,6 +42,9 @@ celery_app = Celery(
         # Weekly League System -- weekly promote/demote/reset cron; see
         # that module's own docstring.
         "app.workers.league_tasks",
+        # Research Trajectory Memory (D3) -- retention/pruning periodic
+        # scan; see that module's own docstring.
+        "app.workers.trajectory_retention_tasks",
     ],
 )
 
@@ -128,5 +131,17 @@ celery_app.conf.beat_schedule = {
     "reset-monthly-leaderboard": {
         "task": "app.workers.league_tasks.reset_monthly_leaderboard_task",
         "schedule": crontab(day_of_month=1, hour=0, minute=0),
+    },
+    # Research Trajectory Memory (D3) -- retention/pruning. Daily at
+    # 04:00 UTC: between the aggregator's own 03:00 UTC scraper run and
+    # the deadline-reminder scan's 05:00 UTC slot, so all three daily
+    # jobs run at distinct minutes. Daily cadence is deliberately coarse
+    # -- this is low-churn maintenance against a 180-day retention
+    # window (see `RESEARCH_TRAJECTORY_STEP_RETENTION_DAYS`'s own
+    # docstring), not a time-sensitive scan like the two reminder tasks
+    # above.
+    "prune-research-trajectory-steps": {
+        "task": "app.workers.trajectory_retention_tasks.prune_research_trajectory_steps_task",
+        "schedule": crontab(hour=4, minute=0),
     },
 }

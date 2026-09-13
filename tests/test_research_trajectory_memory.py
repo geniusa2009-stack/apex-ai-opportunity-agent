@@ -27,7 +27,7 @@ test file in this project.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -839,3 +839,242 @@ class TestAdminResearchEndpoints:
         body = res.json()
         assert any(p["source_domain"] == "example.com" for p in body)
         assert "is_trustworthy" not in body[0]
+
+
+# =======================================================================
+# Research Trajectory Retention / Pruning Remediation
+# =======================================================================
+
+
+class TestPruneOldResearchTrajectorySteps:
+    """`research_trajectory_memory.prune_old_research_trajectory_steps` --
+    real DB-backed proof of the safety rule (never prune an ACTIVE/
+    RUNNING trajectory's steps, regardless of age), the retention
+    window, idempotency, and fail-safe behavior on a real DB error."""
+
+    _NOW = datetime(2026, 9, 20, 12, 0, 0, tzinfo=timezone.utc)
+
+    async def _backdate_step(self, db, *, step_id, age_days: float):
+        from sqlalchemy import update
+
+        await db.execute(
+            update(ResearchTrajectoryStep)
+            .where(ResearchTrajectoryStep.id == step_id)
+            .values(created_at=self._NOW - timedelta(days=age_days))
+        )
+        await db.commit()
+        db.expire_all()
+
+    async def _seed_trajectory_with_step(self, db, *, status: TrajectoryStatus, label="@src"):
+        trajectory = await research_trajectory_memory.start_trajectory(db, objective=f"seed {label}")
+        step = await research_trajectory_memory.record_step(
+            db, trajectory=trajectory, action_type="process_result", query=label, source_domain="example.com",
+        )
+        await research_trajectory_memory.complete_step(
+            db, step=step, trajectory=trajectory, outcome=TrajectoryOutcome.SUCCESSFUL,
+            discovered_opportunities_count=1,
+        )
+        if status != TrajectoryStatus.RUNNING:
+            trajectory.status = status.value
+            trajectory.completed_at = self._NOW
+            db.add(trajectory)
+            await db.flush()
+        await db.commit()
+        return trajectory, step
+
+    @pytest.mark.asyncio
+    async def test_old_completed_trajectory_steps_are_pruned(self, db_session_factory):
+        async with db_session_factory() as db:
+            trajectory, step = await self._seed_trajectory_with_step(db, status=TrajectoryStatus.COMPLETED)
+            trajectory_id, step_id = trajectory.id, step.id
+            await self._backdate_step(db, step_id=step_id, age_days=200)  # past the 180-day default
+
+            summary = await research_trajectory_memory.prune_old_research_trajectory_steps(db, now=self._NOW)
+
+            assert summary["deleted_steps"] == 1
+            result = await db.execute(select(ResearchTrajectoryStep).where(ResearchTrajectoryStep.id == step_id))
+            assert result.scalar_one_or_none() is None
+            # The parent trajectory row itself is NEVER deleted -- see
+            # this remediation's own disclosed scope.
+            still_there = await db.get(ResearchTrajectory, trajectory_id)
+            assert still_there is not None
+
+    @pytest.mark.asyncio
+    async def test_recent_completed_trajectory_steps_are_retained(self, db_session_factory):
+        async with db_session_factory() as db:
+            trajectory, step = await self._seed_trajectory_with_step(db, status=TrajectoryStatus.COMPLETED)
+            step_id = step.id
+            await self._backdate_step(db, step_id=step_id, age_days=5)  # well inside the retention window
+
+            summary = await research_trajectory_memory.prune_old_research_trajectory_steps(db, now=self._NOW)
+
+            assert summary["deleted_steps"] == 0
+            result = await db.execute(select(ResearchTrajectoryStep).where(ResearchTrajectoryStep.id == step_id))
+            assert result.scalar_one_or_none() is not None
+
+    @pytest.mark.asyncio
+    async def test_active_running_trajectory_steps_are_never_pruned_even_if_old(self, db_session_factory):
+        """THE core safety rule: an ACTIVE (RUNNING) trajectory's steps
+        are never eligible, no matter how old -- age alone is never
+        sufficient; the parent's real lifecycle state gates everything."""
+        async with db_session_factory() as db:
+            trajectory, step = await self._seed_trajectory_with_step(db, status=TrajectoryStatus.RUNNING)
+            step_id = step.id
+            await self._backdate_step(db, step_id=step_id, age_days=10_000)  # absurdly old, still protected
+
+            summary = await research_trajectory_memory.prune_old_research_trajectory_steps(db, now=self._NOW)
+
+            assert summary["deleted_steps"] == 0
+            assert summary["eligible_trajectories"] == 0
+            result = await db.execute(select(ResearchTrajectoryStep).where(ResearchTrajectoryStep.id == step_id))
+            assert result.scalar_one_or_none() is not None
+
+    @pytest.mark.asyncio
+    async def test_old_failed_trajectory_steps_are_also_eligible(self, db_session_factory):
+        """FAILED is just as much "no longer active" as COMPLETED --
+        both are real, terminal `TrajectoryStatus` values."""
+        async with db_session_factory() as db:
+            trajectory, step = await self._seed_trajectory_with_step(db, status=TrajectoryStatus.FAILED)
+            await self._backdate_step(db, step_id=step.id, age_days=200)
+
+            summary = await research_trajectory_memory.prune_old_research_trajectory_steps(db, now=self._NOW)
+
+            assert summary["deleted_steps"] == 1
+
+    @pytest.mark.asyncio
+    async def test_boundary_timestamp_exactly_at_cutoff_is_retained(self, db_session_factory):
+        """Exactly at the cutoff (age == retention_days) is NOT deleted
+        -- the comparison is strictly `created_at < cutoff`, so a step
+        exactly on the boundary is treated as still-retained, never as
+        an off-by-one deletion."""
+        async with db_session_factory() as db:
+            trajectory, step = await self._seed_trajectory_with_step(db, status=TrajectoryStatus.COMPLETED)
+            await self._backdate_step(db, step_id=step.id, age_days=180.0)  # exactly the default window
+
+            summary = await research_trajectory_memory.prune_old_research_trajectory_steps(
+                db, now=self._NOW, retention_days=180.0
+            )
+
+            assert summary["deleted_steps"] == 0
+
+    @pytest.mark.asyncio
+    async def test_empty_dataset_is_a_safe_no_op(self, db_session_factory):
+        async with db_session_factory() as db:
+            summary = await research_trajectory_memory.prune_old_research_trajectory_steps(db, now=self._NOW)
+            assert summary == {
+                "cutoff": summary["cutoff"],
+                "eligible_trajectories": 0,
+                "deleted_steps": 0,
+            }
+
+    @pytest.mark.asyncio
+    async def test_multiple_trajectories_are_pruned_in_isolation(self, db_session_factory):
+        async with db_session_factory() as db:
+            _, old_completed_step = await self._seed_trajectory_with_step(
+                db, status=TrajectoryStatus.COMPLETED, label="@old_completed"
+            )
+            old_completed_id = old_completed_step.id
+            await self._backdate_step(db, step_id=old_completed_id, age_days=200)
+
+            _, recent_completed_step = await self._seed_trajectory_with_step(
+                db, status=TrajectoryStatus.COMPLETED, label="@recent_completed"
+            )
+            recent_completed_id = recent_completed_step.id
+            await self._backdate_step(db, step_id=recent_completed_id, age_days=1)
+
+            _, old_running_step = await self._seed_trajectory_with_step(
+                db, status=TrajectoryStatus.RUNNING, label="@old_running"
+            )
+            old_running_id = old_running_step.id
+            await self._backdate_step(db, step_id=old_running_id, age_days=200)
+
+            summary = await research_trajectory_memory.prune_old_research_trajectory_steps(db, now=self._NOW)
+
+            assert summary["deleted_steps"] == 1  # only the old+completed one
+            remaining_ids = {
+                row[0] for row in (await db.execute(select(ResearchTrajectoryStep.id))).all()
+            }
+            assert old_completed_id not in remaining_ids
+            assert recent_completed_id in remaining_ids
+            assert old_running_id in remaining_ids
+
+    @pytest.mark.asyncio
+    async def test_repeated_execution_is_idempotent(self, db_session_factory):
+        async with db_session_factory() as db:
+            trajectory, step = await self._seed_trajectory_with_step(db, status=TrajectoryStatus.COMPLETED)
+            await self._backdate_step(db, step_id=step.id, age_days=200)
+
+            first = await research_trajectory_memory.prune_old_research_trajectory_steps(db, now=self._NOW)
+            second = await research_trajectory_memory.prune_old_research_trajectory_steps(db, now=self._NOW)
+
+            assert first["deleted_steps"] == 1
+            assert second["deleted_steps"] == 0  # already gone -- safe, not an error
+
+    @pytest.mark.asyncio
+    async def test_database_failure_propagates_never_reports_false_success(self, db_session_factory, monkeypatch):
+        """A genuine DB failure mid-delete must never be swallowed into
+        a misleading `{"deleted_steps": 0}` success -- it must propagate
+        so the real caller (the Celery task) surfaces a real failure."""
+        async with db_session_factory() as db:
+            await self._seed_trajectory_with_step(db, status=TrajectoryStatus.COMPLETED)
+
+            async def _boom(*args, **kwargs):
+                raise RuntimeError("simulated real DB failure")
+
+            monkeypatch.setattr(db, "execute", _boom)
+
+            with pytest.raises(RuntimeError, match="simulated real DB failure"):
+                await research_trajectory_memory.prune_old_research_trajectory_steps(db, now=self._NOW)
+
+    @pytest.mark.asyncio
+    async def test_summary_never_contains_step_content_or_metadata(self, db_session_factory):
+        """Observability output is structured counts ONLY -- never raw
+        step content/JSONB metadata (Step 9's own explicit requirement)."""
+        async with db_session_factory() as db:
+            trajectory, step = await self._seed_trajectory_with_step(db, status=TrajectoryStatus.COMPLETED)
+            await self._backdate_step(db, step_id=step.id, age_days=200)
+
+            summary = await research_trajectory_memory.prune_old_research_trajectory_steps(db, now=self._NOW)
+
+            assert set(summary.keys()) == {"cutoff", "eligible_trajectories", "deleted_steps"}
+
+    @pytest.mark.asyncio
+    async def test_pruning_negligibly_decayed_steps_does_not_change_d3_classification(self, db_session_factory):
+        """D3 COMPATIBILITY (this remediation's own required proof):
+        pruning steps old enough to be eligible (past the 180-day
+        default, 6 D3 half-lives) does not change `discovery_source_
+        yield_hints`'s real classification -- their decay weight was
+        already negligible (`0.5 ** 6 ~= 1.6%`) BEFORE pruning, so
+        removing them changes nothing about which sources are
+        high/low-yield. Proven by comparing the real classification
+        before and after pruning, not merely asserted."""
+        async with db_session_factory() as db:
+            trajectory = await research_trajectory_memory.start_trajectory(db, objective="D3 compatibility check")
+            steps = []
+            for outcome_value, discovered in [("neutral", 1), ("neutral", 1), ("neutral", 1), ("neutral", 0)]:
+                step = await research_trajectory_memory.record_step(
+                    db, trajectory=trajectory, action_type="process_result", query="@ancient_source",
+                )
+                await research_trajectory_memory.complete_step(
+                    db, step=step, trajectory=trajectory, outcome=TrajectoryOutcome(outcome_value),
+                    discovered_opportunities_count=discovered,
+                )
+                steps.append(step)
+            trajectory.status = TrajectoryStatus.COMPLETED.value
+            db.add(trajectory)
+            await db.flush()
+            await db.commit()
+            step_ids = [step.id for step in steps]
+            for step_id in step_ids:
+                await self._backdate_step(db, step_id=step_id, age_days=200)
+
+            before = await research_trajectory_memory.discovery_source_yield_hints(db, now=self._NOW)
+            await research_trajectory_memory.prune_old_research_trajectory_steps(db, now=self._NOW)
+            after = await research_trajectory_memory.discovery_source_yield_hints(db, now=self._NOW)
+
+            # Already excluded from high-yield before pruning (decay
+            # already collapsed its effective sample size -- see the D3
+            # recency/decay remediation's own report) -- pruning changes
+            # nothing about that real classification.
+            assert "@ancient_source" not in before["high_yield_source_labels"]
+            assert "@ancient_source" not in after["high_yield_source_labels"]

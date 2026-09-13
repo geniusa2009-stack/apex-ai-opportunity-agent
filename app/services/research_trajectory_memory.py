@@ -30,9 +30,9 @@ efficiently -- nothing here is load-bearing for correctness.
 import logging
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.enums import TrajectoryOutcome, TrajectoryStatus
@@ -744,3 +744,163 @@ async def discovery_source_yield_hints(
         "high_yield_source_labels": high_yield_labels,
         "low_yield_source_labels": low_yield_labels,
     }
+
+
+# RESEARCH TRAJECTORY RETENTION / PRUNING REMEDIATION (post-final-audit
+# LOW finding: "research_trajectory_steps has no explicit retention/
+# pruning policy"). STEP 1 INVESTIGATION, confirmed: this table has no
+# existing cap and is written once per real discovery item, forever
+# (see `app/workers/aggregator_tasks.py::_poll_source`'s own real,
+# per-item `record_step`/`complete_step` calls) -- genuinely unbounded
+# growth, exactly as the finding says.
+#
+# WINDOW CHOICE, tied to REAL existing behavior rather than an
+# arbitrary new number: `SOURCE_YIELD_DECAY_HALF_LIFE_DAYS` (30 days,
+# above) already makes an observation's influence on
+# `discovery_source_yield_hints`'s classification decay toward
+# negligible well before this window -- `0.5 ** (180 / 30) = 1/64`,
+# ~1.6%. 180 days (6 half-lives) is therefore a genuinely conservative
+# default: by the time a step becomes eligible for pruning, D3's own
+# real decay math has ALREADY made it contribute almost nothing to
+# current classification (see the D3 COMPATIBILITY analysis in this
+# remediation's own report for the full, disclosed reasoning on why
+# pruning does not change D3 semantics). It is also generous relative
+# to `apply_verification_outcome`'s own best-effort verification-
+# catch-up window (that pass runs far sooner than 180 days after
+# discovery in real operation), and shorter than -- never conflicting
+# with -- `evidence_verification.STALE_EVIDENCE_MAX_AGE_DAYS` (365
+# days), a deliberately longer window for a different, higher-stakes
+# concern (evidence trustworthiness, not discovery-memory recency).
+# Configurable per-call (see `prune_old_research_trajectory_steps`'s
+# own `retention_days` parameter) rather than hardcoded, same
+# convention as `discovery_source_yield_hints`'s own `half_life_days`.
+RESEARCH_TRAJECTORY_STEP_RETENTION_DAYS = 180.0
+
+
+async def prune_old_research_trajectory_steps(
+    db: AsyncSession,
+    *,
+    retention_days: float = RESEARCH_TRAJECTORY_STEP_RETENTION_DAYS,
+    now: datetime | None = None,
+) -> dict:
+    """Deletes `ResearchTrajectoryStep` rows older than `retention_days`
+    whose PARENT trajectory is no longer active -- the real, minimal fix
+    for unbounded historical growth in this table.
+
+    SAFETY RULE (non-negotiable, per this remediation's own instruction
+    to never guess a completion signal): a step is eligible ONLY when
+    its parent `ResearchTrajectory.status` is `COMPLETED` or `FAILED`
+    (`TrajectoryStatus`, the real, pre-existing lifecycle field this
+    model already has -- see `record_outcome`, the ONLY place that ever
+    sets it away from its `RUNNING` default). A step whose trajectory is
+    still `RUNNING` is NEVER touched, regardless of its own age -- this
+    also means a step can never be pruned mid-run even in principle,
+    since `_run_daily_opportunity_scraper` (the one real writer) commits
+    its trajectory's `RUNNING` status exactly once, atomically, together
+    with every step it wrote that run (`record_outcome` + `session.
+    commit()` are the run's own last two calls) -- there is no window
+    where a partially-written run's steps are visible to a separate
+    pruning connection while its trajectory still reads `RUNNING`.
+
+    SCOPE, disclosed deliberately: this prunes `ResearchTrajectoryStep`
+    rows ONLY. The parent `ResearchTrajectory` row is NEVER deleted --
+    it is low-volume (one row per real run, not one per discovered
+    item), already carries its own durable, pre-computed summary
+    (`useful_sources`, `research_depth`, `final_outcome`, the four
+    step-count rollups) written once at `record_outcome` time, and is
+    exactly the admin/audit-visible record `app/api/v1/endpoints/
+    admin_research.py`'s own trajectory-detail endpoint reads -- keeping
+    it indefinitely preserves real historical/audit visibility ("this
+    run happened, here is its real outcome") even after its own
+    step-level detail has aged out. No new archival table/mechanism is
+    introduced (this codebase has no existing precedent for archiving
+    this KIND of row, only object-storage cleanup for media -- see
+    `app/workers/cleanup_tasks.py`'s own, unrelated scope); hard-delete
+    is the correct, minimal choice here.
+
+    Evidence/provenance (D6) is NEVER affected: `Evidence` rows
+    (`app/models/evidence.py`) have no foreign key to
+    `ResearchTrajectoryStep` and are durable, independently, by their
+    own design (see that model's own docstring) -- this function cannot
+    touch D6 data even in principle.
+
+    Idempotent and safe under concurrent execution: a single bulk `DELETE
+    ... WHERE created_at < cutoff AND trajectory_id IN (SELECT id FROM
+    research_trajectories WHERE status != 'running')`. Re-running this
+    finds a strictly smaller (or empty) eligible set each time -- no
+    double-delete hazard, no distributed lock needed (a `DELETE` with a
+    `WHERE` clause is naturally idempotent; two concurrent runs each
+    delete whatever the other hasn't already removed, converging safely
+    on the same end state). Never fabricates a timestamp: `cutoff` is
+    computed once from the real, caller-supplied-or-real `now`, compared
+    only against the real, server-assigned, non-nullable `created_at`
+    column (never a source-supplied or optional field).
+
+    On a genuine database failure, this function does NOT swallow the
+    exception into a fake "0 deleted" success -- it re-raises after
+    logging, so the caller (the Celery task wrapper) surfaces a real
+    task failure rather than a misleading clean run.
+
+    Returns `{"cutoff": <isoformat>, "eligible_trajectories": <int>,
+    "deleted_steps": <int>}` -- structured counts only, never step
+    content/JSONB metadata (nothing here is ever logged at any level
+    beyond these counts and the cutoff timestamp).
+    """
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=retention_days)
+
+    non_active_ids_result = await db.execute(
+        select(ResearchTrajectory.id).where(ResearchTrajectory.status != TrajectoryStatus.RUNNING.value)
+    )
+    non_active_ids = [row[0] for row in non_active_ids_result.all()]
+
+    if not non_active_ids:
+        logger.info(
+            "prune_old_research_trajectory_steps: no non-active trajectories exist yet -- nothing eligible "
+            "(cutoff=%s)",
+            cutoff.isoformat(),
+        )
+        return {"cutoff": cutoff.isoformat(), "eligible_trajectories": 0, "deleted_steps": 0}
+
+    try:
+        delete_result = await db.execute(
+            delete(ResearchTrajectoryStep)
+            .where(
+                ResearchTrajectoryStep.created_at < cutoff,
+                ResearchTrajectoryStep.trajectory_id.in_(non_active_ids),
+            )
+            # `synchronize_session=False`: this is a maintenance sweep,
+            # not an operation any caller needs in-session ORM objects
+            # kept in sync with -- deliberately skips the ORM's default
+            # "evaluate" strategy, which would otherwise try to check
+            # this WHERE clause against already-loaded step objects in
+            # THIS session's identity map (e.g. ones a caller read via
+            # `discovery_source_yield_hints` moments earlier) and can
+            # raise `TypeError: can't compare offset-naive and
+            # offset-aware datetimes` if any loaded object's own
+            # `created_at` came back naive (SQLite, this test suite's
+            # own DB) while `cutoff` is timezone-aware -- a real,
+            # reproduced failure, not a hypothetical one. `False` is
+            # also the fastest option and exactly matches the plain
+            # bulk-`DELETE` idiom this codebase already establishes in
+            # `entity_relationship_service.rebuild_entity_relationships`.
+            .execution_options(synchronize_session=False)
+        )
+        await db.commit()
+    except Exception:
+        logger.exception(
+            "prune_old_research_trajectory_steps: real DB failure during prune (cutoff=%s) -- rolling back, "
+            "NOT reporting a false success",
+            cutoff.isoformat(),
+        )
+        await db.rollback()
+        raise
+
+    deleted = delete_result.rowcount or 0
+    summary = {
+        "cutoff": cutoff.isoformat(),
+        "eligible_trajectories": len(non_active_ids),
+        "deleted_steps": deleted,
+    }
+    logger.info("prune_old_research_trajectory_steps: %s", summary)
+    return summary
