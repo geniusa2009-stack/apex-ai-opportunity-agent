@@ -49,6 +49,73 @@ _NON_WORD_RE = re.compile(r"[^\w\s]")
 _POSITIVE_OUTCOMES = {TrajectoryOutcome.SUCCESSFUL.value, TrajectoryOutcome.PARTIALLY_USEFUL.value}
 _NEGATIVE_OUTCOMES = {TrajectoryOutcome.FAILED.value, TrajectoryOutcome.MISLEADING.value}
 
+# D3 Recency/Decay Remediation (post-final-audit LOW finding): same
+# half-life-based time-decay convention `evidence_verification.py`
+# already established for its own, separate staleness concern
+# (`STALE_EVIDENCE_MAX_AGE_DAYS`/`_is_current`) -- mirrored here rather
+# than inventing a new pattern. 30 days is the chosen default half-life:
+# a discovery observation from 30 days ago counts for half as much
+# influence on `discovery_source_yield_hints`'s high/low-yield
+# classification as one from today; from 90 days ago (3 half-lives),
+# an eighth. This reflects that a source's RECENT posting behavior is
+# what predicts its near-term yield in this fast-moving domain (new
+# scholarship/opportunity posts), not its entire multi-month history
+# weighted equally. Configurable per-call (see
+# `discovery_source_yield_hints`'s own `half_life_days` parameter) --
+# not hardcoded as an unconditional constant -- so a future caller with
+# a different cadence need not edit this module.
+SOURCE_YIELD_DECAY_HALF_LIFE_DAYS = 30.0
+
+
+def _yield_decay_weight(
+    step_created_at: datetime | None, *, now: datetime, half_life_days: float
+) -> float:
+    """Deterministic, bounded, numerically-stable time-decay weight for
+    one discovery observation (`ResearchTrajectoryStep.created_at` --
+    the real, server-assigned moment this codebase's own aggregator
+    recorded the observation; never a source-supplied or fabricated
+    time, and not user/source-content-controllable, which is also why
+    this can never be manipulated by a prompt-injection-style payload
+    in scraped post content -- decay depends solely on this trusted,
+    system-generated column).
+
+    `effective_weight = 0.5 ** (age_days / half_life_days)`, i.e. exact
+    exponential half-life decay -- deterministic (same inputs always
+    give the same output), bounded to `(0, 1]` by construction below,
+    and easy to reason about/test.
+
+    Edge cases, each a deliberate, documented decision rather than a
+    fabricated timestamp:
+      - Missing timestamp (`None`): returns `1.0` (no decay) -- treated
+        exactly like the pre-remediation, undecayed behavior for that
+        one observation, mirroring `evidence_verification._is_current`'s
+        identical "missing reference -> treat as current" convention.
+        In real operation this should never occur (`created_at` is
+        `NOT NULL` on the model); this branch is a defensive fallback
+        only, never a fabricated "now".
+      - Naive (timezone-unaware) timestamp: assumed UTC, mirroring
+        `_is_current`'s identical assumption -- this codebase's own DB
+        timestamps are always UTC-origin (SQLite, used in tests, drops
+        tzinfo on read; Postgres, used in production, keeps it).
+      - Future timestamp (`step_created_at > now`, e.g. clock skew):
+        age is clamped to `0.0` days -> weight capped at exactly `1.0`,
+        never allowed to exceed `1.0` -- a future-dated observation is
+        treated as "as fresh as right now", never given MORE than full
+        weight.
+      - `half_life_days <= 0` (misconfiguration guard): returns `1.0`
+        (decay disabled) rather than dividing by zero or inverting the
+        curve.
+    """
+    if step_created_at is None:
+        return 1.0
+    reference = step_created_at
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
+    age_days = max((now - reference).total_seconds() / 86400.0, 0.0)
+    if half_life_days <= 0:
+        return 1.0
+    return 0.5 ** (age_days / half_life_days)
+
 
 def normalize_objective(text: str) -> str:
     """Lowercase, punctuation-stripped, whitespace-collapsed -- the real,
@@ -515,7 +582,14 @@ async def build_research_hints(db: AsyncSession, *, objective: str) -> dict:
     }
 
 
-async def discovery_source_yield_hints(db: AsyncSession, *, min_sample: int = 3, limit: int = 50) -> dict:
+async def discovery_source_yield_hints(
+    db: AsyncSession,
+    *,
+    min_sample: int = 3,
+    limit: int = 50,
+    half_life_days: float = SOURCE_YIELD_DECAY_HALF_LIFE_DAYS,
+    now: datetime | None = None,
+) -> dict:
     """D3 BACKWARD-LOOKING DISCOVERY MEMORY (Deliverable 5, Feature 3).
 
     STEP 1 INVESTIGATION, confirmed gap: `build_research_hints`/
@@ -551,7 +625,29 @@ async def discovery_source_yield_hints(db: AsyncSession, *, min_sample: int = 3,
     normalization), so the caller (`aggregator_tasks.py`) applies the
     same `research_orchestrator.normalize_source_id` it already uses
     everywhere else, rather than this module reaching into
-    `research_orchestrator` for that one helper."""
+    `research_orchestrator` for that one helper.
+
+    D3 RECENCY/DECAY REMEDIATION: `high_yield_source_labels`/
+    `low_yield_source_labels` are now classified from a real,
+    time-decayed yield/duplicate rate (`_yield_decay_weight`, half-life
+    `half_life_days`) instead of every historical observation counting
+    equally forever -- a source with strong RECENT yield is flagged
+    high-yield even if its older history was mixed; a source whose only
+    strong yield was long ago fades out of the high-yield set over time,
+    exactly as a source with genuinely no recent signal should. This
+    does NOT change what "yield"/"duplicate rate"/"processed"/"created"
+    mean, and does NOT change the real per-source sample-size gate's
+    THRESHOLD (`min_sample` is still the same number) -- but the gate
+    now compares it against the decayed EFFECTIVE sample size rather
+    than the raw historical COUNT, so a source needs real, RECENT-
+    enough volume of evidence before being judged either way, not
+    merely real volume at some arbitrarily distant point in the past
+    (see the classification gate below for why a decayed RATE alone
+    cannot achieve this). Each `source_stats` entry now
+    reports BOTH the original, undecayed `yield_rate`/`duplicate_rate`
+    (unchanged, for anyone reading the raw historical shape) AND the
+    new `decayed_yield_rate`/`decayed_duplicate_rate` (what actually
+    drives high/low-yield classification below)."""
     result = await db.execute(
         select(ResearchTrajectoryStep).where(
             ResearchTrajectoryStep.action_type == "process_result",
@@ -559,6 +655,8 @@ async def discovery_source_yield_hints(db: AsyncSession, *, min_sample: int = 3,
         )
     )
     steps = result.scalars().all()
+
+    now = now or datetime.now(timezone.utc)
 
     by_label: dict[str, list[ResearchTrajectoryStep]] = {}
     for step in steps:
@@ -568,12 +666,34 @@ async def discovery_source_yield_hints(db: AsyncSession, *, min_sample: int = 3,
     high_yield_labels: set[str] = set()
     low_yield_labels: set[str] = set()
     for label, matching in by_label.items():
+        # UNCHANGED semantics: real, undecayed counts/rates -- every
+        # observation still counts once here, exactly as before this
+        # remediation. `processed` is reported as-is (the real,
+        # undecayed historical volume); the min-sample GATE used for
+        # classification below uses the decayed effective sample size
+        # (`weighted_processed`) instead -- see that gate for why.
         processed = len(matching)
         created = sum(s.discovered_opportunities_count for s in matching)
         duplicates = max(processed - created, 0)
         errors = sum(1 for s in matching if s.outcome == TrajectoryOutcome.FAILED.value)
         yield_rate = (created / processed) if processed else 0.0
         duplicate_rate = (duplicates / processed) if processed else 0.0
+
+        # NEW: time-decayed rate, used for high/low-yield
+        # classification below (see this function's own docstring).
+        weights = [
+            _yield_decay_weight(s.created_at, now=now, half_life_days=half_life_days) for s in matching
+        ]
+        weighted_processed = sum(weights)
+        weighted_created = sum(
+            w * s.discovered_opportunities_count for w, s in zip(weights, matching)
+        )
+        weighted_duplicates = max(weighted_processed - weighted_created, 0.0)
+        decayed_yield_rate = (weighted_created / weighted_processed) if weighted_processed > 0 else 0.0
+        decayed_duplicate_rate = (
+            (weighted_duplicates / weighted_processed) if weighted_processed > 0 else 0.0
+        )
+
         source_stats.append(
             {
                 "source_label": label,
@@ -583,11 +703,38 @@ async def discovery_source_yield_hints(db: AsyncSession, *, min_sample: int = 3,
                 "errors": errors,
                 "yield_rate": round(yield_rate, 4),
                 "duplicate_rate": round(duplicate_rate, 4),
+                "decayed_yield_rate": round(decayed_yield_rate, 4),
+                "decayed_duplicate_rate": round(decayed_duplicate_rate, 4),
             }
         )
-        if processed >= min_sample and yield_rate >= 0.5:
+        # GATE USES THE DECAYED EFFECTIVE SAMPLE SIZE
+        # (`weighted_processed`), NOT the raw undecayed `processed`
+        # count. This is deliberate and required for decay to have any
+        # effect at all: `decayed_yield_rate` is a WEIGHTED AVERAGE
+        # (`weighted_created / weighted_processed`), so when every
+        # observation for a label shares (approximately) the same age
+        # -- the common, realistic case for a source whose history is
+        # uniformly old -- the shared weight cancels out of that ratio
+        # and `decayed_yield_rate` collapses back to the plain,
+        # undecayed `yield_rate` no matter how old the observations
+        # are. A weighted-average rate alone therefore cannot make a
+        # uniformly-old source "lose influence" as the remediation
+        # requires. `weighted_processed`, by contrast, IS sensitive to
+        # age on its own (it is a decayed observation COUNT, not a
+        # ratio) -- it shrinks toward zero as a source's entire history
+        # ages, which is exactly the "not enough (recent) evidence to
+        # judge this source" signal `min_sample` was always meant to
+        # express. Gating on it here means a source needs real,
+        # RECENT-enough evidence (not just a real historical volume,
+        # however old) before its rate is trusted either way -- a
+        # source with a strong yield only long ago decays out of
+        # high-yield exactly as this remediation's finding requires,
+        # while a source with fresh volume is ungated exactly as
+        # before (weights near `1.0` leave `weighted_processed`
+        # near `processed`).
+        if weighted_processed >= min_sample and decayed_yield_rate >= 0.5:
             high_yield_labels.add(label)
-        if processed >= min_sample and duplicate_rate >= 0.7:
+        if weighted_processed >= min_sample and decayed_duplicate_rate >= 0.7:
             low_yield_labels.add(label)
 
     source_stats.sort(key=lambda s: s["processed"], reverse=True)
