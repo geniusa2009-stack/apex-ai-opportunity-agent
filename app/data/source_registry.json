@@ -1,0 +1,3466 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-09-22",
+  "description": "APEX Source Intelligence Registry. Tier 1 = official/primary sources (evidence-eligible). Tier 2 = opportunity aggregators (discovery-only, never treated as primary evidence). Tier 3 = community channels/groups/social (discovery-only, never treated as primary evidence). `discovery_enabled=true` means the source is already wired into the real, live discovery pipeline via app/data/opportunity_sources.json -- everything else in this registry is a catalog entry only, not yet integrated into discovery, honestly marked as such.",
+  "sources": [
+    {
+      "source_id": "src-ministry-of-communications-and-information-technology-mcit",
+      "name": "Ministry of Communications and Information Technology (MCIT)",
+      "canonical_url": "https://mcit.gov.eg",
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "LEARNING",
+        "CAREER"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Ministry of Communications and Information Technology (MCIT)",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-itida-information-technology-industry-development-agency",
+      "name": "ITIDA (Information Technology Industry Development Agency)",
+      "canonical_url": "https://itida.gov.eg",
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "CAREER",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "ITIDA (Information Technology Industry Development Agency)",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-itida-programs",
+      "name": "ITIDA Programs",
+      "canonical_url": "https://itida.gov.eg/Arabic/Programs/Pages/default.aspx",
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "CAREER",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "ITIDA",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-tiec-technology-innovation-and-entrepreneurship-center",
+      "name": "TIEC (Technology Innovation and Entrepreneurship Center)",
+      "canonical_url": "https://tiec.gov.eg",
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "ENTREPRENEURSHIP"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "TIEC (Technology Innovation and Entrepreneurship Center)",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-tiec-programs",
+      "name": "TIEC Programs",
+      "canonical_url": "https://tiec.gov.eg/English/Programs/Pages/default.aspx",
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "ENTREPRENEURSHIP"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "TIEC",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-tiec-open-programs",
+      "name": "TIEC Open Programs",
+      "canonical_url": "https://tiec.gov.eg/English/Events/Pages/Openprogs.aspx",
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "ENTREPRENEURSHIP"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "TIEC",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-tiec-startit",
+      "name": "TIEC StartIT",
+      "canonical_url": "https://tiec.gov.eg/English/Programs/Start-IT/Pages/default.aspx",
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "ENTREPRENEURSHIP"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "TIEC",
+      "aliases": [],
+      "notes": "Incubation support, disclosed up to 480K EGP per TIEC's own page at time of collection."
+    },
+    {
+      "source_id": "src-tiec-investit",
+      "name": "TIEC InvestIT",
+      "canonical_url": "https://tiec.gov.eg/English/Programs/Invest-IT/Pages/default.aspx",
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "ENTREPRENEURSHIP"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "TIEC",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-tiec-creativa-innovation-hubs",
+      "name": "TIEC CREATIVA Innovation Hubs",
+      "canonical_url": "https://tiec.gov.eg/English/Programs/Innovation-Hubs/Pages/default.aspx",
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "ENTREPRENEURSHIP"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "TIEC",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-tiec-egyptinnovate",
+      "name": "TIEC EgyptInnovate",
+      "canonical_url": "https://tiec.gov.eg/English/Programs/EgyptInnovate/Pages/default.aspx",
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "ENTREPRENEURSHIP"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "TIEC",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-tiec-startup-launchpad",
+      "name": "TIEC Startup Launchpad",
+      "canonical_url": "https://tiec.gov.eg/English/Programs/StartupLaunchpad/Pages/default.aspx",
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "ENTREPRENEURSHIP"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "TIEC",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-innovegypt-itida",
+      "name": "InnovEgypt (ITIDA)",
+      "canonical_url": "https://itida.gov.eg/English/MediaCenter/Events/Pages/innovegypt-entrepreneurship-training-2026.aspx",
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "ENTREPRENEURSHIP",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "ITIDA",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-nti-national-telecommunication-institute",
+      "name": "NTI (National Telecommunication Institute)",
+      "canonical_url": "https://www.nti.sci.eg",
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "NTI (National Telecommunication Institute)",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-nti-digital-egypt-youth-upskilling",
+      "name": "NTI Digital Egypt Youth Upskilling",
+      "canonical_url": "https://www.nti.sci.eg/dey/coursesev.php",
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "NTI",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-nti-open-programs",
+      "name": "NTI Open Programs",
+      "canonical_url": "https://www.nti.sci.eg/eta/cathuloc.php",
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "NTI",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-nti-summer-training",
+      "name": "NTI Summer Training",
+      "canonical_url": "https://www.nti.sci.eg/summertraining/signin.php",
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "CAREER",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "NTI",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-itida-graduation-projects",
+      "name": "ITIDA Graduation Projects",
+      "canonical_url": "https://itida.gov.eg/English/Programs/Graduation/pages/default.aspx",
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "RESEARCH",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "ITIDA",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-itac-collaborative-funded-projects-itida",
+      "name": "ITAC Collaborative Funded Projects (ITIDA)",
+      "canonical_url": "https://itida.gov.eg/Arabic/Programs/ITAC-CFP/pages/default.aspx",
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "RESEARCH",
+        "ENTREPRENEURSHIP"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "ITIDA",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-itida-train-to-hire-its-bps",
+      "name": "ITIDA Train-to-Hire (ITS-BPS)",
+      "canonical_url": "https://itida.gov.eg/Arabic/Programs/Train-to-Hire-for-ITS-BPS/Pages/default.aspx",
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "CAREER",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "ITIDA",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-itida-sourcing-and-recruitment",
+      "name": "ITIDA Sourcing and Recruitment",
+      "canonical_url": "https://itida.gov.eg/Arabic/Pages/Sourcing-and-Recruitment.aspx",
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "CAREER"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "ITIDA",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-future-work-is-digital-fwd-itida",
+      "name": "Future Work is Digital (FWD, ITIDA)",
+      "canonical_url": "https://itida.gov.eg/English/Programs/FWD/Pages/default.aspx",
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "CAREER",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "ITIDA",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-itida-student-summer-training",
+      "name": "ITIDA Student Summer Training",
+      "canonical_url": "https://itida.gov.eg/english/Programs/StudentSummerTraining/Pages/default.aspx",
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "CAREER",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "ITIDA",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-itida-entrepreneurial-ecosystem",
+      "name": "ITIDA Entrepreneurial Ecosystem",
+      "canonical_url": "https://www.itida.gov.eg/english/programs/innovation-ecosystem/pages/default.aspx",
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "ENTREPRENEURSHIP"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "ITIDA",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-tiec-creativa-startup-portfolio",
+      "name": "TIEC CREATIVA Startup Portfolio",
+      "canonical_url": "https://tiec.gov.eg/English/Programs/Innovation-Hubs/Pages/Startups.aspx",
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "ENTREPRENEURSHIP"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "TIEC",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-nti-telegram-channel",
+      "name": "NTI Telegram Channel",
+      "canonical_url": "https://t.me/NationalTelecommunicationInsti",
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "NTI",
+      "aliases": [],
+      "notes": "Official NTI Telegram channel (distinct from a community aggregator)."
+    },
+    {
+      "source_id": "src-itida-gigs",
+      "name": "ITIDA Gigs",
+      "canonical_url": null,
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "CAREER",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "unresolved",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "ITIDA",
+      "aliases": [],
+      "notes": "Named in the supplied source material as part of the parent org's program roster; no distinct URL was supplied -- recorded as an unresolved sub-program under its parent org's canonical registry entry, not fabricated."
+    },
+    {
+      "source_id": "src-itida-dxc-dandelion",
+      "name": "ITIDA DXC Dandelion",
+      "canonical_url": null,
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "CAREER",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "unresolved",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "ITIDA",
+      "aliases": [],
+      "notes": "Named in the supplied source material as part of the parent org's program roster; no distinct URL was supplied -- recorded as an unresolved sub-program under its parent org's canonical registry entry, not fabricated."
+    },
+    {
+      "source_id": "src-up4jobs",
+      "name": "UP4JOBS",
+      "canonical_url": null,
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "CAREER",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "unresolved",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "ITIDA",
+      "aliases": [],
+      "notes": "Named in the supplied source material as part of the parent org's program roster; no distinct URL was supplied -- recorded as an unresolved sub-program under its parent org's canonical registry entry, not fabricated."
+    },
+    {
+      "source_id": "src-egypt-makes-electronics-eme",
+      "name": "Egypt Makes Electronics (EME)",
+      "canonical_url": null,
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "CAREER",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "unresolved",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "ITIDA/MCIT",
+      "aliases": [],
+      "notes": "Named in the supplied source material as part of the parent org's program roster; no distinct URL was supplied -- recorded as an unresolved sub-program under its parent org's canonical registry entry, not fabricated."
+    },
+    {
+      "source_id": "src-egyptian-talents-academy-eta",
+      "name": "Egyptian Talents Academy (ETA)",
+      "canonical_url": null,
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "CAREER",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "unresolved",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "NTI",
+      "aliases": [],
+      "notes": "Named in the supplied source material as part of the parent org's program roster; no distinct URL was supplied -- recorded as an unresolved sub-program under its parent org's canonical registry entry, not fabricated."
+    },
+    {
+      "source_id": "src-digital-egypt-youth-dey",
+      "name": "Digital Egypt Youth (DEY)",
+      "canonical_url": null,
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "CAREER",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "unresolved",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "NTI",
+      "aliases": [],
+      "notes": "Named in the supplied source material as part of the parent org's program roster; no distinct URL was supplied -- recorded as an unresolved sub-program under its parent org's canonical registry entry, not fabricated."
+    },
+    {
+      "source_id": "src-source",
+      "name": "القيادات الشبابية – وزارة الشباب والرياضة",
+      "canonical_url": null,
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "YOUTH_AND_COMMUNITY",
+        "CAREER",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "unresolved",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "القيادات الشبابية – وزارة الشباب والرياضة",
+      "aliases": [],
+      "notes": "Named in the supplied source material; no URL was supplied in this conversation -- recorded as a manual-review candidate, not fabricated."
+    },
+    {
+      "source_id": "src-source",
+      "name": "طوّر وغيّر – وزارة الشباب والرياضة",
+      "canonical_url": null,
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "YOUTH_AND_COMMUNITY",
+        "CAREER",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "unresolved",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "طوّر وغيّر – وزارة الشباب والرياضة",
+      "aliases": [],
+      "notes": "Named in the supplied source material; no URL was supplied in this conversation -- recorded as a manual-review candidate, not fabricated."
+    },
+    {
+      "source_id": "src-source",
+      "name": "أندية البحث العلمي والابتكار – وزارة الشباب والرياضة",
+      "canonical_url": null,
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "YOUTH_AND_COMMUNITY",
+        "CAREER",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "unresolved",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "أندية البحث العلمي والابتكار – وزارة الشباب والرياضة",
+      "aliases": [],
+      "notes": "Named in the supplied source material; no URL was supplied in this conversation -- recorded as a manual-review candidate, not fabricated."
+    },
+    {
+      "source_id": "src-source",
+      "name": "مراكز شباب مصر",
+      "canonical_url": null,
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "YOUTH_AND_COMMUNITY",
+        "CAREER",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "unresolved",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "مراكز شباب مصر",
+      "aliases": [],
+      "notes": "Named in the supplied source material; no URL was supplied in this conversation -- recorded as a manual-review candidate, not fabricated."
+    },
+    {
+      "source_id": "src-source",
+      "name": "برلمان الشباب",
+      "canonical_url": null,
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "YOUTH_AND_COMMUNITY",
+        "CAREER",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "unresolved",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "برلمان الشباب",
+      "aliases": [],
+      "notes": "Named in the supplied source material; no URL was supplied in this conversation -- recorded as a manual-review candidate, not fabricated."
+    },
+    {
+      "source_id": "src-source",
+      "name": "مشواري",
+      "canonical_url": null,
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "YOUTH_AND_COMMUNITY",
+        "CAREER",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "unresolved",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "مشواري",
+      "aliases": [],
+      "notes": "Named in the supplied source material; no URL was supplied in this conversation -- recorded as a manual-review candidate, not fabricated."
+    },
+    {
+      "source_id": "src-source",
+      "name": "مراكز التكوين المهني",
+      "canonical_url": null,
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "YOUTH_AND_COMMUNITY",
+        "CAREER",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "unresolved",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "مراكز التكوين المهني",
+      "aliases": [],
+      "notes": "Named in the supplied source material; no URL was supplied in this conversation -- recorded as a manual-review candidate, not fabricated."
+    },
+    {
+      "source_id": "src-2030",
+      "name": "مشروع مهني 2030",
+      "canonical_url": null,
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "YOUTH_AND_COMMUNITY",
+        "CAREER",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "unresolved",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "مشروع مهني 2030",
+      "aliases": [],
+      "notes": "Named in the supplied source material; no URL was supplied in this conversation -- recorded as a manual-review candidate, not fabricated."
+    },
+    {
+      "source_id": "src-source",
+      "name": "مراكز التدريب المهني",
+      "canonical_url": null,
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "YOUTH_AND_COMMUNITY",
+        "CAREER",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "unresolved",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "مراكز التدريب المهني",
+      "aliases": [],
+      "notes": "Named in the supplied source material; no URL was supplied in this conversation -- recorded as a manual-review candidate, not fabricated."
+    },
+    {
+      "source_id": "src-2030",
+      "name": "رواد 2030",
+      "canonical_url": null,
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "YOUTH_AND_COMMUNITY",
+        "CAREER",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "unresolved",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "رواد 2030",
+      "aliases": [],
+      "notes": "Named in the supplied source material; no URL was supplied in this conversation -- recorded as a manual-review candidate, not fabricated."
+    },
+    {
+      "source_id": "src-msmeda",
+      "name": "MSMEDA (جهاز تنمية المشروعات المتوسطة والصغيرة ومتناهية الصغر)",
+      "canonical_url": null,
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "YOUTH_AND_COMMUNITY",
+        "CAREER",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "unresolved",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "MSMEDA (جهاز تنمية المشروعات المتوسطة والصغيرة ومتناهية الصغر)",
+      "aliases": [],
+      "notes": "Named in the supplied source material; no URL was supplied in this conversation -- recorded as a manual-review candidate, not fabricated."
+    },
+    {
+      "source_id": "src-asrt",
+      "name": "ASRT (أكاديمية البحث العلمي والتكنولوجيا)",
+      "canonical_url": null,
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "YOUTH_AND_COMMUNITY",
+        "CAREER",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "unresolved",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "ASRT (أكاديمية البحث العلمي والتكنولوجيا)",
+      "aliases": [],
+      "notes": "Named in the supplied source material; no URL was supplied in this conversation -- recorded as a manual-review candidate, not fabricated."
+    },
+    {
+      "source_id": "src-source",
+      "name": "رواد تكنولوجيا المستقبل",
+      "canonical_url": null,
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "YOUTH_AND_COMMUNITY",
+        "CAREER",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "unresolved",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "رواد تكنولوجيا المستقبل",
+      "aliases": [],
+      "notes": "Named in the supplied source material; no URL was supplied in this conversation -- recorded as a manual-review candidate, not fabricated."
+    },
+    {
+      "source_id": "src-maharatech",
+      "name": "MaharaTech (مهارتي)",
+      "canonical_url": null,
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "YOUTH_AND_COMMUNITY",
+        "CAREER",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "unresolved",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "MaharaTech (مهارتي)",
+      "aliases": [],
+      "notes": "Named in the supplied source material; no URL was supplied in this conversation -- recorded as a manual-review candidate, not fabricated."
+    },
+    {
+      "source_id": "src-iti",
+      "name": "ITI (معهد تكنولوجيا المعلومات)",
+      "canonical_url": null,
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "YOUTH_AND_COMMUNITY",
+        "CAREER",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "unresolved",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "ITI (معهد تكنولوجيا المعلومات)",
+      "aliases": [],
+      "notes": "Named in the supplied source material; no URL was supplied in this conversation -- recorded as a manual-review candidate, not fabricated."
+    },
+    {
+      "source_id": "src-digilians",
+      "name": "Digilians (الرواد الرقميون)",
+      "canonical_url": null,
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "YOUTH_AND_COMMUNITY",
+        "CAREER",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "unresolved",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Digilians (الرواد الرقميون)",
+      "aliases": [],
+      "notes": "Named in the supplied source material; no URL was supplied in this conversation -- recorded as a manual-review candidate, not fabricated."
+    },
+    {
+      "source_id": "src-digital-egypt-cubs",
+      "name": "Digital Egypt Cubs (أشبال مصر الرقمية)",
+      "canonical_url": null,
+      "telegram_handle": null,
+      "source_type": "government",
+      "tier": "TIER_1_PRIMARY",
+      "region": "EG",
+      "countries": [
+        "EG"
+      ],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "YOUTH_AND_COMMUNITY",
+        "CAREER",
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "unresolved",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Digital Egypt Cubs (أشبال مصر الرقمية)",
+      "aliases": [],
+      "notes": "Named in the supplied source material; no URL was supplied in this conversation -- recorded as a manual-review candidate, not fabricated."
+    },
+    {
+      "source_id": "src-microsoft-learn",
+      "name": "Microsoft Learn",
+      "canonical_url": null,
+      "telegram_handle": null,
+      "source_type": "learning_platform",
+      "tier": "TIER_1_PRIMARY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "unresolved",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Microsoft Learn",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-cisco-networking-academy",
+      "name": "Cisco Networking Academy",
+      "canonical_url": "https://www.netacad.com",
+      "telegram_handle": null,
+      "source_type": "learning_platform",
+      "tier": "TIER_1_PRIMARY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Cisco Networking Academy",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-google-skillshop",
+      "name": "Google Skillshop",
+      "canonical_url": "https://skillshop.withgoogle.com",
+      "telegram_handle": null,
+      "source_type": "learning_platform",
+      "tier": "TIER_1_PRIMARY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Google Skillshop",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-freecodecamp",
+      "name": "freeCodeCamp",
+      "canonical_url": "https://www.freecodecamp.org",
+      "telegram_handle": null,
+      "source_type": "learning_platform",
+      "tier": "TIER_1_PRIMARY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "freeCodeCamp",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-coursera",
+      "name": "Coursera",
+      "canonical_url": "https://www.coursera.org",
+      "telegram_handle": null,
+      "source_type": "learning_platform",
+      "tier": "TIER_1_PRIMARY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Coursera",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-edx",
+      "name": "edX",
+      "canonical_url": "https://www.edx.org",
+      "telegram_handle": null,
+      "source_type": "learning_platform",
+      "tier": "TIER_1_PRIMARY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "edX",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-edraak",
+      "name": "Edraak (إدراك)",
+      "canonical_url": "https://www.edraak.org",
+      "telegram_handle": null,
+      "source_type": "learning_platform",
+      "tier": "TIER_1_PRIMARY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Edraak (إدراك)",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-rwaq",
+      "name": "Rwaq (رواق)",
+      "canonical_url": "https://www.rwaq.org",
+      "telegram_handle": null,
+      "source_type": "learning_platform",
+      "tier": "TIER_1_PRIMARY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Rwaq (رواق)",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-maarif",
+      "name": "Maarif (معارف)",
+      "canonical_url": null,
+      "telegram_handle": null,
+      "source_type": "learning_platform",
+      "tier": "TIER_1_PRIMARY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "LEARNING"
+      ],
+      "trust_level": "high",
+      "discovery_enabled": false,
+      "verification_eligible": true,
+      "adapter_type": "unresolved",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Maarif (معارف)",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-opportunity-universe",
+      "name": "Opportunity Universe",
+      "canonical_url": "https://opportunity-universe.com",
+      "telegram_handle": null,
+      "source_type": "aggregator",
+      "tier": "TIER_2_AGGREGATOR",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION",
+        "CAREER"
+      ],
+      "trust_level": "medium",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Opportunity Universe",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-open-opportunities",
+      "name": "Open Opportunities",
+      "canonical_url": "https://openopportunities.org",
+      "telegram_handle": null,
+      "source_type": "aggregator",
+      "tier": "TIER_2_AGGREGATOR",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION",
+        "CAREER",
+        "RESEARCH"
+      ],
+      "trust_level": "medium",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Open Opportunities",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-opportunities4all",
+      "name": "Opportunities4All",
+      "canonical_url": "https://www.opportunities4all.com",
+      "telegram_handle": null,
+      "source_type": "aggregator",
+      "tier": "TIER_2_AGGREGATOR",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION",
+        "CAREER"
+      ],
+      "trust_level": "medium",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Opportunities4All",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-opportunitynest",
+      "name": "OpportunityNest",
+      "canonical_url": "https://www.opportunitynest.org",
+      "telegram_handle": null,
+      "source_type": "aggregator",
+      "tier": "TIER_2_AGGREGATOR",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION",
+        "YOUTH_AND_COMMUNITY"
+      ],
+      "trust_level": "medium",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "OpportunityNest",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-opportunity-station",
+      "name": "Opportunity Station",
+      "canonical_url": "https://www.opportunitystation.com",
+      "telegram_handle": null,
+      "source_type": "aggregator",
+      "tier": "TIER_2_AGGREGATOR",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION",
+        "CAREER"
+      ],
+      "trust_level": "medium",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Opportunity Station",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-global-youth-initiatives",
+      "name": "Global Youth Initiatives",
+      "canonical_url": "https://www.globalyouthinitiatives.com/opportunities",
+      "telegram_handle": null,
+      "source_type": "aggregator",
+      "tier": "TIER_2_AGGREGATOR",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "YOUTH_AND_COMMUNITY"
+      ],
+      "trust_level": "medium",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Global Youth Initiatives",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-infoopp",
+      "name": "InfoOpp",
+      "canonical_url": "https://infoopp.com",
+      "telegram_handle": null,
+      "source_type": "aggregator",
+      "tier": "TIER_2_AGGREGATOR",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION",
+        "RESEARCH"
+      ],
+      "trust_level": "medium",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "InfoOpp",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-scholarshiphub",
+      "name": "ScholarshipHub",
+      "canonical_url": "https://scholarshiphub.website",
+      "telegram_handle": null,
+      "source_type": "aggregator",
+      "tier": "TIER_2_AGGREGATOR",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION"
+      ],
+      "trust_level": "medium",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "ScholarshipHub",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-opportunity-inside",
+      "name": "Opportunity Inside",
+      "canonical_url": "https://opportunityinside.com",
+      "telegram_handle": null,
+      "source_type": "aggregator",
+      "tier": "TIER_2_AGGREGATOR",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION",
+        "CAREER"
+      ],
+      "trust_level": "medium",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Opportunity Inside",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-letmespread",
+      "name": "LetmeSpread",
+      "canonical_url": "https://www.letmespread.com",
+      "telegram_handle": null,
+      "source_type": "aggregator",
+      "tier": "TIER_2_AGGREGATOR",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION",
+        "CAREER"
+      ],
+      "trust_level": "medium",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "LetmeSpread",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-youthatlas",
+      "name": "YouthAtlas",
+      "canonical_url": "https://www.youthatlas.com",
+      "telegram_handle": null,
+      "source_type": "aggregator",
+      "tier": "TIER_2_AGGREGATOR",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION",
+        "CAREER",
+        "RESEARCH",
+        "YOUTH_AND_COMMUNITY"
+      ],
+      "trust_level": "medium",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "YouthAtlas",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-takadam",
+      "name": "Takadam",
+      "canonical_url": "https://app.takadam.com",
+      "telegram_handle": null,
+      "source_type": "aggregator",
+      "tier": "TIER_2_AGGREGATOR",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION",
+        "CAREER"
+      ],
+      "trust_level": "medium",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Takadam",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-scholarinfo",
+      "name": "ScholarInfo",
+      "canonical_url": "https://www.scholarinfo.net",
+      "telegram_handle": null,
+      "source_type": "aggregator",
+      "tier": "TIER_2_AGGREGATOR",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION",
+        "RESEARCH"
+      ],
+      "trust_level": "medium",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "ScholarInfo",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-opportunity-sphere",
+      "name": "Opportunity Sphere",
+      "canonical_url": "https://www.opportunitysphere.com",
+      "telegram_handle": null,
+      "source_type": "aggregator",
+      "tier": "TIER_2_AGGREGATOR",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION",
+        "CAREER",
+        "RESEARCH",
+        "ENTREPRENEURSHIP",
+        "LEARNING"
+      ],
+      "trust_level": "medium",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Opportunity Sphere",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-global-opportunities",
+      "name": "Global Opportunities",
+      "canonical_url": "https://globalopportunities.app",
+      "telegram_handle": null,
+      "source_type": "aggregator",
+      "tier": "TIER_2_AGGREGATOR",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION",
+        "RESEARCH",
+        "CAREER"
+      ],
+      "trust_level": "medium",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "NO_ADAPTER",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Global Opportunities",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-scholarships365",
+      "name": "Scholarships365",
+      "canonical_url": null,
+      "telegram_handle": "@scholarships365",
+      "source_type": "community",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "telegram_channel",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Scholarships365",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-full-scholarships",
+      "name": "Full Scholarships",
+      "canonical_url": null,
+      "telegram_handle": "@fullscholarships",
+      "source_type": "community",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "telegram_channel",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Full Scholarships",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-scholarship-term",
+      "name": "Scholarship Term",
+      "canonical_url": null,
+      "telegram_handle": "@scholarshipsee",
+      "source_type": "community",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "telegram_channel",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Scholarship Term",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-free-scholarships",
+      "name": "Free Scholarships",
+      "canonical_url": null,
+      "telegram_handle": "@scholarship",
+      "source_type": "community",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "telegram_channel",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Free Scholarships",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-opportunities-corners",
+      "name": "Opportunities Corners",
+      "canonical_url": null,
+      "telegram_handle": "@opcorners",
+      "source_type": "community",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": true,
+      "verification_eligible": false,
+      "adapter_type": "telegram_channel",
+      "live_status": "LIVE",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Opportunities Corners",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-opportunity-portal",
+      "name": "Opportunity Portal",
+      "canonical_url": null,
+      "telegram_handle": "@opportunityportalabroad",
+      "source_type": "community",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "telegram_channel",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Opportunity Portal",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-scholarships-fellowships",
+      "name": "Scholarships & Fellowships",
+      "canonical_url": null,
+      "telegram_handle": "@scholarg4",
+      "source_type": "community",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "telegram_channel",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Scholarships & Fellowships",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-international-scholarships",
+      "name": "International Scholarships",
+      "canonical_url": null,
+      "telegram_handle": "@studyportion",
+      "source_type": "community",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "telegram_channel",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "International Scholarships",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-the-global-scholarship",
+      "name": "The Global Scholarship",
+      "canonical_url": null,
+      "telegram_handle": "@theglobalscholarship",
+      "source_type": "community",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "telegram_channel",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "The Global Scholarship",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-scholarships",
+      "name": "Scholarships",
+      "canonical_url": null,
+      "telegram_handle": "@scolarships",
+      "source_type": "community",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "telegram_channel",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Scholarships",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-fully-funded-scholarships",
+      "name": "Fully Funded Scholarships",
+      "canonical_url": null,
+      "telegram_handle": "@FullyFundedScholars",
+      "source_type": "community",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "telegram_channel",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Fully Funded Scholarships",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-scholarships-official",
+      "name": "Scholarships Official",
+      "canonical_url": null,
+      "telegram_handle": "@scholarships_official",
+      "source_type": "community",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "telegram_channel",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Scholarships Official",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-munahah-scholarships-portal",
+      "name": "Munahah (Scholarships Portal)",
+      "canonical_url": null,
+      "telegram_handle": "@miinh7",
+      "source_type": "community",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "telegram_channel",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Munahah (Scholarships Portal)",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-opportunities-abroad",
+      "name": "Opportunities Abroad",
+      "canonical_url": null,
+      "telegram_handle": "@opportunitiezabroad",
+      "source_type": "community",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "telegram_channel",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Opportunities Abroad",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-studentsguider",
+      "name": "StudentsGuider",
+      "canonical_url": null,
+      "telegram_handle": "@studentsguider_com",
+      "source_type": "community",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "telegram_channel",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "StudentsGuider",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-truescho",
+      "name": "Truescho",
+      "canonical_url": null,
+      "telegram_handle": "@truescho",
+      "source_type": "community",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "telegram_channel",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Truescho",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-source",
+      "name": "شباب بتساعد شباب",
+      "canonical_url": null,
+      "telegram_handle": "@shbab_btsad_shbab",
+      "source_type": "community",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "YOUTH_AND_COMMUNITY"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": true,
+      "verification_eligible": false,
+      "adapter_type": "telegram_channel",
+      "live_status": "MOCKED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "شباب بتساعد شباب",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-djalil-bng",
+      "name": "Djalil BNG",
+      "canonical_url": null,
+      "telegram_handle": "@djalilbng",
+      "source_type": "community",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "telegram_channel",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Djalil BNG",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-darrab-education",
+      "name": "Darrab Education",
+      "canonical_url": null,
+      "telegram_handle": "@DarrabEducation",
+      "source_type": "community",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "telegram_channel",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Darrab Education",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-egyincs",
+      "name": "Egyincs",
+      "canonical_url": null,
+      "telegram_handle": "@egyincs",
+      "source_type": "community",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "ENTREPRENEURSHIP",
+        "CAREER"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "telegram_channel",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Egyincs",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-forsa",
+      "name": "FORSA",
+      "canonical_url": null,
+      "telegram_handle": "@forsadotco",
+      "source_type": "community",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION",
+        "CAREER"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "telegram_channel",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "FORSA",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-source",
+      "name": "فرص خضراء",
+      "canonical_url": null,
+      "telegram_handle": "@foraskhadra",
+      "source_type": "community",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "telegram_channel",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "فرص خضراء",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-oppgate-arabic",
+      "name": "OPPGATE Arabic",
+      "canonical_url": null,
+      "telegram_handle": "@OPPGATE_arabic",
+      "source_type": "community",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "telegram_channel",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "OPPGATE Arabic",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-taiz",
+      "name": "فرص Taiz",
+      "canonical_url": null,
+      "telegram_handle": "@forus_taiz",
+      "source_type": "community",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "telegram_channel",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "فرص Taiz",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-esudan-jobs",
+      "name": "eSudan Jobs",
+      "canonical_url": null,
+      "telegram_handle": "@esudanjobs",
+      "source_type": "community",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "CAREER"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "telegram_channel",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "eSudan Jobs",
+      "aliases": [],
+      "notes": null
+    },
+    {
+      "source_id": "src-group",
+      "name": "شباب بتساعد شباب (Group)",
+      "canonical_url": null,
+      "telegram_handle": "@_KsHuwQqyS4zYmE0",
+      "source_type": "community",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "YOUTH_AND_COMMUNITY"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "telegram_channel",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "شباب بتساعد شباب (Group)",
+      "aliases": [],
+      "notes": "Telegram group (not a broadcast channel) -- group dynamics/membership norms differ from a channel; flagged for manual review before any live wiring."
+    },
+    {
+      "source_id": "src-apply-scholars-group",
+      "name": "Apply Scholars (Group)",
+      "canonical_url": null,
+      "telegram_handle": "@applyscholars",
+      "source_type": "community",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "telegram_channel",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Apply Scholars (Group)",
+      "aliases": [],
+      "notes": "Telegram group (not a broadcast channel) -- group dynamics/membership norms differ from a channel; flagged for manual review before any live wiring."
+    },
+    {
+      "source_id": "src-egyincs-scholarship-group",
+      "name": "Egyincs Scholarship Group",
+      "canonical_url": null,
+      "telegram_handle": "@egyscholars",
+      "source_type": "community",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "telegram_channel",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Egyincs Scholarship Group",
+      "aliases": [],
+      "notes": "Telegram group (not a broadcast channel) -- group dynamics/membership norms differ from a channel; flagged for manual review before any live wiring."
+    },
+    {
+      "source_id": "src-whatsapp-channel-0029vbayzdii1rcjtlgo0m1y",
+      "name": "WhatsApp Channel (0029VbAYZdiI1rcjTlgo0M1y)",
+      "canonical_url": "https://whatsapp.com/channel/0029VbAYZdiI1rcjTlgo0M1y",
+      "telegram_handle": null,
+      "source_type": "social",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION",
+        "CAREER"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "WhatsApp Channel (0029VbAYZdiI1rcjTlgo0M1y)",
+      "aliases": [],
+      "notes": "No adapter exists for WhatsApp in this codebase; no name was supplied for most of these beyond the URL -- registered for future manual review, not discovery-enabled."
+    },
+    {
+      "source_id": "src-whatsapp-channel-0029vb8wtm9eqiafyn2mzm1h",
+      "name": "WhatsApp Channel (0029Vb8wtm9EQIafYN2mZm1H)",
+      "canonical_url": "https://whatsapp.com/channel/0029Vb8wtm9EQIafYN2mZm1H",
+      "telegram_handle": null,
+      "source_type": "social",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION",
+        "CAREER"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "WhatsApp Channel (0029Vb8wtm9EQIafYN2mZm1H)",
+      "aliases": [],
+      "notes": "No adapter exists for WhatsApp in this codebase; no name was supplied for most of these beyond the URL -- registered for future manual review, not discovery-enabled."
+    },
+    {
+      "source_id": "src-whatsapp-channel-0029vaqokoti7be5bhxfyr0l",
+      "name": "WhatsApp Channel (0029VaqOKotI7Be5bHxFyr0L)",
+      "canonical_url": "https://whatsapp.com/channel/0029VaqOKotI7Be5bHxFyr0L",
+      "telegram_handle": null,
+      "source_type": "social",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION",
+        "CAREER"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "WhatsApp Channel (0029VaqOKotI7Be5bHxFyr0L)",
+      "aliases": [],
+      "notes": "No adapter exists for WhatsApp in this codebase; no name was supplied for most of these beyond the URL -- registered for future manual review, not discovery-enabled."
+    },
+    {
+      "source_id": "src-whatsapp-channel-0029vb8jaoyjzg48aczxuf1r",
+      "name": "WhatsApp Channel (0029Vb8JAoYJZg48Aczxuf1R)",
+      "canonical_url": "https://whatsapp.com/channel/0029Vb8JAoYJZg48Aczxuf1R",
+      "telegram_handle": null,
+      "source_type": "social",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION",
+        "CAREER"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "WhatsApp Channel (0029Vb8JAoYJZg48Aczxuf1R)",
+      "aliases": [],
+      "notes": "No adapter exists for WhatsApp in this codebase; no name was supplied for most of these beyond the URL -- registered for future manual review, not discovery-enabled."
+    },
+    {
+      "source_id": "src-anan-youth-whatsapp",
+      "name": "Anan Youth (WhatsApp)",
+      "canonical_url": "https://whatsapp.com/channel/0029Vb7uAiZ30LKVI9nPKm1Y",
+      "telegram_handle": null,
+      "source_type": "social",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION",
+        "CAREER"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Anan Youth (WhatsApp)",
+      "aliases": [],
+      "notes": "No adapter exists for WhatsApp in this codebase -- registered for future manual review, not discovery-enabled."
+    },
+    {
+      "source_id": "src-youthpath-whatsapp",
+      "name": "YouthPath (WhatsApp)",
+      "canonical_url": "https://whatsapp.com/channel/0029VbCKq3T8V0tsaAKSD320",
+      "telegram_handle": null,
+      "source_type": "social",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION",
+        "CAREER"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "YouthPath (WhatsApp)",
+      "aliases": [],
+      "notes": "No adapter exists for WhatsApp in this codebase -- registered for future manual review, not discovery-enabled."
+    },
+    {
+      "source_id": "src-whatsapp-channel-0029vbbgpxegzncnfa6bh21z",
+      "name": "WhatsApp Channel (0029VbBgPxeGZNCnfa6bH21Z)",
+      "canonical_url": "https://whatsapp.com/channel/0029VbBgPxeGZNCnfa6bH21Z",
+      "telegram_handle": null,
+      "source_type": "social",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION",
+        "CAREER"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "WhatsApp Channel (0029VbBgPxeGZNCnfa6bH21Z)",
+      "aliases": [],
+      "notes": "No adapter exists for WhatsApp in this codebase; no name was supplied for most of these beyond the URL -- registered for future manual review, not discovery-enabled."
+    },
+    {
+      "source_id": "src-whatsapp-channel-0029vakc39dchq6qqggthl2w",
+      "name": "WhatsApp Channel (0029VaKC39DChq6QQgGThl2w)",
+      "canonical_url": "https://whatsapp.com/channel/0029VaKC39DChq6QQgGThl2w",
+      "telegram_handle": null,
+      "source_type": "social",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION",
+        "CAREER"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "WhatsApp Channel (0029VaKC39DChq6QQgGThl2w)",
+      "aliases": [],
+      "notes": "No adapter exists for WhatsApp in this codebase; no name was supplied for most of these beyond the URL -- registered for future manual review, not discovery-enabled."
+    },
+    {
+      "source_id": "src-whatsapp-channel-0029vbboimdc6zvzhez1dg2o",
+      "name": "WhatsApp Channel (0029VbBoimDC6ZvZHEZ1DG2o)",
+      "canonical_url": "https://whatsapp.com/channel/0029VbBoimDC6ZvZHEZ1DG2o",
+      "telegram_handle": null,
+      "source_type": "social",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION",
+        "CAREER"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "WhatsApp Channel (0029VbBoimDC6ZvZHEZ1DG2o)",
+      "aliases": [],
+      "notes": "No adapter exists for WhatsApp in this codebase; no name was supplied for most of these beyond the URL -- registered for future manual review, not discovery-enabled."
+    },
+    {
+      "source_id": "src-whatsapp-channel-0029vb5zicaddmfmxlxqpq1d",
+      "name": "WhatsApp Channel (0029Vb5zicaDDmFMxlXqpQ1D)",
+      "canonical_url": "https://whatsapp.com/channel/0029Vb5zicaDDmFMxlXqpQ1D",
+      "telegram_handle": null,
+      "source_type": "social",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION",
+        "CAREER"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "WhatsApp Channel (0029Vb5zicaDDmFMxlXqpQ1D)",
+      "aliases": [],
+      "notes": "No adapter exists for WhatsApp in this codebase; no name was supplied for most of these beyond the URL -- registered for future manual review, not discovery-enabled."
+    },
+    {
+      "source_id": "src-whatsapp-channel-0029vbd7yr2kaweqivvdfz0n",
+      "name": "WhatsApp Channel (0029VbD7Yr2KAwEqIvVDFZ0N)",
+      "canonical_url": "https://whatsapp.com/channel/0029VbD7Yr2KAwEqIvVDFZ0N",
+      "telegram_handle": null,
+      "source_type": "social",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "EDUCATION",
+        "CAREER"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "WhatsApp Channel (0029VbD7Yr2KAwEqIvVDFZ0N)",
+      "aliases": [],
+      "notes": "No adapter exists for WhatsApp in this codebase; no name was supplied for most of these beyond the URL -- registered for future manual review, not discovery-enabled."
+    },
+    {
+      "source_id": "src-whatsapp-community",
+      "name": "خوارزم (WhatsApp Community)",
+      "canonical_url": "https://chat.whatsapp.com/B9aemG6ShXf4VFEleGg9HA",
+      "telegram_handle": null,
+      "source_type": "social",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "YOUTH_AND_COMMUNITY"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "خوارزم (WhatsApp Community)",
+      "aliases": [],
+      "notes": "No adapter exists for WhatsApp in this codebase -- registered for future manual review, not discovery-enabled."
+    },
+    {
+      "source_id": "src-youthpath-whatsapp-community",
+      "name": "YouthPath (WhatsApp Community)",
+      "canonical_url": "https://chat.whatsapp.com/B6sn16UaLQm0uL7X25F4bf",
+      "telegram_handle": null,
+      "source_type": "social",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "YOUTH_AND_COMMUNITY"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "YouthPath (WhatsApp Community)",
+      "aliases": [],
+      "notes": "No adapter exists for WhatsApp in this codebase -- registered for future manual review, not discovery-enabled."
+    },
+    {
+      "source_id": "src-anan-youth-instagram",
+      "name": "Anan Youth (Instagram)",
+      "canonical_url": "https://www.instagram.com/anan_youth",
+      "telegram_handle": null,
+      "source_type": "social",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "YOUTH_AND_COMMUNITY",
+        "ENTREPRENEURSHIP"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "Anan Youth (Instagram)",
+      "aliases": [],
+      "notes": "No adapter exists for this platform in this codebase -- registered for future manual review, not discovery-enabled."
+    },
+    {
+      "source_id": "src-youthpath-linkedin",
+      "name": "YouthPath (LinkedIn)",
+      "canonical_url": "https://linkedin.com/company/youthpath-official",
+      "telegram_handle": null,
+      "source_type": "social",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "YOUTH_AND_COMMUNITY",
+        "ENTREPRENEURSHIP"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "YouthPath (LinkedIn)",
+      "aliases": [],
+      "notes": "No adapter exists for this platform in this codebase -- registered for future manual review, not discovery-enabled."
+    },
+    {
+      "source_id": "src-youthpath-linktree",
+      "name": "YouthPath (Linktree)",
+      "canonical_url": "https://linktr.ee/remoah2009",
+      "telegram_handle": null,
+      "source_type": "social",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "YOUTH_AND_COMMUNITY",
+        "ENTREPRENEURSHIP"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "YouthPath (Linktree)",
+      "aliases": [],
+      "notes": "No adapter exists for this platform in this codebase -- registered for future manual review, not discovery-enabled."
+    },
+    {
+      "source_id": "src-innovegypt-facebook",
+      "name": "InnovEgypt (Facebook)",
+      "canonical_url": "https://www.facebook.com/InnovEgypt",
+      "telegram_handle": null,
+      "source_type": "social",
+      "tier": "TIER_3_COMMUNITY",
+      "region": "GLOBAL",
+      "countries": [],
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "opportunity_categories": [
+        "YOUTH_AND_COMMUNITY",
+        "ENTREPRENEURSHIP"
+      ],
+      "trust_level": "unverified",
+      "discovery_enabled": false,
+      "verification_eligible": false,
+      "adapter_type": "no_adapter_available",
+      "live_status": "UNCONFIRMED",
+      "last_checked_at": null,
+      "last_success_at": null,
+      "last_failure_at": null,
+      "source_owner": "InnovEgypt (Facebook)",
+      "aliases": [],
+      "notes": "No adapter exists for this platform in this codebase -- registered for future manual review, not discovery-enabled."
+    }
+  ]
+}
