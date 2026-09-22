@@ -26,6 +26,7 @@ from app.models.evidence import Evidence
 from app.models.opportunity_change_history import OpportunityChangeHistory
 from app.models.dangerous_action_confirmation import DangerousActionConfirmation
 from app.models.entity_relationship import EntityRelationship
+from app.models.opportunity_interaction import OpportunityInteraction
 from app.models.research_trajectory import ResearchTrajectory, ResearchTrajectoryStep
 from app.models.practice_case import PracticeCaseAttempt
 from app.models.deadline_alert import DeadlineAlert

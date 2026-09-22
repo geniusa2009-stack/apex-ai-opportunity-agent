@@ -95,7 +95,29 @@ class UserBookmark(Base):
     )
 
     status: Mapped[BookmarkStatus] = mapped_column(
-        SAEnum(BookmarkStatus, name="bookmark_status", native_enum=True),
+        # APEX User Intelligence + Proactive Guidance step -- DISCLOSED
+        # PRE-EXISTING BUG FIX, found while writing this phase's own
+        # tests (`tests/test_user_intelligence.py`'s SNAPSHOT rows are
+        # the first tests in this repository to actually round-trip a
+        # populated `UserBookmark.status` through the ORM -- the prior
+        # phase's own fixture created this table but never inserted a
+        # row into it). Without `values_callable`, SQLAlchemy's `Enum`
+        # type maps a Python enum member by its NAME ("SAVED"/"APPLIED")
+        # by default, but migration 0001 created the real Postgres
+        # `bookmark_status` enum TYPE with the lowercase VALUE labels
+        # ("saved"/"applied") -- exactly matching `BookmarkStatus.SAVED
+        # .value`, not `.name`. Every other native-enum column in this
+        # codebase (`User.academic_level`/`Opportunity.type`/etc.) already
+        # carries this same `values_callable` fix; `UserBookmark.status`
+        # was the one column that never got it, which would make every
+        # real Postgres bookmark write raise "invalid input value for
+        # enum bookmark_status: 'SAVED'". No migration needed -- the
+        # Postgres enum TYPE's labels are already correct; only this
+        # Python-side mapping was wrong.
+        SAEnum(
+            BookmarkStatus, name="bookmark_status", native_enum=True,
+            values_callable=lambda enum_cls: [e.value for e in enum_cls],
+        ),
         default=BookmarkStatus.SAVED,
         nullable=False,
     )

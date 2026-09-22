@@ -1160,3 +1160,61 @@ class MatchLevel(str, enum.Enum):
     MEDIUM = "medium"
     HIGH = "high"
     STRONG = "strong"
+
+
+class InteractionEventType(str, enum.Enum):
+    """APEX User Intelligence + Proactive Guidance step, Part D: an
+    explicit user->opportunity behavioral event. Stored as a plain
+    `String` column on `OpportunityInteraction`
+    (app/models/opportunity_interaction.py), NOT a native Postgres enum --
+    same established reasoning as `Notification.type`/`TrackerStatus`
+    (both of those models' own docstrings): this is a small, evolving
+    vocabulary a future feature may extend, and a DB-level enum is the
+    single most operationally painful column type in this codebase to
+    add a value to later. This enum remains the single source of truth
+    for the allowed values, validated at the service layer
+    (`app/services/interaction_service.py`).
+
+    SAVED/UNSAVED/APPLIED are deliberately NOT members of this enum --
+    `UserBookmark.status` (app/models/bookmark.py, `BookmarkStatus`)
+    already tracks exactly that lifecycle with its own real timestamp;
+    duplicating it into a second event row here would create two sources
+    of truth for the same fact. `interaction_service.get_recent_activity`
+    merges rows from both tables into one timeline instead (Part D/E).
+
+    STARTED_APPLICATION/COMPLETED_APPLICATION are listed (Part D's own
+    literal event vocabulary) but have no real trigger wired in this
+    phase -- `ApplicationTracker` (app/models/application_tracker.py) is
+    keyed by a free-text `scholarship_name`, not this catalog's
+    `opportunity_id`, so there is no reliable way to connect a tracker's
+    status transition to a specific catalog `Opportunity` row without
+    fabricating a text-matching heuristic. Disclosed as a known
+    limitation/deferred integration point, not silently dropped.
+    """
+
+    VIEWED = "viewed"
+    DISMISSED = "dismissed"
+    MARKED_NOT_RELEVANT = "marked_not_relevant"
+    SHARED = "shared"
+    MORE_LIKE_THIS = "more_like_this"
+    STARTED_APPLICATION = "started_application"
+    COMPLETED_APPLICATION = "completed_application"
+
+
+class NextActionType(str, enum.Enum):
+    """APEX User Intelligence + Proactive Guidance step, Part K: the
+    small, closed, deterministic "next best action" vocabulary. Every
+    `NextActionItem` (`app/services/guidance_service.py`) carries exactly
+    one of these -- there is no free-text/LLM-generated action type, so a
+    client can always render a fixed set of buttons/icons rather than
+    parsing arbitrary text."""
+
+    VIEW_OPPORTUNITY = "view_opportunity"
+    REVIEW_REQUIREMENTS = "review_requirements"
+    SAVE_OPPORTUNITY = "save_opportunity"
+    START_APPLICATION = "start_application"
+    COMPLETE_APPLICATION_STEP = "complete_application_step"
+    REVIEW_DEADLINE = "review_deadline"
+    EXPLORE_RELATED_OPPORTUNITIES = "explore_related_opportunities"
+    UPDATE_PROFILE = "update_profile"
+    REVIEW_GOAL = "review_goal"

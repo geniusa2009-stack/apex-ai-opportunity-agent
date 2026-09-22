@@ -98,6 +98,7 @@ from app.api.v1.endpoints.test_pathway import router as test_pathway_router
 from app.api.v1.endpoints.trend_predictor import router as trend_predictor_router
 from app.api.v1.endpoints.undergrad_targeter import router as undergrad_targeter_router
 from app.api.v1.endpoints.users import router as users_router
+from app.api.v1.endpoints.user_intelligence import router as user_intelligence_router
 from app.api.v1.endpoints.uwc_strategist import router as uwc_strategist_router
 from app.api.v1.endpoints.voice_coach import router as voice_coach_router
 from app.api.v1.endpoints.voice_scholar import router as voice_scholar_router
@@ -140,6 +141,7 @@ api_router.include_router(portfolio_router)
 api_router.include_router(document_checker_router)
 api_router.include_router(youtube_router)
 api_router.include_router(users_router)
+api_router.include_router(user_intelligence_router)
 api_router.include_router(autofill_router)
 api_router.include_router(devils_advocate_router)
 api_router.include_router(alumni_router)
