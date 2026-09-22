@@ -113,6 +113,144 @@ CATEGORY_ALIASES: dict[str, OpportunityType] = {
     "عمل تطوعي": OpportunityType.VOLUNTEER,
     "bénévolat": OpportunityType.VOLUNTEER,
     "volontariat": OpportunityType.VOLUNTEER,
+
+    # --- Taxonomy Evolution step additions -------------------------------
+    # Same "intentionally small and honest" posture as every entry above:
+    # common EN synonyms plus a small, real EN/AR/FR set per new type, not
+    # an exhaustive machine-translation table. Deliberately NO compound/
+    # ambiguous phrases (e.g. "scholarship competition") are keyed here --
+    # `normalize_category` is an EXACT normalized-key lookup only, so a
+    # phrase not literally present below correctly falls through to `None`
+    # (unresolved) rather than being guessed at via substring matching --
+    # this is what makes Part A2's "ambiguous -> unresolved" rule hold
+    # without any extra branching logic.
+
+    # FELLOWSHIP
+    "fellowship": OpportunityType.FELLOWSHIP,
+    "fellowships": OpportunityType.FELLOWSHIP,
+    "زمالة": OpportunityType.FELLOWSHIP,
+    "زمالة بحثية": OpportunityType.FELLOWSHIP,
+    "bourse de recherche": OpportunityType.FELLOWSHIP,
+
+    # GRANT (distinct from SCHOLARSHIP -- a general funding award, not
+    # necessarily tied to enrollment in a degree/study program)
+    "grant": OpportunityType.GRANT,
+    "grants": OpportunityType.GRANT,
+    "funding grant": OpportunityType.GRANT,
+    "منحة تمويلية": OpportunityType.GRANT,
+    "subvention": OpportunityType.GRANT,
+
+    # RESEARCH_FUNDING (funding specifically earmarked for research work)
+    "research funding": OpportunityType.RESEARCH_FUNDING,
+    "research grant": OpportunityType.RESEARCH_FUNDING,
+    "تمويل بحثي": OpportunityType.RESEARCH_FUNDING,
+    "financement de recherche": OpportunityType.RESEARCH_FUNDING,
+
+    # RESEARCH_PROGRAM (a structured program to conduct research, not
+    # primarily a funding award)
+    "research program": OpportunityType.RESEARCH_PROGRAM,
+    "research programme": OpportunityType.RESEARCH_PROGRAM,
+    "برنامج بحثي": OpportunityType.RESEARCH_PROGRAM,
+    "programme de recherche": OpportunityType.RESEARCH_PROGRAM,
+
+    # RESEARCH_INTERNSHIP (distinct from plain INTERNSHIP -- explicitly
+    # research-focused)
+    "research internship": OpportunityType.RESEARCH_INTERNSHIP,
+    "research internships": OpportunityType.RESEARCH_INTERNSHIP,
+    "تدريب بحثي": OpportunityType.RESEARCH_INTERNSHIP,
+    "stage de recherche": OpportunityType.RESEARCH_INTERNSHIP,
+
+    # PHD
+    "phd": OpportunityType.PHD,
+    "phd program": OpportunityType.PHD,
+    "doctorate": OpportunityType.PHD,
+    "doctoral": OpportunityType.PHD,
+    "دكتوراه": OpportunityType.PHD,
+    "doctorat": OpportunityType.PHD,
+
+    # MASTERS
+    "masters": OpportunityType.MASTERS,
+    "master's": OpportunityType.MASTERS,
+    "master's degree": OpportunityType.MASTERS,
+    "ماجستير": OpportunityType.MASTERS,
+    "master": OpportunityType.MASTERS,
+
+    # BACHELORS
+    "bachelors": OpportunityType.BACHELORS,
+    "bachelor's": OpportunityType.BACHELORS,
+    "bachelor's degree": OpportunityType.BACHELORS,
+    "بكالوريوس": OpportunityType.BACHELORS,
+    "licence": OpportunityType.BACHELORS,
+
+    # COMPANY_TRAINING (distinct from COURSE -- an employer-run training
+    # program, not a general self-development course)
+    "company training": OpportunityType.COMPANY_TRAINING,
+    "corporate training": OpportunityType.COMPANY_TRAINING,
+    "تدريب شركات": OpportunityType.COMPANY_TRAINING,
+    "formation en entreprise": OpportunityType.COMPANY_TRAINING,
+
+    # JOB
+    "job": OpportunityType.JOB,
+    "jobs": OpportunityType.JOB,
+    "vacancy": OpportunityType.JOB,
+    "full-time position": OpportunityType.JOB,
+    "وظيفة": OpportunityType.JOB,
+    "emploi": OpportunityType.JOB,
+
+    # COMPETITION
+    "competition": OpportunityType.COMPETITION,
+    "contest": OpportunityType.COMPETITION,
+    "hackathon": OpportunityType.COMPETITION,
+    "مسابقة": OpportunityType.COMPETITION,
+    "concours": OpportunityType.COMPETITION,
+
+    # ACCELERATOR
+    "accelerator": OpportunityType.ACCELERATOR,
+    "accelerator program": OpportunityType.ACCELERATOR,
+    "برنامج تسريع": OpportunityType.ACCELERATOR,
+    "accélérateur": OpportunityType.ACCELERATOR,
+
+    # INCUBATOR
+    "incubator": OpportunityType.INCUBATOR,
+    "incubator program": OpportunityType.INCUBATOR,
+    "حاضنة أعمال": OpportunityType.INCUBATOR,
+    "incubateur": OpportunityType.INCUBATOR,
+
+    # STARTUP_FUNDING
+    "startup funding": OpportunityType.STARTUP_FUNDING,
+    "seed funding": OpportunityType.STARTUP_FUNDING,
+    "تمويل شركات ناشئة": OpportunityType.STARTUP_FUNDING,
+    "financement de startup": OpportunityType.STARTUP_FUNDING,
+
+    # PROJECT_FUNDING
+    "project funding": OpportunityType.PROJECT_FUNDING,
+    "تمويل مشاريع": OpportunityType.PROJECT_FUNDING,
+    "financement de projet": OpportunityType.PROJECT_FUNDING,
+
+    # EXCHANGE_PROGRAM
+    "exchange program": OpportunityType.EXCHANGE_PROGRAM,
+    "student exchange": OpportunityType.EXCHANGE_PROGRAM,
+    "برنامج تبادل": OpportunityType.EXCHANGE_PROGRAM,
+    "programme d'échange": OpportunityType.EXCHANGE_PROGRAM,
+
+    # CONFERENCE
+    "conference": OpportunityType.CONFERENCE,
+    "summit": OpportunityType.CONFERENCE,
+    "مؤتمر": OpportunityType.CONFERENCE,
+    "conférence": OpportunityType.CONFERENCE,
+
+    # YOUTH_PROGRAM
+    "youth program": OpportunityType.YOUTH_PROGRAM,
+    "youth programme": OpportunityType.YOUTH_PROGRAM,
+    "برنامج شبابي": OpportunityType.YOUTH_PROGRAM,
+    "programme jeunesse": OpportunityType.YOUTH_PROGRAM,
+
+    # CERTIFICATION (distinct from COURSE -- results in a formal
+    # credential, not just completed content)
+    "certification": OpportunityType.CERTIFICATION,
+    "certificate program": OpportunityType.CERTIFICATION,
+    "شهادة معتمدة": OpportunityType.CERTIFICATION,
+    "certification professionnelle": OpportunityType.CERTIFICATION,
 }
 
 

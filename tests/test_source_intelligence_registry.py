@@ -113,9 +113,30 @@ class TestOpportunityTaxonomyMapping:
             assert isinstance(s["opportunity_categories"], list)
 
     def test_no_production_opportunity_type_enum_value_was_touched(self):
-        # This task's own instruction: do not expand OpportunityType.
+        # HISTORICAL NOTE: this assertion originally pinned OpportunityType
+        # to the 4 values that existed during the Source Enablement phase,
+        # per THAT phase's own explicit scope boundary ("do not expand
+        # OpportunityType" was that task's instruction, not a permanent
+        # architectural invariant). The later "Taxonomy Evolution + Temporal
+        # State Machine + Change History" phase's own explicit Part A
+        # instruction is the opposite: "Expand canonical OpportunityType" --
+        # a real, deliberate, disclosed 24-value expansion (see
+        # app/models/enums.py's own OpportunityType docstring for the full
+        # reasoning). This test is updated accordingly rather than treated
+        # as a still-binding constraint from an earlier, narrower task.
         from app.models.enums import OpportunityType
-        assert {e.value for e in OpportunityType} == {"scholarship", "internship", "volunteer", "course"}
+        assert {e.value for e in OpportunityType} == {
+            "scholarship", "internship", "volunteer", "course",
+            "fellowship", "grant", "research_funding", "research_program",
+            "research_internship", "phd", "masters", "bachelors",
+            "company_training", "job", "competition", "accelerator",
+            "incubator", "startup_funding", "project_funding",
+            "exchange_program", "conference", "youth_program",
+            "certification", "other",
+        }
+        # The original 4 values are still all present -- expansion, not
+        # replacement (Part A's own "preserve existing values" rule).
+        assert {"scholarship", "internship", "volunteer", "course"} <= {e.value for e in OpportunityType}
 
 
 class TestUnresolvedURLHandling:

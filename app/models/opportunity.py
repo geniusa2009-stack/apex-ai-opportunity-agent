@@ -261,6 +261,46 @@ class Opportunity(Base, TimestampMixin):
     )
     claimed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # --- Taxonomy Evolution + Temporal State Machine + Change History step ---
+    # `lifecycle_state` -- the real, evidence-aware temporal state (Part
+    # B), written ONLY by `app.services.opportunity_state_machine.
+    # reevaluate_opportunity_state`. Plain `String` column, NOT a native
+    # Postgres enum -- same established posture as every other
+    # lifecycle/status column in this codebase (`review_status` directly
+    # above, `TrackerStatus`, `MentorshipStatus`; see
+    # `OpportunityLifecycleState`'s own docstring), enforced at the
+    # Pydantic/application layer instead. `server_default="discovered"`
+    # -- every existing/new row starts at the real "not yet established"
+    # state; no historical row is silently reinterpreted as already
+    # OPEN/CLOSED by this migration (see that migration's own docstring).
+    #
+    # DISCLOSED, DELIBERATE DISTINCTION from `review_status` above:
+    # `review_status` is a human PRE-PUBLISH moderation gate
+    # (PENDING_REVIEW/PUBLISHED/REJECTED) controlling whether a student
+    # can see this row at all; `lifecycle_state` is this opportunity's
+    # own real-world availability state (open/closed/etc.), completely
+    # orthogonal -- a PUBLISHED opportunity can be CLOSED, and a
+    # not-yet-PUBLISHED one can already be evaluated OPEN. Neither column
+    # drives the other.
+    lifecycle_state: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="discovered",
+        server_default="discovered",
+        index=True,
+    )
+    # The real, backend-generated reason string the state machine itself
+    # produced for the CURRENT `lifecycle_state` value (see
+    # `StateEvaluation.reason`) -- never LLM-authored, never source text.
+    lifecycle_state_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # When `reevaluate_opportunity_state` last actually evaluated (and,
+    # if the transition was valid, applied) this opportunity's state --
+    # distinct from `updated_at` (TimestampMixin), which changes on ANY
+    # row write, not specifically a state re-evaluation.
+    lifecycle_state_evaluated_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     source: Mapped["Source"] = relationship(back_populates="opportunities", lazy="selectin")
     bookmarks: Mapped[list["UserBookmark"]] = relationship(
         back_populates="opportunity",

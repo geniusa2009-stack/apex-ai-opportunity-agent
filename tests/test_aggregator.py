@@ -154,11 +154,15 @@ class TestAIPromptParsing:
         assert result.target_url == _SAMPLE_SOURCE_INFO["source_base_url"]
 
     @pytest.mark.asyncio
-    async def test_unrecognized_opportunity_type_falls_back_to_course(self):
+    async def test_unrecognized_opportunity_type_falls_back_to_other(self):
+        # Taxonomy Evolution step: a genuinely unresolved category (not
+        # a direct enum match, and no taxonomy.py alias for "webinar")
+        # now falls back to the honest OTHER bucket, not a guessed
+        # COURSE -- see OpportunityType.OTHER's own docstring.
         with _mock_gemini_extraction(opportunity_type="webinar"):
             result = await process_raw_post_via_ai(_SAMPLE_ARABIC_POST, _SAMPLE_SOURCE_INFO)
 
-        assert result.opportunity_type == OpportunityType.COURSE
+        assert result.opportunity_type == OpportunityType.OTHER
 
     @pytest.mark.asyncio
     async def test_missing_deadline_parses_to_none(self):
@@ -170,7 +174,12 @@ class TestAIPromptParsing:
     def test_coerce_opportunity_type_direct(self):
         assert _coerce_opportunity_type("scholarship") == OpportunityType.SCHOLARSHIP
         assert _coerce_opportunity_type("INTERNSHIP") == OpportunityType.INTERNSHIP
-        assert _coerce_opportunity_type("not-a-real-type") == OpportunityType.COURSE
+        # Taxonomy Evolution step: the fallback for a genuinely
+        # unresolved category changed from the less honest `COURSE`
+        # default to the explicit `OTHER` bucket -- see
+        # `OpportunityType.OTHER`'s own docstring and
+        # `_FALLBACK_OPPORTUNITY_TYPE`'s own updated comment.
+        assert _coerce_opportunity_type("not-a-real-type") == OpportunityType.OTHER
 
     def test_resolve_target_url_direct(self):
         assert _resolve_target_url("https://example.com/apply", "https://t.me/fallback") == (
@@ -249,6 +258,15 @@ CREATE TABLE sources (
 )
 """
 
+_CREATE_CHANGE_HISTORY_TABLE_SQL = """
+CREATE TABLE opportunity_change_history (
+    id VARCHAR(36) PRIMARY KEY, opportunity_id VARCHAR(36) NOT NULL, field_name VARCHAR(50) NOT NULL,
+    old_value TEXT, new_value TEXT, source_id VARCHAR(36), evidence_id VARCHAR(36),
+    change_reason TEXT NOT NULL, changed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
+
 _CREATE_OPPORTUNITIES_TABLE_SQL = """
 CREATE TABLE opportunities (
     id VARCHAR(36) PRIMARY KEY,
@@ -276,7 +294,7 @@ CREATE TABLE opportunities (
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     review_status VARCHAR(20) NOT NULL DEFAULT 'published',
     claimed_by VARCHAR(36),
-    claimed_at DATETIME
+    claimed_at DATETIME, lifecycle_state VARCHAR(30) NOT NULL DEFAULT 'discovered', lifecycle_state_reason TEXT, lifecycle_state_evaluated_at DATETIME
 )
 """
 
@@ -308,6 +326,7 @@ async def db_session_factory():
     async with engine.begin() as conn:
         await conn.execute(text(_CREATE_SOURCES_TABLE_SQL))
         await conn.execute(text(_CREATE_OPPORTUNITIES_TABLE_SQL))
+        await conn.execute(text(_CREATE_CHANGE_HISTORY_TABLE_SQL))
         await conn.execute(text(_CREATE_USER_BOOKMARKS_TABLE_SQL))
 
     session_factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)

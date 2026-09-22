@@ -49,6 +49,15 @@ CREATE TABLE sources (
 )
 """
 
+_CREATE_CHANGE_HISTORY_TABLE_SQL = """
+CREATE TABLE opportunity_change_history (
+    id VARCHAR(36) PRIMARY KEY, opportunity_id VARCHAR(36) NOT NULL, field_name VARCHAR(50) NOT NULL,
+    old_value TEXT, new_value TEXT, source_id VARCHAR(36), evidence_id VARCHAR(36),
+    change_reason TEXT NOT NULL, changed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
+
 _CREATE_OPPORTUNITIES_TABLE_SQL = """
 CREATE TABLE opportunities (
     id VARCHAR(36) PRIMARY KEY, title VARCHAR(500) NOT NULL, description TEXT, target_url VARCHAR(2048) NOT NULL,
@@ -58,7 +67,7 @@ CREATE TABLE opportunities (
     is_local_egypt BOOLEAN NOT NULL DEFAULT 0, target_age_group VARCHAR(50), target_academic_levels TEXT,
     min_age INTEGER, max_age INTEGER, target_gender VARCHAR(10),
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    review_status VARCHAR(20) NOT NULL DEFAULT 'published', claimed_by VARCHAR(36), claimed_at DATETIME
+    review_status VARCHAR(20) NOT NULL DEFAULT 'published', claimed_by VARCHAR(36), claimed_at DATETIME, lifecycle_state VARCHAR(30) NOT NULL DEFAULT 'discovered', lifecycle_state_reason TEXT, lifecycle_state_evaluated_at DATETIME
 )
 """
 
@@ -100,6 +109,7 @@ async def db_session_factory():
     async with engine.begin() as conn:
         await conn.execute(text(_CREATE_SOURCES_TABLE_SQL))
         await conn.execute(text(_CREATE_OPPORTUNITIES_TABLE_SQL))
+        await conn.execute(text(_CREATE_CHANGE_HISTORY_TABLE_SQL))
         await conn.execute(text(_CREATE_USER_BOOKMARKS_TABLE_SQL))
         await conn.execute(text(_CREATE_RESEARCH_TRAJECTORIES_SQL))
         await conn.execute(text(_CREATE_RESEARCH_TRAJECTORY_STEPS_SQL))

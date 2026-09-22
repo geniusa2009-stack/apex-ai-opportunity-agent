@@ -73,10 +73,14 @@ _retry_gemini_call = retry(
     retry=retry_if_exception_type(genai_errors.APIError),
 )
 
-# The least presumptuous fallback when Gemini's own `opportunity_type`
-# guess doesn't map onto one of this codebase's four real categories --
-# see module docstring.
-_FALLBACK_OPPORTUNITY_TYPE = OpportunityType.COURSE
+# Taxonomy Evolution step: the fallback changed from `COURSE` to the
+# honest `OTHER` bucket -- Part A2's own rule ("ambiguous type remains
+# UNKNOWN/unresolved... preferable to an incorrect canonical type") means
+# silently mislabeling an unrecognized category as "course" is exactly
+# the mistake this step forbids. See `OpportunityType.OTHER`'s own
+# docstring. The raw string Gemini actually returned is never lost
+# either way -- see `OpportunityCreate.raw_opportunity_type_label`.
+_FALLBACK_OPPORTUNITY_TYPE = OpportunityType.OTHER
 
 
 class AggregatorError(Exception):
@@ -287,7 +291,10 @@ class AIExtractedOpportunityFields(BaseModel):
         ),
     )
     opportunity_type: str = Field(
-        description="Best-fit classification: one of 'scholarship', 'internship', 'volunteer', 'course'."
+        description=(
+            "Best-fit classification -- see the system prompt's own full, "
+            "expanded category list (Taxonomy Evolution step)."
+        )
     )
 
 
@@ -317,9 +324,18 @@ opportunity is global/international/worldwide/remote/online, return \
 'Global'. If no geographic scope can be determined from the post's own \
 text, return null.
 - 'opportunity_type': string, your best-fit classification of this \
-opportunity as exactly one of: 'scholarship', 'internship', 'volunteer', \
-'course'. Use 'course' for training programs, workshops, or general \
-self-development content that doesn't clearly fit the other three.
+opportunity as exactly one of: 'scholarship', 'fellowship', 'grant', \
+'research_funding', 'research_program', 'research_internship', 'phd', \
+'masters', 'bachelors', 'internship', 'company_training', 'job', \
+'competition', 'accelerator', 'incubator', 'startup_funding', \
+'project_funding', 'exchange_program', 'conference', 'youth_program', \
+'volunteer', 'course', 'certification'. Use 'course' for training \
+programs, workshops, or general self-development content that doesn't \
+clearly fit any other category. If genuinely uncertain between two \
+categories, prefer the more specific one only when the post's own text \
+clearly supports it -- otherwise return 'course' as the least-presumptuous \
+guess and let the backend's own deterministic fallback handle anything \
+that still doesn't match.
 """
 
 
@@ -384,15 +400,43 @@ async def _extract_fields_via_gemini(raw_text: str, source_info: dict) -> AIExtr
 
 
 def _coerce_opportunity_type(raw_value: str) -> OpportunityType:
+    """Resolve Gemini's raw `opportunity_type` string to a real
+    `OpportunityType` member.
+
+    Taxonomy Evolution step: now tries TWO deterministic paths, both
+    exact-match only (never fuzzy/substring -- Part A2's own "ambiguous
+    stays unresolved" rule):
+    1. A direct exact match against one of the enum's own canonical wire
+       values (unchanged from before this step -- the prompt asks Gemini
+       to return exactly one of these strings).
+    2. `taxonomy.normalize_category` -- the SAME multilingual EN/AR/FR
+       alias table `app/services/taxonomy.py` already maintains for
+       other free-text category sources, reused rather than duplicated
+       (Part 20 discipline), so a near-miss synonym Gemini returns
+       despite the prompt's own instruction (e.g. "master's degree"
+       instead of the literal "masters") still resolves correctly.
+
+    Only when NEITHER path matches does this fall back to the honest
+    `_FALLBACK_OPPORTUNITY_TYPE` (`OTHER`) -- never a guessed real
+    category."""
+    normalized = raw_value.strip().lower() if raw_value else ""
     try:
-        return OpportunityType(raw_value.strip().lower())
+        return OpportunityType(normalized)
     except ValueError:
-        logger.warning(
-            "Gemini returned unrecognized opportunity_type %r -- falling back to %r",
-            raw_value,
-            _FALLBACK_OPPORTUNITY_TYPE.value,
-        )
-        return _FALLBACK_OPPORTUNITY_TYPE
+        pass
+
+    from app.services.taxonomy import normalize_category
+
+    alias_match = normalize_category(raw_value)
+    if alias_match is not None:
+        return alias_match
+
+    logger.warning(
+        "Gemini returned unrecognized opportunity_type %r -- falling back to %r",
+        raw_value,
+        _FALLBACK_OPPORTUNITY_TYPE.value,
+    )
+    return _FALLBACK_OPPORTUNITY_TYPE
 
 
 def _parse_deadline(raw: str | None) -> datetime | None:
@@ -566,6 +610,36 @@ async def upsert_opportunity(db: AsyncSession, data: OpportunityCreate) -> tuple
     existing = result.scalar_one_or_none()
 
     if existing is not None:
+        # Taxonomy Evolution + Temporal State Machine + Change History
+        # step (Part C): record a real, append-only history entry for
+        # each of the semantically meaningful fields this function
+        # actually re-writes on an update (title/type/deadline/country --
+        # the same four fields this function's own pre-existing docstring
+        # already named as "content fields this pipeline could plausibly
+        # have fresher data for"). `description`/`is_local_egypt`/
+        # `target_age_group` are deliberately NOT tracked here -- Part C's
+        # own field list names title/provider/type/deadline/eligibility/
+        # funding/country/application_url/status, not every column this
+        # function happens to touch; `record_change_if_meaningful` itself
+        # also no-ops on a same-value write (Part C3), so a re-fetch of
+        # identical content creates zero history noise either way.
+        from app.services.change_history_service import record_change_if_meaningful
+
+        for field_name, old_value, new_value in (
+            ("title", existing.title, data.title),
+            ("opportunity_type", existing.type.value if existing.type else None, data.opportunity_type.value),
+            ("deadline", existing.deadline, data.deadline),
+            ("country", existing.country, data.country),
+        ):
+            await record_change_if_meaningful(
+                db,
+                opportunity_id=existing.id,
+                field_name=field_name,
+                old_value=old_value,
+                new_value=new_value,
+                change_reason=f"upsert_opportunity: re-fetched content for target_url={data.target_url!r} changed {field_name!r}.",
+            )
+
         existing.title = data.title
         existing.description = data.description
         existing.type = data.opportunity_type

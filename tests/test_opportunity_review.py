@@ -130,7 +130,7 @@ CREATE TABLE opportunities (
     target_gender VARCHAR(10),
     review_status VARCHAR(20) NOT NULL,
     claimed_by VARCHAR(36),
-    claimed_at DATETIME,
+    claimed_at DATETIME, lifecycle_state VARCHAR(30) NOT NULL DEFAULT 'discovered', lifecycle_state_reason TEXT, lifecycle_state_evaluated_at DATETIME,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 )

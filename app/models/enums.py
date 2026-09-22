@@ -2,12 +2,72 @@ import enum
 
 
 class OpportunityType(str, enum.Enum):
-    """What kind of opportunity this record represents."""
+    """What kind of opportunity this record represents.
+
+    Taxonomy Evolution step: expanded from the original four values
+    (SCHOLARSHIP/INTERNSHIP/VOLUNTEER/COURSE, kept byte-for-byte
+    unchanged -- no historical `Opportunity.type` value is rewritten by
+    this expansion) to the fuller real-world taxonomy this platform's
+    own sources actually contain, per that step's own explicit ask and
+    its own "reuse an existing value rather than create a synonym" rule.
+
+    DISCLOSED, DELIBERATE NON-ADDITIONS (reuse, not synonym, per that
+    step's own MASTER/MASTERS/MASTERS_PROGRAM example):
+    - "VOLUNTEERING" (the step's own requested label) is NOT a new
+      member -- it is the existing `VOLUNTEER` value; `taxonomy.py`'s
+      `CATEGORY_ALIASES` maps that and its synonyms onto `VOLUNTEER`,
+      exactly as it already did before this step.
+    - "FULLY_FUNDED_PROGRAM" is deliberately NOT added, despite being in
+      that step's own requested list. Confirmed, on audit, to be a
+      FUNDING attribute (how a real scholarship/fellowship/internship is
+      paid for), not a distinct opportunity TYPE -- this codebase
+      already has a dedicated home for exactly that concept
+      (`app.services.funding_intelligence.FundingType.FULLY_FUNDED`,
+      Opportunity Intelligence Hardening step). Adding it here would let
+      the identical real scholarship be classified as either
+      `SCHOLARSHIP` or `FULLY_FUNDED_PROGRAM` depending on arbitrary
+      extraction phrasing, which is exactly the taxonomy INSTABILITY
+      that step's own "canonical taxonomy must be stable" rule forbids.
+
+    `OTHER` is a new, disclosed, NECESSARY addition beyond that step's
+    own literal list: `Opportunity.type` is a real `NOT NULL` column
+    with no natural "unresolved" value, yet that same step's own Part A2
+    requires "ambiguous type remains UNKNOWN/unresolved... preferable to
+    an incorrect canonical type." `OTHER` is that honest, explicit
+    unresolved bucket -- see `aggregator_service._coerce_opportunity_type`,
+    whose fallback changed from the previous, less honest `COURSE`
+    default to this value (a genuinely unresolved category is never the
+    same fact as "this is a course").
+    """
 
     SCHOLARSHIP = "scholarship"
     INTERNSHIP = "internship"
     VOLUNTEER = "volunteer"
     COURSE = "course"
+
+    FELLOWSHIP = "fellowship"
+    GRANT = "grant"
+    RESEARCH_FUNDING = "research_funding"
+    RESEARCH_PROGRAM = "research_program"
+    RESEARCH_INTERNSHIP = "research_internship"
+    PHD = "phd"
+    MASTERS = "masters"
+    BACHELORS = "bachelors"
+    COMPANY_TRAINING = "company_training"
+    JOB = "job"
+    COMPETITION = "competition"
+    ACCELERATOR = "accelerator"
+    INCUBATOR = "incubator"
+    STARTUP_FUNDING = "startup_funding"
+    PROJECT_FUNDING = "project_funding"
+    EXCHANGE_PROGRAM = "exchange_program"
+    CONFERENCE = "conference"
+    YOUTH_PROGRAM = "youth_program"
+    CERTIFICATION = "certification"
+
+    # Honest "classification is ambiguous/unresolved" bucket -- see
+    # class docstring. Never chosen except as a disclosed fallback.
+    OTHER = "other"
 
 
 class OpportunityReviewStatus(str, enum.Enum):
@@ -1005,3 +1065,42 @@ class ContradictionSeverity(str, enum.Enum):
     MEDIUM = "medium"
     HIGH = "high"
     CRITICAL = "critical"
+
+
+class OpportunityLifecycleState(str, enum.Enum):
+    """Temporal Opportunity State Machine (Taxonomy Evolution + Temporal
+    State Machine + Change History step): the real, evidence-aware
+    lifecycle state of an `Opportunity`, produced ONLY by
+    `app.services.opportunity_state_machine.evaluate_opportunity_state`
+    -- never LLM-chosen, never set from raw source text (constitution:
+    external content is data, never an instruction to this state
+    machine).
+
+    Plain-String-backed column (`Opportunity.lifecycle_state`), same
+    established posture as every other lifecycle/status enum in this
+    file (`TrackerStatus`, `MentorshipStatus`, `LiveSessionStatus`) --
+    not a native Postgres enum, since this is a workflow/lifecycle state
+    that may need cheap, migration-free extension later, not a fixed
+    classification vocabulary like `OpportunityType`.
+
+    DISCLOSED, DELIBERATE DISTINCTIONS (see this step's own spec):
+    - `HOLD` is NOT `CLOSED` -- `HOLD` means the evidence needed for a
+      safe current-state judgment is insufficient/unresolved; `CLOSED`
+      means real evidence affirmatively supports that the opportunity is
+      no longer accepting applications. An opportunity with zero
+      evidence is `HOLD`, never `CLOSED`.
+    - `HOLD` is also distinct from an "UNKNOWN" state -- this module has
+      no separate UNKNOWN member; `DISCOVERED` (never yet evaluated
+      with sufficient evidence) and `HOLD` (evaluated, found
+      insufficient/contradictory) together cover that space explicitly,
+      rather than a vague third bucket.
+    """
+
+    DISCOVERED = "discovered"
+    OPEN = "open"
+    DEADLINE_APPROACHING = "deadline_approaching"
+    EXTENDED = "extended"
+    CLOSED = "closed"
+    REOPENED = "reopened"
+    HOLD = "hold"
+    CONFLICT = "conflict"
