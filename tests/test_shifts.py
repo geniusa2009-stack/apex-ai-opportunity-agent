@@ -52,6 +52,7 @@ CREATE TABLE users (
     role VARCHAR(20) NOT NULL DEFAULT 'student',
     admin_role VARCHAR(20),
     role_granted_at DATETIME,
+    nationality VARCHAR(120), residency_country VARCHAR(120), languages TEXT, interests TEXT, application_goals TEXT, preferred_opportunity_types TEXT, remote_preference BOOLEAN, funding_preference VARCHAR(30), deadline_lead_time_days INTEGER,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 )
@@ -476,3 +477,4 @@ class TestShiftIcsExport:
         client = client_factory(student)
         response = client.get("/api/v1/admin/shifts/export.ics")
         assert response.status_code == 403
+

@@ -16,6 +16,16 @@ from app.schemas.opportunity import (
     OpportunitySearchResult,
     PaginatedResponse,
 )
+from app.schemas.personalization import (
+    EligibilityOut,
+    OpportunityPassportOut,
+    PassportFundingOut,
+    PassportIdentityOut,
+    PassportProvenanceOut,
+    PassportTemporalOut,
+    PassportTrustOut,
+)
+from app.services.opportunity_passport import build_passport
 from app.services.opportunity_search import SemanticSearchError, semantic_search
 
 logger = logging.getLogger(__name__)
@@ -141,6 +151,81 @@ async def get_opportunity(
     if opportunity is None or opportunity.review_status != OpportunityReviewStatus.PUBLISHED.value:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Opportunity not found")
     return opportunity
+
+
+# --- Personalized Opportunity Intelligence + Opportunity Passport step
+# (Part O: Opportunity Passport API) ---
+#
+# AUDITED FIRST: no equivalent endpoint existed (confirmed via a full
+# read of this router and `recommendations.py` before writing this --
+# neither the opportunity-to-opportunity similarity/related endpoints
+# nor `GET /{opportunity_id}` itself return anything like the Passport's
+# trust/temporal/provenance/eligibility projection), so this is a real,
+# new, additive route rather than a duplicate.
+#
+# `CurrentUserOptional` -- same posture as `GET /{opportunity_id}` and
+# `POST /search` above: publicly viewable (same 404-if-not-published
+# gate), but `eligibility` in the response is personalized ONLY for a
+# real authenticated caller (`build_passport`'s own `requesting_user`
+# parameter) -- never accepts a `user_id` from the request itself, so
+# there is no IDOR surface here: nobody can ask for anyone else's
+# eligibility, only their own, via their own auth token.
+@router.get("/{opportunity_id}/passport", response_model=OpportunityPassportOut)
+async def get_opportunity_passport(
+    opportunity_id: UUID,
+    current_user: CurrentUserOptional,
+    db: AsyncSession = Depends(get_db),
+) -> OpportunityPassportOut:
+    opportunity = await db.get(Opportunity, opportunity_id)
+    if opportunity is None or opportunity.review_status != OpportunityReviewStatus.PUBLISHED.value:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Opportunity not found")
+
+    passport = await build_passport(db, opportunity=opportunity, requesting_user=current_user)
+
+    eligibility_out = None
+    if passport.eligibility is not None:
+        eligibility_out = EligibilityOut(
+            status=passport.eligibility.status,
+            matched_rules=passport.eligibility.matched_rules,
+            failed_rules=passport.eligibility.failed_rules,
+            unknown_rules=passport.eligibility.unknown_rules,
+            missing_information=passport.eligibility.missing_information,
+        )
+
+    return OpportunityPassportOut(
+        identity=PassportIdentityOut(
+            id=passport.identity.id,
+            title=passport.identity.title,
+            provider_source_id=passport.identity.provider_source_id,
+            canonical_url=passport.identity.canonical_url,
+            opportunity_type=passport.identity.opportunity_type,
+            raw_opportunity_type_label=passport.identity.raw_opportunity_type_label,
+        ),
+        eligibility=eligibility_out,
+        funding=PassportFundingOut(funding_details=passport.funding.funding_details),
+        temporal=PassportTemporalOut(
+            lifecycle_state=passport.temporal.lifecycle_state,
+            lifecycle_state_reason=passport.temporal.lifecycle_state_reason,
+            deadline=passport.temporal.deadline,
+            last_verified=passport.temporal.last_verified,
+            last_updated=passport.temporal.last_updated,
+            recent_changes=passport.temporal.recent_changes,
+        ),
+        trust=PassportTrustOut(
+            verification_status=passport.trust.verification_status,
+            verification_reason=passport.trust.verification_reason,
+            evidence_count=passport.trust.evidence_count,
+            source_count=passport.trust.source_count,
+            authoritative_source_count=passport.trust.authoritative_source_count,
+            contradiction_count=passport.trust.contradiction_count,
+            last_evidence_update=passport.trust.last_evidence_update,
+        ),
+        provenance=PassportProvenanceOut(
+            source_ids=passport.provenance.source_ids,
+            evidence_ids=passport.provenance.evidence_ids,
+            claim_count=passport.provenance.claim_count,
+        ),
+    )
 
 
 @router.post("/search", response_model=list[OpportunitySearchResult])

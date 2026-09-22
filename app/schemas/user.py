@@ -3,7 +3,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
-from app.models.enums import AcademicLevel, Gender, UserRole
+from app.models.enums import AcademicLevel, ApplicationGoal, Gender, OpportunityType, UserRole
 
 # `UserCreate` and `Token` were removed as part of the Supabase
 # integration step -- both existed solely for the local `POST
@@ -123,3 +123,17 @@ class UserProfileUpdate(BaseModel):
     # step -- self-reported like every other field on this schema;
     # `None` means "leave unchanged," same established semantics.
     gender: Gender | None = None
+
+    # Added for the Personalized Opportunity Intelligence + Opportunity
+    # Passport step (Part A: User Opportunity Profile). Every field
+    # optional/independently settable, same established `PATCH`
+    # semantics as every field above: `None` means "leave unchanged."
+    nationality: str | None = Field(default=None, max_length=120)
+    residency_country: str | None = Field(default=None, max_length=120)
+    languages: list[str] | None = None
+    interests: list[str] | None = None
+    application_goals: list[ApplicationGoal] | None = None
+    preferred_opportunity_types: list[OpportunityType] | None = None
+    remote_preference: bool | None = None
+    funding_preference: str | None = Field(default=None, max_length=30)
+    deadline_lead_time_days: int | None = Field(default=None, ge=0, le=365)

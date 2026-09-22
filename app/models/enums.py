@@ -1104,3 +1104,59 @@ class OpportunityLifecycleState(str, enum.Enum):
     REOPENED = "reopened"
     HOLD = "hold"
     CONFLICT = "conflict"
+
+
+class ApplicationGoal(str, enum.Enum):
+    """Personalized Opportunity Intelligence, Part A: a user's own stated
+    reason(s) for seeking opportunities at all -- explicit, self-reported
+    only (never inferred from other profile fields). Stored as a plain
+    `ARRAY(String)` on `User.application_goals` (not a native Postgres
+    enum array), matching `User.skills`'s own established "closed
+    vocabulary enforced at the Pydantic schema layer, not the DB layer"
+    posture -- keeps this addition a simple column, no new Postgres enum
+    type/migration complexity for a field this cheap to validate in
+    Python. The exact 7 values from this phase's own spec, verbatim."""
+
+    STUDY = "study"
+    RESEARCH = "research"
+    CAREER = "career"
+    ENTREPRENEURSHIP = "entrepreneurship"
+    VOLUNTEERING = "volunteering"
+    COMPETITIONS = "competitions"
+    NETWORKING = "networking"
+
+
+class EligibilityStatus(str, enum.Enum):
+    """Personalized Opportunity Intelligence, Part B: the real output
+    status of the deterministic eligibility engine
+    (`app/services/eligibility_engine.py::evaluate_eligibility`).
+
+    DELIBERATE 4-WAY SPLIT (this phase's own explicit Part B
+    instruction): `UNKNOWN` is never collapsed into `INELIGIBLE` --
+    "the opportunity has an age requirement but the user hasn't stated
+    their age" is a fundamentally different, more hopeful case than "the
+    user's stated age fails the opportunity's stated requirement," and
+    conflating them would silently hide real opportunities from a user
+    who simply hasn't filled in their profile yet.
+    """
+
+    ELIGIBLE = "eligible"
+    INELIGIBLE = "ineligible"
+    UNKNOWN = "unknown"
+    CONDITIONAL = "conditional"
+
+
+class MatchLevel(str, enum.Enum):
+    """Personalized Opportunity Intelligence, Part S ("No Score
+    Theater"): the qualitative strength of ONE explainable personalization
+    signal (interest, goal, type, geography, funding, education, skills,
+    deadline, graph relevance -- see `personalized_ranking.py`'s own
+    `MatchSignals`). Every signal in a "why this matches you" explanation
+    is one of these 5 plain, human-readable levels, never a bare,
+    unexplained percentage."""
+
+    NONE = "none"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    STRONG = "strong"

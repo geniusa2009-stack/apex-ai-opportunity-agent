@@ -9,7 +9,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, TSVECTOR, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
-from app.models.enums import AcademicLevel, AdminRole, Gender, UserRole
+from app.models.enums import AcademicLevel, AdminRole, ApplicationGoal, Gender, OpportunityType, UserRole
 from app.models.mixins import TimestampMixin
 
 if TYPE_CHECKING:
@@ -297,6 +297,108 @@ class User(Base, TimestampMixin):
     # endpoint -- an honest, not fabricated, absence of a real grant
     # event for those accounts.
     role_granted_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # lazy="selectin" issues a second batched query instead of a lazy-load,
+    # which is the safe pattern under asyncio (a plain lazy="select" would
+    # try to emit implicit I/O outside of an awaited call and raise).
+    bookmarks: Mapped[list["UserBookmark"]] = relationship(
+        back_populates="user",
+        lazy="selectin",
+        cascade="all, delete-orphan",
+    )
+
+    # --- Personalized Opportunity Intelligence + Opportunity Passport
+    # step (Part A: User Opportunity Profile) ---
+    #
+    # Audited first (see app/models/user.py's own extensive prior-step
+    # comments above): `target_country`, `age`, `academic_level`,
+    # `gender`, `skills` already exist and are REUSED, not duplicated,
+    # by the new eligibility engine and personalization signals below.
+    # `target_country` is treated as this user's PREFERRED destination
+    # country (its own pre-existing "Autonomous Scholar Agent" comment
+    # already establishes that meaning) -- `residency_country` below is
+    # the genuinely new, distinct concept (where the user actually
+    # currently lives, a real eligibility fact, not a preference).
+    #
+    # Every field below is nullable, self-reported, unverified -- the
+    # same trust model every other profile field on this model already
+    # has -- and is settable via the existing `PATCH /users/me`
+    # (`UserProfileUpdate`, app/schemas/user.py). No sensitive attribute
+    # (health, religion, political belief, sexual orientation, etc.) is
+    # added here; this phase's own explicit Part A instruction is to
+    # capture only identity/education/language/interest/preference/goal
+    # facts the user states directly, and to infer NOTHING (nationality
+    # is never inferred from language, age is never inferred from
+    # academic level, gender is never inferred at all).
+
+    # IDENTITY: `nationality` is a genuinely new concept -- nothing on
+    # this model previously distinguished "citizen of" from "preferred
+    # destination" (`target_country`) or "currently lives in"
+    # (`residency_country`, immediately below). Both are real,
+    # independent eligibility facts an opportunity's own `country`/
+    # `is_local_egypt` requirement can be evaluated against.
+    nationality: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    residency_country: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
+    # LANGUAGES: plain `ARRAY(String)`, matching `skills`'s own existing
+    # precedent exactly (a structured list, not a comma-separated
+    # string) -- proficiency level is deliberately NOT captured (Part A's
+    # own "proficiency where explicitly provided" is a real scope
+    # narrowing this phase makes: no opportunity field anywhere in this
+    # codebase currently states a required proficiency LEVEL, only a
+    # required language itself, so there is nothing yet to compare a
+    # proficiency level against -- disclosed, not silently dropped).
+    languages: Mapped[list[str] | None] = mapped_column(ARRAY(String(50)), nullable=True)
+
+    # INTERESTS: genuinely new -- the closest existing field, `skills`,
+    # is a distinct concept (a competency the user HAS, not a topic the
+    # user is interested IN). Free-text array, same posture as `skills`.
+    interests: Mapped[list[str] | None] = mapped_column(ARRAY(String(100)), nullable=True)
+
+    # APPLICATION GOALS: a real, closed 7-value vocabulary
+    # (`ApplicationGoal`, app/models/enums.py) -- stored as a plain
+    # `ARRAY(String)`, not a native Postgres enum array, since the
+    # vocabulary is validated at the Pydantic schema layer
+    # (`UserProfileUpdate.application_goals`) -- see that enum's own
+    # docstring for the full "why not a native enum column" reasoning.
+    application_goals: Mapped[list[str] | None] = mapped_column(ARRAY(String(30)), nullable=True)
+
+    # PREFERENCES: `preferred_opportunity_types` reuses the real,
+    # already-24-value `OpportunityType` enum (Taxonomy Evolution step)
+    # rather than inventing a second type vocabulary -- `ARRAY` of the
+    # existing native enum, same pattern `Opportunity.
+    # target_academic_levels` already established for arrays of native
+    # enums (`create_type=False` since the `opportunity_type` Postgres
+    # enum type already exists).
+    preferred_opportunity_types: Mapped[list[OpportunityType] | None] = mapped_column(
+        ARRAY(
+            SAEnum(
+                OpportunityType,
+                name="opportunity_type",
+                native_enum=True,
+                create_type=False,
+                values_callable=lambda enum_cls: [e.value for e in enum_cls],
+            )
+        ),
+        nullable=True,
+    )
+    # `remote_preference` -- `True` prefers remote/online opportunities,
+    # `False` prefers in-person, `None` (default) means no stated
+    # preference either way (NOT "prefers remote" -- a real 3-state
+    # signal, matching this model's own established "None means
+    # genuinely unknown, not a hidden default" convention).
+    remote_preference: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # Free text (e.g. "fully_funded", "partial", "any") rather than an FK
+    # to `funding_intelligence.FundingType` -- that enum lives in a
+    # service module, not `app.models`, and importing a service enum
+    # into a model would invert this codebase's own layering; this
+    # column's values are a documented convention, not DB-enforced.
+    funding_preference: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # How many days of lead time before a deadline the user wants to
+    # still see it recommended (their own stated "deadline tolerance") --
+    # genuinely new; nothing on this model previously captured a
+    # deadline-proximity preference at all.
+    deadline_lead_time_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # lazy="selectin" issues a second batched query instead of a lazy-load,
     # which is the safe pattern under asyncio (a plain lazy="select" would
