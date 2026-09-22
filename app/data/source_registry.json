@@ -1789,7 +1789,7 @@
       "canonical_name": "Digital Egypt Youth (DEY)"
     },
     {
-      "source_id": "src-source",
+      "source_id": "src-source-e903a4af",
       "name": "القيادات الشبابية – وزارة الشباب والرياضة",
       "canonical_url": null,
       "telegram_handle": null,
@@ -1840,7 +1840,7 @@
       "canonical_name": "القيادات الشبابية – وزارة الشباب والرياضة"
     },
     {
-      "source_id": "src-source",
+      "source_id": "src-source-99078d80",
       "name": "طوّر وغيّر – وزارة الشباب والرياضة",
       "canonical_url": null,
       "telegram_handle": null,
@@ -1891,7 +1891,7 @@
       "canonical_name": "طوّر وغيّر – وزارة الشباب والرياضة"
     },
     {
-      "source_id": "src-source",
+      "source_id": "src-source-62a26a89",
       "name": "أندية البحث العلمي والابتكار – وزارة الشباب والرياضة",
       "canonical_url": null,
       "telegram_handle": null,
@@ -1942,7 +1942,7 @@
       "canonical_name": "أندية البحث العلمي والابتكار – وزارة الشباب والرياضة"
     },
     {
-      "source_id": "src-source",
+      "source_id": "src-source-903f80f0",
       "name": "مراكز شباب مصر",
       "canonical_url": null,
       "telegram_handle": null,
@@ -1993,7 +1993,7 @@
       "canonical_name": "مراكز شباب مصر"
     },
     {
-      "source_id": "src-source",
+      "source_id": "src-source-58c83a79",
       "name": "برلمان الشباب",
       "canonical_url": null,
       "telegram_handle": null,
@@ -2044,7 +2044,7 @@
       "canonical_name": "برلمان الشباب"
     },
     {
-      "source_id": "src-source",
+      "source_id": "src-source-3721999d",
       "name": "مشواري",
       "canonical_url": null,
       "telegram_handle": null,
@@ -2095,7 +2095,7 @@
       "canonical_name": "مشواري"
     },
     {
-      "source_id": "src-source",
+      "source_id": "src-source-6bce4ee0",
       "name": "مراكز التكوين المهني",
       "canonical_url": null,
       "telegram_handle": null,
@@ -2146,7 +2146,7 @@
       "canonical_name": "مراكز التكوين المهني"
     },
     {
-      "source_id": "src-2030",
+      "source_id": "src-2030-7071fa41",
       "name": "مشروع مهني 2030",
       "canonical_url": null,
       "telegram_handle": null,
@@ -2197,7 +2197,7 @@
       "canonical_name": "مشروع مهني 2030"
     },
     {
-      "source_id": "src-source",
+      "source_id": "src-source-a26492db",
       "name": "مراكز التدريب المهني",
       "canonical_url": null,
       "telegram_handle": null,
@@ -2248,7 +2248,7 @@
       "canonical_name": "مراكز التدريب المهني"
     },
     {
-      "source_id": "src-2030",
+      "source_id": "src-2030-91d66eed",
       "name": "رواد 2030",
       "canonical_url": null,
       "telegram_handle": null,
@@ -2401,7 +2401,7 @@
       "canonical_name": "ASRT (أكاديمية البحث العلمي والتكنولوجيا)"
     },
     {
-      "source_id": "src-source",
+      "source_id": "src-source-48345489",
       "name": "رواد تكنولوجيا المستقبل",
       "canonical_url": null,
       "telegram_handle": null,
@@ -4776,7 +4776,7 @@
       "canonical_name": "Truescho"
     },
     {
-      "source_id": "src-source",
+      "source_id": "src-shbab-btsad-shbab",
       "name": "شباب بتساعد شباب",
       "canonical_url": null,
       "telegram_handle": "@shbab_btsad_shbab",
@@ -5013,7 +5013,7 @@
       "canonical_name": "FORSA"
     },
     {
-      "source_id": "src-source",
+      "source_id": "src-foraskhadra",
       "name": "فرص خضراء",
       "canonical_url": null,
       "telegram_handle": "@foraskhadra",

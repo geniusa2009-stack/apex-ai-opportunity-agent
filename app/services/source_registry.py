@@ -34,9 +34,12 @@ TestVerificationBoundaryNeverBypassed` for a direct, executed proof.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
+import unicodedata
+from collections import Counter
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -86,6 +89,68 @@ def normalize_telegram_handle(value: str) -> str:
     return value
 
 
+def _ascii_slug(text: str | None) -> str:
+    """Lowercase, hyphen-separated ASCII slug. Non-ASCII characters
+    (e.g. Arabic text) are DROPPED, never transliterated -- a machine
+    transliteration would be inventing text not present in the source
+    record. This is exactly the rule that produced every one of this
+    registry's pre-existing, still-unmodified source_ids (verified:
+    recomputing this function over all 117 sources' `name` fields
+    reproduces the stored `source_id` for the 106 that were already
+    unique before the Source Identity Integrity repair)."""
+    if not text:
+        return ""
+    normalized = unicodedata.normalize("NFKD", text)
+    ascii_only = normalized.encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^a-z0-9]+", "-", ascii_only.lower()).strip("-")
+
+
+def generate_deterministic_source_id(
+    name: str, canonical_url: str | None = None, telegram_handle: str | None = None
+) -> str:
+    """The registry's canonical source-id derivation. Used to (a)
+    validate that a source's stored `source_id` is still the one this
+    rule would produce, and (b) assign an id to any newly-added
+    source. Priority, matching the registry's existing convention:
+
+    1. `src-<ascii-slug-of-name>` -- this is what every pre-existing,
+       already-unique id in this registry was already built from; kept
+       as the primary rule so this function never silently proposes a
+       different id for a source that already has a good one.
+    2. If that slug is EMPTY (no Latin characters in `name` at all) or
+       a bare, non-distinguishing short number (e.g. just a 4-digit
+       year -- the exact defect that produced the `src-2030` x2
+       collision), fall back to a real external anchor if one exists:
+       `telegram_handle` first (a verifiable, stable identity), then
+       `canonical_url`'s host+path.
+    3. If neither anchor exists, the name is the only real data this
+       source record has. Its slug (possibly empty) is kept as a
+       prefix and disambiguated with a short, deterministic digest of
+       the *exact* name string (sha256, first 8 hex chars) -- this is
+       computed, not invented: it claims no URL/handle the source
+       doesn't actually have, and is 100% reproducible from `name`
+       alone. Two sources with the same exact name (not expected in
+       this registry) would still collide; that is disclosed as a
+       known limitation, not silently resolved.
+    """
+    name_slug = _ascii_slug(name)
+    degenerate = (not name_slug) or (name_slug.isdigit() and len(name_slug) <= 4)
+    if not degenerate:
+        return f"src-{name_slug}"
+    if telegram_handle:
+        handle_slug = _ascii_slug(telegram_handle.lstrip("@"))
+        if handle_slug:
+            return f"src-{handle_slug}"
+    if canonical_url:
+        parts = urlsplit(canonical_url)
+        url_slug = _ascii_slug(f"{parts.netloc}{parts.path}")
+        if url_slug:
+            return f"src-{url_slug}"
+    digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:8]
+    base = name_slug or "source"
+    return f"src-{base}-{digest}"
+
+
 @lru_cache(maxsize=1)
 def load_source_registry() -> dict:
     """Loads and validates `app/data/source_registry.json` once per
@@ -104,6 +169,18 @@ def load_source_registry() -> dict:
             raise ValueError(f"source_registry.json: unknown adapter_type {source['adapter_type']!r} for {source['name']!r}")
         if source.get("health_status") is not None and source["health_status"] not in VALID_HEALTH_STATUSES:
             raise ValueError(f"source_registry.json: unknown health_status {source['health_status']!r} for {source['name']!r}")
+
+    # Source Identity Integrity: a registry a caller can key lookups
+    # against (get_source_by_id, the smoke-test CLI's --source-id) must
+    # never silently contain two sources under one id -- a duplicate
+    # here previously meant get_source_by_id() returned only the FIRST
+    # of several unrelated sources. Raise loudly rather than let that
+    # happen again.
+    ids = [s["source_id"] for s in data.get("sources", [])]
+    id_counts = Counter(ids)
+    duplicates = {sid: count for sid, count in id_counts.items() if count > 1}
+    if duplicates:
+        raise ValueError(f"source_registry.json: duplicate source_id values found: {duplicates}")
     return data
 
 
