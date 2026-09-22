@@ -47,6 +47,18 @@ _REGISTRY_PATH = Path(__file__).resolve().parent.parent / "data" / "source_regis
 
 VALID_TIERS = {"TIER_1_PRIMARY", "TIER_2_AGGREGATOR", "TIER_3_COMMUNITY"}
 VALID_LIVE_STATUSES = {"LIVE", "DEGRADED", "BLOCKED", "NO_CREDENTIAL", "UNCONFIRMED", "MOCKED", "NO_ADAPTER", "DISABLED"}
+# Adapter families introduced by the Source Enablement Framework
+# (app/services/source_enablement.py). Kept as a plain string set here
+# (not an import from source_enablement) to avoid this lightweight
+# catalog module pulling in httpx/defusedxml just to validate a string.
+VALID_ADAPTER_TYPES = {
+    "generic_web", "rss", "sitemap", "api", "telegram_channel",
+    "facebook_graph_api", "no_adapter_available", "unresolved",
+}
+VALID_HEALTH_STATUSES = {
+    "healthy", "degraded", "failed", "credentials_required",
+    "unsupported", "disabled", "not_tested",
+}
 
 
 def normalize_url(url: str | None) -> str | None:
@@ -88,7 +100,24 @@ def load_source_registry() -> dict:
             raise ValueError(f"source_registry.json: unknown tier {source['tier']!r} for {source['name']!r}")
         if source["live_status"] not in VALID_LIVE_STATUSES:
             raise ValueError(f"source_registry.json: unknown live_status {source['live_status']!r} for {source['name']!r}")
+        if source.get("adapter_type") is not None and source["adapter_type"] not in VALID_ADAPTER_TYPES:
+            raise ValueError(f"source_registry.json: unknown adapter_type {source['adapter_type']!r} for {source['name']!r}")
+        if source.get("health_status") is not None and source["health_status"] not in VALID_HEALTH_STATUSES:
+            raise ValueError(f"source_registry.json: unknown health_status {source['health_status']!r} for {source['name']!r}")
     return data
+
+
+def get_source_by_id(source_id: str) -> dict | None:
+    for source in load_source_registry()["sources"]:
+        if source["source_id"] == source_id:
+            return source
+    return None
+
+
+def get_sources_by_adapter_type(adapter_type: str) -> list[dict]:
+    if adapter_type not in VALID_ADAPTER_TYPES:
+        raise ValueError(f"unknown adapter_type: {adapter_type!r}")
+    return [s for s in load_source_registry()["sources"] if s["adapter_type"] == adapter_type]
 
 
 def get_sources_by_tier(tier: str) -> list[dict]:
