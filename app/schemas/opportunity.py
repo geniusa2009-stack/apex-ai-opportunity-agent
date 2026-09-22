@@ -234,6 +234,35 @@ class OpportunityCreate(BaseModel):
         "`retrieved_at or now()` convention.",
     )
 
+    # --- Opportunity Intelligence Hardening: raw type-label provenance ---
+    # DISCLOSED SCOPE BOUNDARY (see this task's own report, Part 2):
+    # `OpportunityType` remains the real, existing four-value native
+    # Postgres enum -- NOT expanded in this pass (same "no unilateral
+    # taxonomy expansion" posture `app/services/taxonomy.py`'s own module
+    # docstring already established for D5). But `_coerce_opportunity_type`
+    # (aggregator_service.py) was found, on audit, to silently DISCARD
+    # Gemini's own raw category string once it falls back to
+    # `_FALLBACK_OPPORTUNITY_TYPE` for anything that doesn't match one of
+    # the four values (e.g. "fellowship", "competition", "accelerator") --
+    # a real information-loss bug independent of whether the enum itself
+    # is ever expanded. This field is the fix: the raw, pre-coercion label
+    # Gemini returned is now always carried through and persisted verbatim
+    # into `Opportunity.raw_extracted_data` (via the same existing
+    # `data.model_dump(mode="json")` call, zero migration needed) even
+    # when it doesn't map onto one of today's four canonical types --
+    # "if multiple source labels map to one canonical type, preserve the
+    # raw source label in provenance" (Part 2), satisfied without
+    # changing the enum itself. `None` only when the source truly gave no
+    # category signal at all.
+    raw_opportunity_type_label: str | None = Field(
+        default=None,
+        max_length=200,
+        description="The AI extractor's own raw category string BEFORE "
+        "coercion into the canonical OpportunityType enum (e.g. "
+        "'fellowship' even though it was coerced to COURSE) -- provenance "
+        "only, never itself written to a typed column.",
+    )
+
 
 # =============================================================================
 # Review of Aggregated Opportunities Before Publish

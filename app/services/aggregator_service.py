@@ -475,6 +475,11 @@ async def process_raw_post_via_ai(raw_text: str, source_info: dict) -> Opportuni
             extracted.original_link, source_info["source_base_url"], source_info.get("item_url")
         ),
         opportunity_type=_coerce_opportunity_type(extracted.opportunity_type),
+        # Opportunity Intelligence Hardening: preserve the raw, pre-coercion
+        # label so a category Gemini names that doesn't map onto today's
+        # four-value enum (e.g. "fellowship") is never silently lost --
+        # see OpportunityCreate.raw_opportunity_type_label's own docstring.
+        raw_opportunity_type_label=(extracted.opportunity_type.strip() if extracted.opportunity_type else None),
         deadline=_parse_deadline(extracted.deadline),
         country=country,
         is_local_egypt=is_local_egypt,
