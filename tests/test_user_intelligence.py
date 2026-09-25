@@ -108,6 +108,7 @@ CREATE TABLE application_trackers (
     id VARCHAR(36) PRIMARY KEY, user_id VARCHAR(36) NOT NULL, scholarship_name VARCHAR(500) NOT NULL,
     institution VARCHAR(255), status VARCHAR(30) NOT NULL DEFAULT 'interested',
     deadline DATETIME, notes TEXT, ai_todo_list TEXT NOT NULL DEFAULT '[]',
+    opportunity_id VARCHAR(36), submitted_at DATETIME,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 )
 """

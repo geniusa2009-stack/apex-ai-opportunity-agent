@@ -133,6 +133,16 @@ class TrackerStatus(str, enum.Enum):
     INTERVIEWING = "interviewing"
     ACCEPTED = "accepted"
     REJECTED = "rejected"
+    # Application Intelligence step, Part O/B: a user's own explicit
+    # decision to stop pursuing a tracked application -- distinct from
+    # REJECTED (the opportunity provider's decision) and from simply
+    # deleting the tracker (which discards the record entirely rather
+    # than preserving it as a real outcome signal, per Part O's "outcomes
+    # can become a legitimate future personalization signal"). No
+    # migration needed -- `ApplicationTracker.status` is a plain `String`
+    # column (see that column's own comment), so a new allowed value here
+    # is a pure Python-side/Pydantic-layer addition.
+    WITHDRAWN = "withdrawn"
 
 
 class FocusSessionStatus(str, enum.Enum):
@@ -1218,3 +1228,10 @@ class NextActionType(str, enum.Enum):
     EXPLORE_RELATED_OPPORTUNITIES = "explore_related_opportunities"
     UPDATE_PROFILE = "update_profile"
     REVIEW_GOAL = "review_goal"
+    # Application Intelligence step, Part K: the explicit, controlled
+    # submission action -- distinct from COMPLETE_APPLICATION_STEP
+    # (finishing one requirement) and never reachable via the generic
+    # tracker status PATCH (Part U's own "PATCH status=SUBMITTED must not
+    # bypass the submission pathway" rule) -- see
+    # `application_tracker_service.submit_tracker`.
+    SUBMIT_APPLICATION = "submit_application"

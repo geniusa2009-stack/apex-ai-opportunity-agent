@@ -16,11 +16,19 @@ _TrackerStatusLiteral = Literal[
 
 
 class TrackerCreate(BaseModel):
-    """POST /tracker/ request body."""
+    """POST /tracker/ request body.
 
-    scholarship_name: str = Field(min_length=1, max_length=500)
+    Application Intelligence step, Part A/K: `opportunity_id` is new and
+    optional -- when provided, this tracker is linked to a real catalog
+    `Opportunity` (must exist and be published), and `scholarship_name`
+    becomes optional (defaults to the opportunity's own real title when
+    omitted). Every pre-existing off-catalog call (`opportunity_id`
+    omitted, `scholarship_name` required) is unchanged."""
+
+    scholarship_name: str | None = Field(default=None, min_length=1, max_length=500)
     institution: str | None = Field(default=None, max_length=255)
     deadline: datetime | None = None
+    opportunity_id: UUID | None = None
 
 
 class TrackerStatusUpdate(BaseModel):
@@ -59,3 +67,6 @@ class TrackerOut(BaseModel):
     notes: str | None
     ai_todo_list: list[TodoItemOut]
     created_at: datetime
+    # Application Intelligence step additions.
+    opportunity_id: UUID | None = None
+    submitted_at: datetime | None = None

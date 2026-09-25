@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 from google import genai
@@ -7,12 +7,16 @@ from google.genai import errors as genai_errors
 from google.genai import types as genai_types
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from app.core.config import settings
+from app.models.application_requirement_completion import ApplicationRequirementCompletion
 from app.models.application_tracker import ApplicationTracker
-from app.models.enums import TrackerStatus
+from app.models.enums import OpportunityReviewStatus, TrackerStatus
+from app.models.opportunity import Opportunity
+from app.services import application_state_machine
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +29,10 @@ _retry_gemini_call = retry(
 )
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 class TrackerNotFoundError(Exception):
     """Raised when a `tracker_id` doesn't exist, or exists but isn't
     owned by the given `user_id` -- same "don't distinguish the two
@@ -35,6 +43,17 @@ class TrackerNotFoundError(Exception):
 class TodoTaskNotFoundError(Exception):
     """Raised when a `task_id` doesn't exist within a tracker's
     `ai_todo_list`."""
+
+
+class OpportunityNotFoundError(Exception):
+    """Raised when a `create_tracker` call names an `opportunity_id`
+    that doesn't exist, or isn't published (Application Intelligence
+    step, Part A) -- a tracker must never silently link to nothing."""
+
+
+class DuplicateApplicationError(Exception):
+    """Raised when the caller already has a tracker linked to this same
+    `opportunity_id` (Application Intelligence step, Part T)."""
 
 
 class TodoGenerationError(Exception):
@@ -127,9 +146,10 @@ async def _generate_todo_tasks(scholarship_name: str, institution: str | None) -
 async def create_tracker(
     db: AsyncSession,
     user_id: UUID,
-    scholarship_name: str,
+    scholarship_name: str | None = None,
     institution: str | None = None,
     deadline: datetime | None = None,
+    opportunity_id: UUID | None = None,
 ) -> ApplicationTracker:
     """Generates a scholarship-tailored preparation checklist via Gemini,
     then creates the tracker row with it.
@@ -142,7 +162,43 @@ async def create_tracker(
     `opportunity_search.semantic_search`: this function writes a row and
     needs a session to do it with, and services that touch the DB in this
     codebase accept an injected session rather than opening their own.
+
+    Application Intelligence step, Part A/K addition: `opportunity_id`
+    (optional, preserves every pre-existing off-catalog call site
+    unmodified). When given, the linked `Opportunity` must exist and be
+    published (`OpportunityNotFoundError` otherwise -- same 404 posture
+    as every other opportunity-facing endpoint), `scholarship_name`
+    defaults to the opportunity's own real `title` when the caller didn't
+    supply one, and `deadline` defaults to the opportunity's own real,
+    verified `deadline` when the caller didn't supply one -- never
+    invented, always the catalog's own stored value. Part T's duplicate
+    protection is checked here (a fast, real pre-insert check) in
+    addition to the database's own partial unique index, which is the
+    actual race-safe backstop (see the `IntegrityError` handling below).
     """
+    opportunity: Opportunity | None = None
+    if opportunity_id is not None:
+        opportunity = await db.get(Opportunity, opportunity_id)
+        if opportunity is None or opportunity.review_status != OpportunityReviewStatus.PUBLISHED.value:
+            raise OpportunityNotFoundError(str(opportunity_id))
+
+        existing = await db.execute(
+            select(ApplicationTracker).where(
+                ApplicationTracker.user_id == user_id,
+                ApplicationTracker.opportunity_id == opportunity_id,
+            )
+        )
+        if existing.scalar_one_or_none() is not None:
+            raise DuplicateApplicationError(str(opportunity_id))
+
+        if scholarship_name is None:
+            scholarship_name = opportunity.title
+        if deadline is None:
+            deadline = opportunity.deadline
+
+    if scholarship_name is None:
+        raise ValueError("scholarship_name is required when opportunity_id is not provided")
+
     tasks = await _generate_todo_tasks(scholarship_name, institution)
 
     ai_todo_list = [
@@ -156,10 +212,20 @@ async def create_tracker(
         institution=institution,
         status=TrackerStatus.INTERESTED.value,
         deadline=deadline,
+        opportunity_id=opportunity_id,
         ai_todo_list=ai_todo_list,
     )
     db.add(tracker)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        # Race-safe backstop for Part T -- two concurrent requests both
+        # pass the pre-insert check above, then only one commit wins
+        # against `uq_application_trackers_user_opportunity`. Same
+        # "roll back and treat it as the real duplicate" posture as
+        # `bookmarks.py::create_bookmark`.
+        await db.rollback()
+        raise DuplicateApplicationError(str(opportunity_id)) from exc
     await db.refresh(tracker)
     return tracker
 
@@ -194,15 +260,121 @@ async def _get_owned_tracker(
     return tracker
 
 
+async def get_owned_tracker(db: AsyncSession, user_id: UUID, tracker_id: UUID) -> ApplicationTracker:
+    """Public alias for `_get_owned_tracker` -- Application Intelligence
+    step's own read-only services (`application_intelligence.py`,
+    `guidance_service.py`) need the same IDOR-safe ownership lookup this
+    module already established; exposing it under a non-underscored name
+    rather than duplicating the query."""
+    return await _get_owned_tracker(db, user_id, tracker_id)
+
+
 async def update_tracker_status(
     db: AsyncSession, user_id: UUID, tracker_id: UUID, new_status: str
 ) -> ApplicationTracker:
+    """Application Intelligence step, Part B/U addition: every transition
+    now runs through `application_state_machine.validate_generic_transition`
+    before being applied -- an invalid transition (including any attempt
+    to reach APPLIED through this generic path; see that module's own
+    docstring) raises `InvalidTransitionError` and leaves the tracker
+    unchanged."""
     tracker = await _get_owned_tracker(db, user_id, tracker_id)
+    application_state_machine.validate_generic_transition(tracker.status, new_status)
     tracker.status = new_status
     db.add(tracker)
     await db.commit()
     await db.refresh(tracker)
     return tracker
+
+
+async def submit_tracker(db: AsyncSession, user_id: UUID, tracker_id: UUID) -> ApplicationTracker:
+    """Application Intelligence step, Part K/M: the ONE controlled
+    pathway that can move a tracker to APPLIED. Stamps `submitted_at`
+    (Part M's own explicit submission record) in the SAME transaction as
+    the status change -- both or neither, never a status of "applied"
+    with no real submission timestamp behind it.
+
+    Submitting does NOT integrate with any real external application
+    system (none exists in this codebase) -- this call means exactly
+    "the user explicitly told APEX they submitted this application",
+    never "APEX itself submitted anything on the user's behalf" (Part M's
+    own literal distinction)."""
+    tracker = await _get_owned_tracker(db, user_id, tracker_id)
+    application_state_machine.validate_submission_transition(tracker.status)
+    tracker.status = TrackerStatus.APPLIED.value
+    tracker.submitted_at = _utcnow()
+    db.add(tracker)
+    await db.commit()
+    await db.refresh(tracker)
+    return tracker
+
+
+async def complete_requirement(
+    db: AsyncSession, user_id: UUID, tracker_id: UUID, requirement_key: str
+) -> ApplicationRequirementCompletion:
+    """Application Intelligence step, Part D/E: explicit
+    USER_CONFIRMED_COMPLETE for one deterministic, opportunity-derived
+    requirement. Upserts -- calling this twice for the same requirement
+    is a no-op, not an error (same posture as `bookmarks.py::
+    create_bookmark`)."""
+    await _get_owned_tracker(db, user_id, tracker_id)  # IDOR check, raises TrackerNotFoundError
+
+    result = await db.execute(
+        select(ApplicationRequirementCompletion).where(
+            ApplicationRequirementCompletion.tracker_id == tracker_id,
+            ApplicationRequirementCompletion.requirement_key == requirement_key,
+        )
+    )
+    row = result.scalar_one_or_none()
+    now = _utcnow()
+    if row is None:
+        row = ApplicationRequirementCompletion(
+            tracker_id=tracker_id, requirement_key=requirement_key,
+            is_completed=True, completed_at=now,
+        )
+        db.add(row)
+    elif not row.is_completed:
+        row.is_completed = True
+        row.completed_at = now
+
+    await db.commit()
+    await db.refresh(row)
+    return row
+
+
+async def uncomplete_requirement(
+    db: AsyncSession, user_id: UUID, tracker_id: UUID, requirement_key: str
+) -> None:
+    """Reverses `complete_requirement` -- deletes the completion row
+    entirely (rather than flipping a flag) so a re-derived requirements
+    projection and this table never disagree about whether a completion
+    record exists at all."""
+    await _get_owned_tracker(db, user_id, tracker_id)  # IDOR check
+
+    result = await db.execute(
+        select(ApplicationRequirementCompletion).where(
+            ApplicationRequirementCompletion.tracker_id == tracker_id,
+            ApplicationRequirementCompletion.requirement_key == requirement_key,
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row is not None:
+        await db.delete(row)
+        await db.commit()
+
+
+async def get_requirement_completions(
+    db: AsyncSession, tracker_id: UUID
+) -> dict[str, ApplicationRequirementCompletion]:
+    """Every completion row for one tracker, keyed by `requirement_key` --
+    used by `application_intelligence.py` to annotate a freshly-derived
+    requirements projection with real completion state."""
+    result = await db.execute(
+        select(ApplicationRequirementCompletion).where(
+            ApplicationRequirementCompletion.tracker_id == tracker_id,
+        )
+    )
+    return {row.requirement_key: row for row in result.scalars().all()}
 
 
 async def toggle_todo_task(

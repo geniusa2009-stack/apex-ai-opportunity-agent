@@ -1,12 +1,17 @@
 import datetime as dt
 import uuid
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, func
+from typing import TYPE_CHECKING
+
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.models.enums import TrackerStatus
+
+if TYPE_CHECKING:
+    from app.models.opportunity import Opportunity
 
 
 class ApplicationTracker(Base):
@@ -26,6 +31,27 @@ class ApplicationTracker(Base):
     """
 
     __tablename__ = "application_trackers"
+    __table_args__ = (
+        # Application Intelligence step, Part T: duplicate-application
+        # protection enforced at BOTH the application layer
+        # (`application_tracker_service.create_tracker`'s pre-insert
+        # check) AND the database layer (this partial unique index) --
+        # only when `opportunity_id` is actually set, since a
+        # freeform/off-catalog tracker (no `opportunity_id`) has no
+        # meaningful notion of "duplicate" to enforce (a student can
+        # legitimately track two different off-catalog scholarships that
+        # happen to share a name). Postgres treats each NULL as distinct
+        # for uniqueness purposes even without a partial index, but the
+        # explicit `postgresql_where` keeps the *intent* -- "one tracker
+        # per (user, catalog opportunity)" -- visible in the schema
+        # itself, not just an accidental NULL-handling side effect.
+        Index(
+            "uq_application_trackers_user_opportunity",
+            "user_id", "opportunity_id",
+            unique=True,
+            postgresql_where="opportunity_id IS NOT NULL",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -40,6 +66,25 @@ class ApplicationTracker(Base):
 
     scholarship_name: Mapped[str] = mapped_column(String(500), nullable=False)
     institution: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # Application Intelligence step, Part A: the User -> Application ->
+    # Opportunity link this phase's own audit found genuinely missing.
+    # Nullable -- a tracker MAY still target a scholarship that doesn't
+    # exist in this platform's own catalog (unchanged, pre-existing
+    # capability, Part 0's own audit finding), in which case this stays
+    # NULL and the deterministic, evidence-traceable requirements/
+    # deadline-intelligence/change-impact features that depend on a real
+    # `Opportunity` row simply have nothing to project (never fabricated
+    # -- see `application_requirements.py`). `ondelete="SET NULL"`, not
+    # CASCADE -- deleting the catalog `Opportunity` row must never delete
+    # the user's own tracked application record; it only loses its
+    # catalog link.
+    opportunity_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("opportunities.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     # Plain String, NOT a native Postgres ENUM (unlike
     # OpportunityType/BookmarkStatus elsewhere in this codebase) -- this
@@ -69,6 +114,21 @@ class ApplicationTracker(Base):
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+    # Application Intelligence step, Part M (Submission Safety): the
+    # explicit, real submission record. NULL until
+    # `application_tracker_service.submit_tracker` runs -- the ONLY
+    # write path that ever sets this column (never the generic
+    # `PATCH /tracker/{id}/status`, per Part U). Its presence, not
+    # `status == "applied"` alone, is what this codebase treats as "the
+    # user explicitly confirmed they submitted this application" --
+    # `status` could in principle be set to "applied" through data
+    # migration/backfill someday without this column being set, and this
+    # column is the one deliberately-narrow signal nothing else can
+    # produce as a side effect.
+    submitted_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    opportunity: Mapped["Opportunity | None"] = relationship(lazy="selectin")
 
     def __repr__(self) -> str:
         return (

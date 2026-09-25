@@ -22,10 +22,12 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.application_requirement_completion import ApplicationRequirementCompletion
 from app.models.application_tracker import ApplicationTracker
 from app.models.enums import BookmarkStatus, NextActionType, TrackerStatus
 from app.models.opportunity_change_history import OpportunityChangeHistory
 from app.models.user import User
+from app.services import application_requirements
 from app.services.user_intelligence import UserIntelligenceSnapshot, build_user_intelligence_snapshot
 
 # Application-tracker statuses that represent real, unfinished work --
@@ -130,6 +132,100 @@ async def _changed_deadline_guidance(db: AsyncSession, *, user: User, now: dt.da
     )
 
 
+async def _application_missing_requirements_guidance(
+    db: AsyncSession, *, trackers: list[ApplicationTracker]
+) -> GuidanceItem | None:
+    """Application Intelligence step, Part F: surfaces real, deterministic,
+    still-missing REQUIRED items for each active, opportunity-linked
+    tracker -- reuses `application_requirements.extract_requirements`
+    (Part C) and `ApplicationRequirementCompletion` (Part D/E), never a
+    second requirements engine."""
+    actions: list[NextActionItem] = []
+    for tracker in trackers:
+        if tracker.status not in _INCOMPLETE_TRACKER_STATUSES or tracker.opportunity is None:
+            continue
+
+        required = [
+            r for r in application_requirements.extract_requirements(tracker.opportunity)
+            if r.status == application_requirements.REQUIRED
+        ]
+        if not required:
+            continue
+
+        completions_result = await db.execute(
+            select(ApplicationRequirementCompletion).where(
+                ApplicationRequirementCompletion.tracker_id == tracker.id,
+                ApplicationRequirementCompletion.is_completed.is_(True),
+            )
+        )
+        completed_keys = {row.requirement_key for row in completions_result.scalars().all()}
+
+        for req in required:
+            if req.key in completed_keys:
+                continue
+            actions.append(
+                NextActionItem(
+                    action_type=NextActionType.REVIEW_REQUIREMENTS.value,
+                    label=f"Add your {req.label} for {tracker.scholarship_name}",
+                    reason=f"This opportunity's own listing mentions: \"{req.evidence_snippet}\"",
+                    opportunity_id=tracker.opportunity_id,
+                )
+            )
+
+    if not actions:
+        return None
+    return GuidanceItem(
+        category="application_missing_requirements",
+        message=f"You have {len(actions)} missing application requirement(s) across your in-progress applications.",
+        next_actions=actions,
+    )
+
+
+async def _application_change_impact_guidance(
+    db: AsyncSession, *, trackers: list[ApplicationTracker], now: dt.datetime
+) -> GuidanceItem | None:
+    """Application Intelligence step, Part I: OPPORTUNITY CHANGE -> real
+    ACTIVE application impact. Same read-time pattern as
+    `_changed_deadline_guidance` above, scoped to opportunity-linked,
+    non-terminal `ApplicationTracker` rows instead of bookmarks -- an
+    active application's own catalog opportunity changing its deadline is
+    at least as material to that user as a merely-saved one."""
+    active_linked = {
+        t.opportunity_id: t
+        for t in trackers
+        if t.status in _INCOMPLETE_TRACKER_STATUSES and t.opportunity_id is not None
+    }
+    if not active_linked:
+        return None
+
+    cutoff = now - dt.timedelta(days=RECENT_CHANGE_WINDOW_DAYS)
+    result = await db.execute(
+        select(OpportunityChangeHistory).where(
+            OpportunityChangeHistory.opportunity_id.in_(active_linked.keys()),
+            OpportunityChangeHistory.field_name == "deadline",
+            OpportunityChangeHistory.changed_at >= cutoff,
+        )
+    )
+    changes = list(result.scalars().all())
+    if not changes:
+        return None
+
+    actions = [
+        NextActionItem(
+            action_type=NextActionType.REVIEW_DEADLINE.value,
+            label=f"Review the new deadline for your application to {active_linked[c.opportunity_id].scholarship_name}",
+            reason=f"Deadline changed from {c.old_value} to {c.new_value}.",
+            opportunity_id=c.opportunity_id,
+        )
+        for c in changes
+    ]
+    return GuidanceItem(
+        category="active_application_deadline_changed",
+        message=f"The deadline changed for {len(changes)} of your active application(s).",
+        next_actions=actions,
+    )
+
+
 def _incomplete_application_guidance(*, trackers: list[ApplicationTracker]) -> GuidanceItem | None:
     incomplete = [t for t in trackers if t.status in _INCOMPLETE_TRACKER_STATUSES]
     if not incomplete:
@@ -193,6 +289,8 @@ async def build_guidance(db: AsyncSession, *, user: User, now: dt.datetime | Non
         await _upcoming_deadline_guidance(db, user=user, now=now),
         await _changed_deadline_guidance(db, user=user, now=now),
         _incomplete_application_guidance(trackers=trackers),
+        await _application_missing_requirements_guidance(db, trackers=trackers),
+        await _application_change_impact_guidance(db, trackers=trackers, now=now),
         _profile_completion_guidance(snapshot),
     ]
     items = [item for item in candidate_items if item is not None]
