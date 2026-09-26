@@ -11,6 +11,7 @@ raw source text or an LLM's own confidence.
 from __future__ import annotations
 
 import datetime as dt
+import enum
 import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,12 +31,43 @@ def _normalize_for_comparison(value) -> str | None:
     genuinely different instants that happen to format identically at
     this module's chosen precision would be missed, but no such
     collision is reachable from any real caller in this codebase today).
+
+    Opportunity Monitoring & Personal Impact Engine step addition:
+    a `(str, enum.Enum)`-mixin value (e.g. `Gender.MALE`,
+    `OpportunityReviewStatus.PUBLISHED` -- several `Opportunity` columns
+    this phase newly compares are enum-typed) normalizes via its own
+    real `.value`, never `str(value)` -- Python's `Enum.__str__` returns
+    `"Gender.MALE"`, not `"male"`, which would make this function
+    falsely report a change on every single comparison of an unchanged
+    enum column (the exact same real value on both sides, compared as
+    two different-looking strings). A plain `list[str]` of enum values
+    (e.g. `target_academic_levels`) is normalized element-wise the same
+    way, then joined, so list ORDER never causes a false "changed"
+    (Part B: "ordering changes" must not create noise).
     """
     if value is None or value == "":
         return None
     if isinstance(value, dt.datetime):
         return value.isoformat()
+    if isinstance(value, enum.Enum):
+        return str(value.value)
+    if isinstance(value, (list, tuple)):
+        normalized_items = sorted(
+            (item.value if isinstance(item, enum.Enum) else str(item)) for item in value
+        )
+        return ",".join(normalized_items) or None
     return str(value)
+
+
+def normalize_for_comparison(value) -> str | None:
+    """Public alias for `_normalize_for_comparison` -- Opportunity
+    Monitoring & Personal Impact Engine step's own `opportunity_
+    monitoring.detect_meaningful_changes` needs the exact same
+    normalization rule this module already uses (Part B: one
+    "genuinely different" definition, not two that could silently
+    disagree), so it's exposed under a non-underscored name rather than
+    duplicated."""
+    return _normalize_for_comparison(value)
 
 
 async def record_change_if_meaningful(

@@ -611,25 +611,17 @@ async def upsert_opportunity(db: AsyncSession, data: OpportunityCreate) -> tuple
 
     if existing is not None:
         # Taxonomy Evolution + Temporal State Machine + Change History
-        # step (Part C): record a real, append-only history entry for
-        # each of the semantically meaningful fields this function
-        # actually re-writes on an update (title/type/deadline/country --
-        # the same four fields this function's own pre-existing docstring
-        # already named as "content fields this pipeline could plausibly
-        # have fresher data for"). `description`/`is_local_egypt`/
-        # `target_age_group` are deliberately NOT tracked here -- Part C's
-        # own field list names title/provider/type/deadline/eligibility/
-        # funding/country/application_url/status, not every column this
-        # function happens to touch; `record_change_if_meaningful` itself
-        # also no-ops on a same-value write (Part C3), so a re-fetch of
-        # identical content creates zero history noise either way.
+        # step (Part C): `title`/`opportunity_type` stay tracked directly
+        # here, unchanged from before this phase -- see the docstring
+        # note above `opportunity_monitoring.MONITORED_FIELDS` for why
+        # those two specifically are NOT in that registry (this function
+        # is their one and only real write path either way, so a second
+        # registry entry would add nothing).
         from app.services.change_history_service import record_change_if_meaningful
 
         for field_name, old_value, new_value in (
             ("title", existing.title, data.title),
             ("opportunity_type", existing.type.value if existing.type else None, data.opportunity_type.value),
-            ("deadline", existing.deadline, data.deadline),
-            ("country", existing.country, data.country),
         ):
             await record_change_if_meaningful(
                 db,
@@ -638,6 +630,43 @@ async def upsert_opportunity(db: AsyncSession, data: OpportunityCreate) -> tuple
                 old_value=old_value,
                 new_value=new_value,
                 change_reason=f"upsert_opportunity: re-fetched content for target_url={data.target_url!r} changed {field_name!r}.",
+            )
+
+        # Opportunity Monitoring & Personal Impact Engine step, Part A/B:
+        # the real DETECT -> VERIFY -> CLASSIFY -> RECORD -> IMPACT ->
+        # NOTIFICATION pipeline for every field THIS function's own
+        # candidate (`data`, a freshly re-scraped `OpportunityCreate`)
+        # can honestly compare against the stored row -- deadline/
+        # country/is_local_egypt/target_age_group, extending this path's
+        # previous 2-field-only coverage (title/opportunity_type above)
+        # to include severity classification, affected-user lookup, and
+        # notifications for the first time. `source_trust="structured"`
+        # (Part D): this candidate is a real, backend-compared re-scrape,
+        # the same trust level this exact write path already had before
+        # this phase. Best-effort (Part V) -- a monitoring-pipeline
+        # failure must never prevent the opportunity row itself from
+        # being updated, which is this function's own primary contract.
+        try:
+            from app.services.opportunity_monitoring_pipeline import process_opportunity_candidate
+
+            await process_opportunity_candidate(
+                db,
+                opportunity=existing,
+                candidate={
+                    "deadline": data.deadline,
+                    "country": data.country,
+                    "is_local_egypt": data.is_local_egypt,
+                    "target_age_group": data.target_age_group,
+                },
+                source_trust="structured",
+                change_reason=f"upsert_opportunity: re-fetched content for target_url={data.target_url!r}.",
+                source_id=existing.source_id,
+            )
+        except Exception:
+            logger.exception(
+                "opportunity_monitoring_pipeline failed for opportunity %s during upsert -- "
+                "the opportunity row itself is still updated below",
+                existing.id,
             )
 
         existing.title = data.title

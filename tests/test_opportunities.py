@@ -133,7 +133,7 @@ CREATE TABLE opportunities (
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     review_status VARCHAR(20) NOT NULL DEFAULT 'published',
     claimed_by VARCHAR(36),
-    claimed_at DATETIME, lifecycle_state VARCHAR(30) NOT NULL DEFAULT 'discovered', lifecycle_state_reason TEXT, lifecycle_state_evaluated_at DATETIME
+    claimed_at DATETIME, lifecycle_state VARCHAR(30) NOT NULL DEFAULT 'discovered', lifecycle_state_reason TEXT, lifecycle_state_evaluated_at DATETIME, monitoring_last_checked_at DATETIME
 )
 """
 

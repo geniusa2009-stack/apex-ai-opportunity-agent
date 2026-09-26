@@ -1235,3 +1235,33 @@ class NextActionType(str, enum.Enum):
     # bypass the submission pathway" rule) -- see
     # `application_tracker_service.submit_tracker`.
     SUBMIT_APPLICATION = "submit_application"
+    # Opportunity Monitoring & Personal Impact Engine step, Part H: the
+    # generic "go look at what changed" action -- reused for eligibility/
+    # funding/lifecycle change guidance the same way REVIEW_DEADLINE
+    # already covers deadline-specific change guidance (kept as its own
+    # distinct, pre-existing action type rather than merged into this
+    # one, since a client can render a deadline-specific icon/button for
+    # it).
+    REVIEW_OPPORTUNITY_CHANGE = "review_opportunity_change"
+
+
+class ChangeSeverity(str, enum.Enum):
+    """Opportunity Monitoring & Personal Impact Engine step, Part C: the
+    deterministic, internal-only classification of how much a detected
+    `OpportunityChangeHistory` field change actually matters. Never
+    exposed to users as a raw label or a numeric "impact score" (Part
+    Y/9 -- "no arbitrary AI confidence scores", "no trust-percentage
+    theater") -- used only to decide whether a change is worth writing
+    to history at all (IGNORE is not persisted), whether it should
+    surface in guidance/the personal feed (MATERIAL and above), and
+    whether it should generate a notification (HIGH and above -- see
+    `opportunity_change_notifications.py`). Assigned by
+    `opportunity_monitoring.classify_change_severity`'s own small,
+    documented, per-field rule table -- never by an LLM (Part C's own
+    "never use an LLM as the authority for classification")."""
+
+    CRITICAL = "critical"
+    HIGH = "high"
+    MATERIAL = "material"
+    MINOR = "minor"
+    IGNORE = "ignore"

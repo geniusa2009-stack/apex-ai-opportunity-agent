@@ -58,6 +58,17 @@ _SUBMITTABLE_FROM: frozenset[TrackerStatus] = frozenset({
     TrackerStatus.INTERESTED, TrackerStatus.PREPARING_DOCS, TrackerStatus.INTERVIEWING,
 })
 
+# Opportunity Monitoring & Personal Impact Engine step: centralized here
+# (moved out of `guidance_service.py`, which now imports it from this
+# module too) so `personal_impact_service.py` can use the same "does
+# this tracker still represent real, unfinished work" definition without
+# creating a `guidance_service` <-> `personal_impact_service` circular
+# import -- one real definition, two importers, not two copies that
+# could silently drift apart.
+INCOMPLETE_TRACKER_STATUSES: frozenset[str] = frozenset(
+    {TrackerStatus.INTERESTED.value, TrackerStatus.PREPARING_DOCS.value, TrackerStatus.INTERVIEWING.value}
+)
+
 
 class InvalidTransitionError(Exception):
     """Raised when a proposed `TrackerStatus` transition is not allowed

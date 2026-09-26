@@ -34,7 +34,8 @@ import datetime as dt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.enums import OpportunityReviewStatus
+from app.models.enums import ChangeSeverity, OpportunityReviewStatus
+from app.models.opportunity_change_history import OpportunityChangeHistory
 from app.models.opportunity import Opportunity
 from app.models.user import User
 from app.services.interaction_service import get_dismissed_opportunity_ids
@@ -57,6 +58,15 @@ DEFAULT_DEADLINE_APPROACHING_WINDOW_DAYS = 14
 MAX_CONSECUTIVE_SAME_TYPE = 2
 
 CANDIDATE_POOL_LIMIT = 500
+
+# Opportunity Monitoring & Personal Impact Engine step, Part K: how far
+# back a "recently changed" feed-level reason still applies -- same
+# window as `guidance_service.RECENT_CHANGE_WINDOW_DAYS`, deliberately
+# kept identical rather than a second, different constant.
+RECENTLY_CHANGED_WINDOW_DAYS = 7
+_FEED_NOTABLE_SEVERITIES = frozenset(
+    {ChangeSeverity.MATERIAL.value, ChangeSeverity.HIGH.value, ChangeSeverity.CRITICAL.value}
+)
 
 
 @dataclasses.dataclass
@@ -177,10 +187,32 @@ async def build_personal_feed(
 
     diversified = _apply_diversity(ranked)
 
-    items = [
-        FeedItem(ranked=r, feed_reasons=_feed_level_reasons(r.opportunity, now, user))
-        for r in diversified
-    ]
+    # Opportunity Monitoring & Personal Impact Engine step, Part K: ONE
+    # extra query, scoped to only the opportunities that actually made
+    # this page (never the full 500-row candidate pool -- Part T's own
+    # "avoid N+1"/"no per-user heavy scan" rule applies just as much to
+    # this single extra feed query), to attach a "Recently changed"
+    # reason without a second feed engine (this function's own existing
+    # pipeline is untouched otherwise).
+    recently_changed_ids: set[uuid.UUID] = set()
+    page_ids = [r.opportunity.id for r in diversified]
+    if page_ids:
+        cutoff = now - dt.timedelta(days=RECENTLY_CHANGED_WINDOW_DAYS)
+        change_result = await db.execute(
+            select(OpportunityChangeHistory.opportunity_id).where(
+                OpportunityChangeHistory.opportunity_id.in_(page_ids),
+                OpportunityChangeHistory.severity.in_(_FEED_NOTABLE_SEVERITIES),
+                OpportunityChangeHistory.changed_at >= cutoff,
+            )
+        )
+        recently_changed_ids = {row[0] for row in change_result.all()}
+
+    items = []
+    for r in diversified:
+        reasons = _feed_level_reasons(r.opportunity, now, user)
+        if r.opportunity.id in recently_changed_ids:
+            reasons.append("Recently changed -- review what's new.")
+        items.append(FeedItem(ranked=r, feed_reasons=reasons))
 
     return PersonalFeed(
         items=items,

@@ -19,6 +19,13 @@ by convention, not a DB trigger -- `change_history_service.
 record_change_if_meaningful` is the only real write path, and it only
 ever INSERTs. Nothing in this codebase ever UPDATEs an existing
 `OpportunityChangeHistory` row.
+
+Opportunity Monitoring & Personal Impact Engine step, Part F addition:
+`severity` (nullable -- see the column's own comment) records this
+row's `ChangeSeverity` classification at write time, so "what was its
+classification?" (Part F's own explicit change-record question) is
+answerable directly from the row itself, not re-derived later from
+values that may since have changed again.
 """
 
 import datetime as dt
@@ -75,6 +82,23 @@ class OpportunityChangeHistory(Base):
     )
 
     change_reason: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # Opportunity Monitoring & Personal Impact Engine step, Part C/F:
+    # this change's deterministic `ChangeSeverity` value (e.g. "high"),
+    # assigned once at write time by `opportunity_monitoring.
+    # classify_change_severity`. Nullable, NOT because a real change can
+    # lack a classification going forward (every NEW row written by
+    # `record_verified_changes` always carries one), but because this
+    # column is added after `OpportunityChangeHistory` already has real
+    # production rows from prior phases (the pre-existing 4-field
+    # `upsert_opportunity` writes, the lifecycle-state-machine write) --
+    # backfilling a severity for those historical rows would mean
+    # guessing at a classification for a change this module never
+    # actually evaluated at the time, which is exactly the kind of
+    # invented-after-the-fact certainty this codebase's own "never
+    # fabricate" discipline forbids. `NULL` here honestly means
+    # "written before this classification existed", never "ignore".
+    severity: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     changed_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

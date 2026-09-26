@@ -45,6 +45,10 @@ celery_app = Celery(
         # Research Trajectory Memory (D3) -- retention/pruning periodic
         # scan; see that module's own docstring.
         "app.workers.trajectory_retention_tasks",
+        # Opportunity Monitoring & Personal Impact Engine -- periodic
+        # re-verification scan for already-published opportunities; see
+        # that module's own docstring.
+        "app.workers.monitoring_tasks",
     ],
 )
 
@@ -81,6 +85,15 @@ celery_app.conf.beat_schedule = {
     "check-approaching-deadlines": {
         "task": "app.workers.deadline_reminder_tasks.check_approaching_deadlines_task",
         "schedule": crontab(hour=5, minute=0),
+    },
+    # Opportunity Monitoring & Personal Impact Engine -- daily
+    # re-verification scan (see `app/workers/monitoring_tasks.py`'s own
+    # docstring for the batch size/cadence reasoning). 04:00 UTC: between
+    # the scraper (03:00) and the deadline scan (05:00) so none of the
+    # three daily jobs contend for the same minute.
+    "run-opportunity-monitoring-scan": {
+        "task": "app.workers.monitoring_tasks.run_opportunity_monitoring_scan_task",
+        "schedule": crontab(hour=4, minute=0),
     },
     # Live 1:1 Video Sessions -- Upcoming-Call reminders. DISCLOSED
     # DEPARTURE from the two daily-cadence entries above: a 60-minute

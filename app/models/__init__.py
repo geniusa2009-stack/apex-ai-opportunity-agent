@@ -13,6 +13,7 @@ from app.models.alumni import Alumnus
 from app.models.analytics import VideoPlaybackLog
 from app.models.application_tracker import ApplicationTracker
 from app.models.application_requirement_completion import ApplicationRequirementCompletion
+from app.models.user_notification_preference import UserNotificationPreference
 from app.models.badges import Badge, GamificationProfile, UserBadge
 from app.models.bookmark import UserBookmark
 from app.models.canned_response import CannedResponse

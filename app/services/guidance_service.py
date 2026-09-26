@@ -26,19 +26,29 @@ from app.models.application_requirement_completion import ApplicationRequirement
 from app.models.application_tracker import ApplicationTracker
 from app.models.enums import BookmarkStatus, NextActionType, TrackerStatus
 from app.models.opportunity_change_history import OpportunityChangeHistory
+from app.models.enums import ChangeSeverity
 from app.models.user import User
 from app.services import application_requirements
+from app.services.application_state_machine import INCOMPLETE_TRACKER_STATUSES
 from app.services.user_intelligence import UserIntelligenceSnapshot, build_user_intelligence_snapshot
 
 # Application-tracker statuses that represent real, unfinished work --
 # deliberately excludes the three terminal states (APPLIED, ACCEPTED,
 # REJECTED), each of which means there is no further action to prompt.
-_INCOMPLETE_TRACKER_STATUSES = frozenset(
-    {TrackerStatus.INTERESTED.value, TrackerStatus.PREPARING_DOCS.value, TrackerStatus.INTERVIEWING.value}
-)
+# Opportunity Monitoring & Personal Impact Engine step: moved to
+# `application_state_machine.INCOMPLETE_TRACKER_STATUSES` (imported
+# above) so `personal_impact_service.py` can reuse the same definition
+# without a circular import; kept as this same local name so every
+# existing reference below is unchanged.
+_INCOMPLETE_TRACKER_STATUSES = INCOMPLETE_TRACKER_STATUSES
 
 DEADLINE_GUIDANCE_WINDOW_DAYS = 14
 RECENT_CHANGE_WINDOW_DAYS = 7
+
+# Opportunity Monitoring & Personal Impact Engine step, Part C's own
+# severity gate applied at guidance-generation time: MATERIAL and above
+# reach guidance (a pull surface); MINOR/IGNORE never do.
+_MATERIAL_PLUS_SEVERITIES = frozenset({ChangeSeverity.MATERIAL, ChangeSeverity.HIGH, ChangeSeverity.CRITICAL})
 
 
 @dataclasses.dataclass
@@ -226,6 +236,95 @@ async def _application_change_impact_guidance(
     )
 
 
+async def _saved_opportunity_material_change_guidance(
+    db: AsyncSession, *, user: User, now: dt.datetime
+) -> GuidanceItem | None:
+    """Opportunity Monitoring & Personal Impact Engine step, Part K/L:
+    the eligibility/funding/lifecycle-state generalization of
+    `_changed_deadline_guidance` above (which stays deadline-only and
+    unmodified, to avoid re-testing its existing behavior) -- surfaces
+    any OTHER MATERIAL-or-above severity change (Part C's own severity
+    gate: MINOR/IGNORE never reach guidance) recorded against a saved
+    opportunity in the last `RECENT_CHANGE_WINDOW_DAYS` days."""
+    bookmarked_ids = {b.opportunity_id for b in user.bookmarks if b.opportunity_id is not None}
+    if not bookmarked_ids:
+        return None
+
+    cutoff = now - dt.timedelta(days=RECENT_CHANGE_WINDOW_DAYS)
+    result = await db.execute(
+        select(OpportunityChangeHistory).where(
+            OpportunityChangeHistory.opportunity_id.in_(bookmarked_ids),
+            OpportunityChangeHistory.field_name != "deadline",
+            OpportunityChangeHistory.severity.in_([s.value for s in _MATERIAL_PLUS_SEVERITIES]),
+            OpportunityChangeHistory.changed_at >= cutoff,
+        )
+    )
+    changes = list(result.scalars().all())
+    if not changes:
+        return None
+
+    opp_by_id = {b.opportunity_id: b.opportunity for b in user.bookmarks if b.opportunity_id is not None}
+    actions = [
+        NextActionItem(
+            action_type=NextActionType.REVIEW_OPPORTUNITY_CHANGE.value,
+            label=f"Review the updated {c.field_name.replace('_', ' ')} for {opp_by_id[c.opportunity_id].title if opp_by_id.get(c.opportunity_id) else 'a saved opportunity'}",
+            reason=f"{c.field_name.replace('_', ' ').capitalize()} changed from \"{c.old_value}\" to \"{c.new_value}\".",
+            opportunity_id=c.opportunity_id,
+        )
+        for c in changes
+    ]
+    return GuidanceItem(
+        category="saved_opportunity_material_change",
+        message=f"{len(changes)} of your saved opportunity(ies) had a material update recently.",
+        next_actions=actions,
+    )
+
+
+async def _application_material_change_guidance(
+    db: AsyncSession, *, trackers: list[ApplicationTracker], now: dt.datetime
+) -> GuidanceItem | None:
+    """Opportunity Monitoring & Personal Impact Engine step, Part I/L:
+    the same generalization as the function above, scoped to active,
+    opportunity-linked `ApplicationTracker` rows instead of bookmarks --
+    Part I's own literal "eligibility requirement changed... review the
+    updated requirements" worked example."""
+    active_linked = {
+        t.opportunity_id: t
+        for t in trackers
+        if t.status in _INCOMPLETE_TRACKER_STATUSES and t.opportunity_id is not None
+    }
+    if not active_linked:
+        return None
+
+    cutoff = now - dt.timedelta(days=RECENT_CHANGE_WINDOW_DAYS)
+    result = await db.execute(
+        select(OpportunityChangeHistory).where(
+            OpportunityChangeHistory.opportunity_id.in_(active_linked.keys()),
+            OpportunityChangeHistory.field_name != "deadline",
+            OpportunityChangeHistory.severity.in_([s.value for s in _MATERIAL_PLUS_SEVERITIES]),
+            OpportunityChangeHistory.changed_at >= cutoff,
+        )
+    )
+    changes = list(result.scalars().all())
+    if not changes:
+        return None
+
+    actions = [
+        NextActionItem(
+            action_type=NextActionType.REVIEW_OPPORTUNITY_CHANGE.value,
+            label=f"Review the updated {c.field_name.replace('_', ' ')} for your application to {active_linked[c.opportunity_id].scholarship_name}",
+            reason=f"{c.field_name.replace('_', ' ').capitalize()} changed from \"{c.old_value}\" to \"{c.new_value}\".",
+            opportunity_id=c.opportunity_id,
+        )
+        for c in changes
+    ]
+    return GuidanceItem(
+        category="active_application_material_change",
+        message=f"{len(changes)} of your active application(s) had a material opportunity update recently.",
+        next_actions=actions,
+    )
+
+
 def _incomplete_application_guidance(*, trackers: list[ApplicationTracker]) -> GuidanceItem | None:
     incomplete = [t for t in trackers if t.status in _INCOMPLETE_TRACKER_STATUSES]
     if not incomplete:
@@ -288,9 +387,11 @@ async def build_guidance(db: AsyncSession, *, user: User, now: dt.datetime | Non
     candidate_items = [
         await _upcoming_deadline_guidance(db, user=user, now=now),
         await _changed_deadline_guidance(db, user=user, now=now),
+        await _saved_opportunity_material_change_guidance(db, user=user, now=now),
         _incomplete_application_guidance(trackers=trackers),
         await _application_missing_requirements_guidance(db, trackers=trackers),
         await _application_change_impact_guidance(db, trackers=trackers, now=now),
+        await _application_material_change_guidance(db, trackers=trackers, now=now),
         _profile_completion_guidance(snapshot),
     ]
     items = [item for item in candidate_items if item is not None]

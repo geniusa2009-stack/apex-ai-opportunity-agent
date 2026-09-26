@@ -301,6 +301,24 @@ class Opportunity(Base, TimestampMixin):
         DateTime(timezone=True), nullable=True
     )
 
+    # Opportunity Monitoring & Personal Impact Engine step, Part P: when
+    # `opportunity_reverification.reverify_opportunity` last actually
+    # attempted a re-check of this opportunity -- regardless of outcome
+    # (skipped/AI-call-failed/succeeded). Same "distinct from `updated_
+    # at`" reasoning as `lifecycle_state_evaluated_at` above: this is
+    # purely operational bookkeeping ("did the monitoring pipeline look
+    # at this row"), never opportunity content, so updating it on every
+    # attempt (including a failed one) does not violate Part Q's "source
+    # failure is not opportunity change" rule -- no CONTENT field is
+    # touched by a failed attempt, only this scheduling metadata. This is
+    # the field `find_opportunities_to_monitor`'s own tiered, oldest-
+    # checked-first ordering (Part P) reads to make forward progress
+    # through the catalog run after run, rather than reprocessing the
+    # same subset forever.
+    monitoring_last_checked_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+
     source: Mapped["Source"] = relationship(back_populates="opportunities", lazy="selectin")
     bookmarks: Mapped[list["UserBookmark"]] = relationship(
         back_populates="opportunity",
