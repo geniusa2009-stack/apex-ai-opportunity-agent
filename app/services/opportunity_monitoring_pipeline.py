@@ -22,6 +22,7 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.enums import VerificationDecisionStatus
 from app.models.opportunity import Opportunity
 from app.services.opportunity_change_notifications import create_change_notifications_for_opportunity
 from app.services.opportunity_monitoring import (
@@ -38,6 +39,16 @@ class MonitoringCycleResult:
     detected: list[DetectedChange]
     recorded: list[RecordedChange]
     notifications_created: int
+    # Real-Intelligence-Audit fix: exposed so a caller that owns a
+    # *typed* candidate representation (`opportunity_reverification.py`)
+    # can tell, without re-deriving the gate itself, whether this cycle's
+    # candidate actually cleared VERIFY -- and therefore whether it is
+    # safe to also write the candidate's own real values onto the
+    # `Opportunity` row (see that module's own docstring for why this
+    # matters). `None` means "nothing was even detected" -- verification
+    # never ran, so there is nothing this caller could safely write
+    # either.
+    verification_status: VerificationDecisionStatus | None = None
 
 
 async def process_opportunity_candidate(
@@ -63,7 +74,7 @@ async def process_opportunity_candidate(
     """
     detected = detect_meaningful_changes(opportunity, candidate)
     if not detected:
-        return MonitoringCycleResult(detected=[], recorded=[], notifications_created=0)
+        return MonitoringCycleResult(detected=[], recorded=[], notifications_created=0, verification_status=None)
 
     verification_status = verify_change_candidate(
         source_trust=source_trust, ai_is_legitimate=ai_is_legitimate, ai_confidence_score=ai_confidence_score,
@@ -85,4 +96,7 @@ async def process_opportunity_candidate(
             db, opportunity=opportunity, recorded_changes=recorded, now=now,
         )
 
-    return MonitoringCycleResult(detected=detected, recorded=recorded, notifications_created=notifications_created)
+    return MonitoringCycleResult(
+        detected=detected, recorded=recorded, notifications_created=notifications_created,
+        verification_status=verification_status,
+    )

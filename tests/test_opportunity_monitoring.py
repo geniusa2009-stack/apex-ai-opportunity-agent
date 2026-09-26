@@ -805,6 +805,262 @@ class TestSourceFailures:
 
 
 # ============================================================
+# FULL INTELLIGENCE AUDIT REGRESSION TESTS
+# ============================================================
+# Real bugs found by this repo's own full-system audit (not part of the
+# original Opportunity Monitoring phase's own test matrix). Each class
+# below reproduces the exact failure scenario the audit's evidence
+# described, confirms it against the pre-fix code would have failed,
+# and pins the fixed behavior down as a regression test.
+
+
+class TestReverificationAppliesVerifiedValues:
+    """Audit finding (P1): `reverify_opportunity` recorded a VERIFIED,
+    notifiable `OpportunityChangeHistory` row for a re-extracted field
+    but never actually wrote the new value onto the `Opportunity` row
+    itself -- the opportunity's own displayed data silently never
+    updated, and every subsequent scheduled re-check would keep
+    re-detecting the "same" real-world change forever (duplicate
+    history rows / duplicate notifications on every cycle)."""
+
+    @pytest.mark.asyncio
+    async def test_verified_deadline_reextraction_updates_the_opportunity_row(self, db_session_factory, monkeypatch):
+        async with db_session_factory() as db:
+            source_id = await _make_source(db)
+            old_deadline = _now() + dt.timedelta(days=10)
+            opp_id = await _make_opportunity(
+                db, source_id=source_id, deadline=old_deadline.isoformat(), raw_extracted_data='{"title": "x"}',
+            )
+            opp = await db.get(Opportunity, opp_id)
+
+            from dataclasses import dataclass
+            from unittest.mock import AsyncMock
+
+            import app.services.opportunity_reverification as reverification_module
+
+            new_deadline = _now() + dt.timedelta(days=40)
+
+            @dataclass
+            class FakeVerification:
+                deadline: str | None = new_deadline.isoformat()
+                eligibility_criteria: str | None = None
+                funding_details: str | None = None
+                min_age: int | None = None
+                max_age: int | None = None
+                target_gender: str | None = None
+                target_academic_levels: list | None = None
+                is_legitimate: bool = True
+                confidence_score: float = 0.99
+
+            monkeypatch.setattr(
+                reverification_module.ai_gateway, "verify_and_embed",
+                AsyncMock(return_value=(FakeVerification(), [0.0] * 8)),
+            )
+            outcome = await reverify_opportunity(db, opportunity=opp)
+
+            assert outcome.ai_call_failed is False
+            assert outcome.cycle_result.verification_status == VerificationDecisionStatus.VERIFIED
+            assert len(outcome.cycle_result.recorded) == 1  # a real deadline shift is HIGH, not IGNORE
+
+            reloaded = await db.get(Opportunity, opp_id)
+            assert reloaded.deadline is not None
+            assert abs((reloaded.deadline.replace(tzinfo=dt.timezone.utc) - new_deadline).total_seconds()) < 1
+
+    @pytest.mark.asyncio
+    async def test_reprocessing_after_the_fix_does_not_redetect_the_same_change(self, db_session_factory, monkeypatch):
+        """Direct regression test for the "fires every cycle forever" bug:
+        once the opportunity row is updated, a second re-verification
+        cycle against the SAME AI answer must find nothing new."""
+        async with db_session_factory() as db:
+            source_id = await _make_source(db)
+            opp_id = await _make_opportunity(
+                db, source_id=source_id, eligibility_criteria="Open to Egypt", raw_extracted_data='{"title": "x"}',
+            )
+
+            from dataclasses import dataclass
+            from unittest.mock import AsyncMock
+
+            import app.services.opportunity_reverification as reverification_module
+
+            @dataclass
+            class FakeVerification:
+                deadline: str | None = None
+                eligibility_criteria: str | None = "Open to Egypt and Jordan"
+                funding_details: str | None = None
+                min_age: int | None = None
+                max_age: int | None = None
+                target_gender: str | None = None
+                target_academic_levels: list | None = None
+                is_legitimate: bool = True
+                confidence_score: float = 0.99
+
+            monkeypatch.setattr(
+                reverification_module.ai_gateway, "verify_and_embed",
+                AsyncMock(return_value=(FakeVerification(), [0.0] * 8)),
+            )
+
+            opp = await db.get(Opportunity, opp_id)
+            first = await reverify_opportunity(db, opportunity=opp)
+            assert len(first.cycle_result.recorded) == 1
+
+            opp_again = await db.get(Opportunity, opp_id)
+            second = await reverify_opportunity(db, opportunity=opp_again)
+            assert second.cycle_result.detected == []  # already applied -- nothing left to detect
+            assert second.cycle_result.recorded == []
+
+            result = await db.execute(
+                select(OpportunityChangeHistory).where(OpportunityChangeHistory.opportunity_id == opp_id)
+            )
+            assert len(result.scalars().all()) == 1  # not two
+
+    @pytest.mark.asyncio
+    async def test_hold_verification_still_writes_nothing_to_the_opportunity_row(self, db_session_factory, monkeypatch):
+        """The fix must not weaken Part D/R: a HOLD (low-confidence)
+        candidate must still leave the opportunity row completely
+        untouched, exactly as before."""
+        async with db_session_factory() as db:
+            source_id = await _make_source(db)
+            opp_id = await _make_opportunity(
+                db, source_id=source_id, eligibility_criteria="Original text", raw_extracted_data='{"title": "x"}',
+            )
+            opp = await db.get(Opportunity, opp_id)
+
+            from dataclasses import dataclass
+            from unittest.mock import AsyncMock
+
+            import app.services.opportunity_reverification as reverification_module
+
+            @dataclass
+            class FakeVerification:
+                deadline: str | None = None
+                eligibility_criteria: str | None = "Wildly different text"
+                funding_details: str | None = None
+                min_age: int | None = None
+                max_age: int | None = None
+                target_gender: str | None = None
+                target_academic_levels: list | None = None
+                is_legitimate: bool = True
+                confidence_score: float = 0.1  # below threshold -> HOLD
+
+            monkeypatch.setattr(
+                reverification_module.ai_gateway, "verify_and_embed",
+                AsyncMock(return_value=(FakeVerification(), [0.0] * 8)),
+            )
+            await reverify_opportunity(db, opportunity=opp)
+
+            reloaded = await db.get(Opportunity, opp_id)
+            assert reloaded.eligibility_criteria == "Original text"
+
+
+class TestNotificationPreferenceRaceSafety:
+    """Audit finding (P1/P2): `get_or_create_preferences` had no guard
+    against a concurrent first-time insert for the same user
+    (`user_id` is this table's own primary key) -- an `IntegrityError`
+    would propagate uncaught, and (since this runs deep inside the same
+    session/transaction as an already-flushed, real `OpportunityChangeHistory`
+    row) a naive `db.rollback()` fix would have discarded that
+    unrelated, already-verified change record too.
+
+    A genuine two-connection race is not reproducible against this
+    fixture's single shared in-memory SQLite connection (StaticPool), so
+    the race is simulated deterministically: the "winning" row is
+    committed for real FIRST, then `AsyncSession.get`'s first call is
+    monkeypatched to (falsely) report "not found yet" -- reproducing the
+    exact stale-read window a real race would create -- so
+    `get_or_create_preferences` proceeds to attempt its own insert,
+    which then hits a REAL `IntegrityError` against the genuinely
+    already-committed row (not something this test's own rollback could
+    undo), exercising the actual production recovery path."""
+
+    @pytest.mark.asyncio
+    async def test_simulated_race_is_handled_without_raising_and_returns_existing_row(self, db_session_factory, monkeypatch):
+        async with db_session_factory() as db:
+            user_id = await _make_user(db)
+            await db.commit()
+
+            # The "other worker" already really committed its row.
+            await db.execute(
+                text(
+                    "INSERT INTO user_notification_preferences "
+                    "(user_id, opportunity_changes, deadline_alerts, application_alerts) "
+                    "VALUES (:uid, 1, 1, 1)"
+                ),
+                {"uid": user_id.hex},
+            )
+            await db.commit()
+
+            from sqlalchemy.ext.asyncio import AsyncSession
+
+            real_get = AsyncSession.get
+            state = {"calls": 0}
+
+            async def stale_get(self, *args, **kwargs):
+                state["calls"] += 1
+                if state["calls"] == 1:
+                    return None  # simulate the stale read that missed the real commit above
+                return await real_get(self, *args, **kwargs)
+
+            monkeypatch.setattr(AsyncSession, "get", stale_get)
+
+            result = await notification_preferences.get_or_create_preferences(db, user_id)
+            assert result.user_id == user_id
+            assert state["calls"] >= 2  # confirms the race/refetch branch actually ran
+
+    @pytest.mark.asyncio
+    async def test_race_does_not_roll_back_an_unrelated_pending_change_history_row(self, db_session_factory, monkeypatch):
+        """The savepoint-scoped fix must not discard other, unrelated
+        pending work in the same session/transaction (the failure mode a
+        bare `db.rollback()` fix would have had)."""
+        async with db_session_factory() as db:
+            source_id = await _make_source(db)
+            user_id = await _make_user(db)
+            opp_id = await _make_opportunity(db, source_id=source_id, eligibility_criteria="Original")
+            await db.commit()
+
+            await db.execute(
+                text(
+                    "INSERT INTO user_notification_preferences "
+                    "(user_id, opportunity_changes, deadline_alerts, application_alerts) "
+                    "VALUES (:uid, 1, 1, 1)"
+                ),
+                {"uid": user_id.hex},
+            )
+            await db.commit()
+
+            from app.services.change_history_service import record_change_if_meaningful
+
+            # A real, unrelated, still-uncommitted (flushed only) history
+            # row already sitting in this same session -- exactly the
+            # state `create_change_notifications_for_opportunity` leaves
+            # things in when it calls `get_or_create_preferences`.
+            row = await record_change_if_meaningful(
+                db, opportunity_id=opp_id, field_name="eligibility_criteria",
+                old_value="Original", new_value="Changed", change_reason="test",
+            )
+            assert row is not None
+
+            from sqlalchemy.ext.asyncio import AsyncSession
+
+            real_get = AsyncSession.get
+            state = {"calls": 0}
+
+            async def stale_get(self, *args, **kwargs):
+                state["calls"] += 1
+                if state["calls"] == 1:
+                    return None
+                return await real_get(self, *args, **kwargs)
+
+            monkeypatch.setattr(AsyncSession, "get", stale_get)
+
+            await notification_preferences.get_or_create_preferences(db, user_id)
+
+            # The earlier, unrelated history row must still be present in
+            # this same session (not rolled back by the savepoint above).
+            still_there = await db.get(OpportunityChangeHistory, row.id)
+            assert still_there is not None
+
+
+# ============================================================
 # SCHEDULING
 # ============================================================
 

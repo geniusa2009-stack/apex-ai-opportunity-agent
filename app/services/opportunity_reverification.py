@@ -27,6 +27,27 @@ recorded as history or propagated to any user (Part D/R).
 
 Opportunities with no `raw_extracted_data` (nothing this call can
 re-verify against) are skipped, not treated as an error.
+
+FULL INTELLIGENCE AUDIT FIX (found via this repo's own full-system
+audit, not part of the original Opportunity Monitoring phase): earlier
+versions of this module recorded a VERIFIED, HIGH/CRITICAL-severity
+`OpportunityChangeHistory` row and even a user notification for a
+changed field, but never actually wrote the new value onto the
+`Opportunity` row itself. That meant the opportunity's own displayed
+deadline/eligibility/funding/age/gender/academic-level data silently
+never updated -- permanently stale relative to its own recorded
+history -- and, because every subsequent scheduled re-check still
+compared against that same stale value, it would keep re-detecting the
+"same" real-world change and firing a fresh history row and
+notification every cycle forever (a real, user-facing duplicate-alert
+bug, not merely an internal inconsistency). This module now writes each
+VERIFIED, actually-detected field's new value onto `opportunity` itself
+(`_apply_verified_candidate_to_opportunity`, below) -- mirroring the
+exact pattern `aggregator_service.upsert_opportunity`'s own
+"structured" trust path already uses for the fields IT tracks. A HOLD
+verification (low AI confidence) still writes nothing at all, per Part
+D/R -- this fix only ever applies a candidate that already cleared the
+VERIFY gate.
 """
 
 from __future__ import annotations
@@ -37,6 +58,7 @@ import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.enums import VerificationDecisionStatus
 from app.models.opportunity import Opportunity
 from app.services.ai import ai_gateway
 from app.services.opportunity_monitoring_pipeline import MonitoringCycleResult, process_opportunity_candidate
@@ -87,7 +109,20 @@ async def reverify_opportunity(db: AsyncSession, *, opportunity: Opportunity) ->
             opportunity_id=opportunity.id, skipped_no_raw_data=False, ai_call_failed=True, cycle_result=None,
         )
 
-    candidate = {
+    # Two representations of the same re-extracted data, kept
+    # deliberately separate: `typed_values` holds the REAL, correctly-
+    # typed value for each field (a `datetime`, a `Gender` enum, a
+    # `list[AcademicLevel]`) -- what actually gets assigned onto the
+    # `Opportunity` ORM object below. `candidate` (passed to the
+    # DETECT/VERIFY/RECORD pipeline) coerces the same two enum-typed
+    # fields to their plain `.value` text, exactly as before this fix --
+    # `record_change_if_meaningful` stores `str(value)` verbatim
+    # (`change_history_service.py`), and `str(Gender.MALE)` is the ugly
+    # `"Gender.MALE"`, not `"male"`; keeping this coercion for the
+    # comparison/history/notification path avoids reintroducing that
+    # display bug while still letting the ORM assignment below use the
+    # real, correctly-typed enum value.
+    typed_values = {
         "deadline": _parse_deadline(verification.deadline, opportunity.id),
         "eligibility_criteria": verification.eligibility_criteria,
         "funding_details": verification.funding_details,
@@ -96,12 +131,7 @@ async def reverify_opportunity(db: AsyncSession, *, opportunity: Opportunity) ->
         "target_gender": _coerce_gender(verification.target_gender, opportunity.id),
         "target_academic_levels": _coerce_academic_levels(verification.target_academic_levels, opportunity.id),
     }
-    # Coerce enum-typed candidates to their plain values so
-    # `opportunity_monitoring`'s comparison/persistence logic (Part B)
-    # sees the same plain-text shape `OpportunityChangeHistory.old_value`/
-    # `new_value` already store for every other field -- matches
-    # `change_history_service`'s own established "plain-text posture"
-    # (see that module's own docstring).
+    candidate = dict(typed_values)
     if candidate["target_gender"] is not None:
         candidate["target_gender"] = candidate["target_gender"].value
     if candidate["target_academic_levels"] is not None:
@@ -113,9 +143,27 @@ async def reverify_opportunity(db: AsyncSession, *, opportunity: Opportunity) ->
         candidate=candidate,
         source_trust="ai_reextraction",
         change_reason=f"opportunity_reverification: scheduled re-check for opportunity {opportunity.id}.",
+        source_id=opportunity.source_id,
         ai_is_legitimate=verification.is_legitimate,
         ai_confidence_score=verification.confidence_score,
     )
+
+    # FULL INTELLIGENCE AUDIT FIX: only when the candidate actually
+    # cleared VERIFY (never on HOLD -- Part D/R) do we write the new,
+    # real value for each field DETECT found genuinely different onto
+    # the `Opportunity` row itself -- mirroring `aggregator_service.
+    # upsert_opportunity`'s own "structured" trust path, which already
+    # does this for the fields IT tracks. This intentionally applies
+    # every DETECTED field, not just the ones RECORD kept (an
+    # IGNORE-severity change, e.g. a deadline shift of 0 real days, is
+    # still a real, verified value worth keeping the opportunity's own
+    # column in sync with -- IGNORE only means "don't bother the user
+    # about it", never "don't trust it").
+    if cycle_result.verification_status == VerificationDecisionStatus.VERIFIED:
+        for change in cycle_result.detected:
+            setattr(opportunity, change.field_name, typed_values[change.field_name])
+        db.add(opportunity)
+
     await db.commit()
 
     return ReverificationOutcome(

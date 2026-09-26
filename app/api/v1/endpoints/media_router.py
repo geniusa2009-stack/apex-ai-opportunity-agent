@@ -169,9 +169,15 @@ async def upload_lesson_video(
     try:
         await storage_service.upload_raw_bytes(storage_path, video_bytes, file.content_type)
     except Exception as exc:
+        # Full Intelligence Audit fix: the raw exception (bucket/
+        # credential/connection internals from the storage backend) used
+        # to be interpolated straight into the client-facing `detail`
+        # string. The full detail is still logged server-side via
+        # `logger.exception` below; the client only gets a generic,
+        # non-leaking message.
         logger.exception("Raw video upload to Storage failed for lesson %s", lesson_id)
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Video upload failed: {exc}"
+            status_code=status.HTTP_502_BAD_GATEWAY, detail="Video upload failed. Please try again."
         ) from exc
 
     # Set to PENDING immediately (not left at whatever it was before --
