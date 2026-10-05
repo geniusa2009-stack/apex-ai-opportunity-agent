@@ -17,7 +17,7 @@ store. Fatal misconfigurations stop the app at startup with the setting name
 
 | Variable | Default | Notes |
 |---|---|---|
-| `AGENT_LLM_CHAIN` | — | Ordered free-only chain, `provider:model,...` (`gemini`, `openrouter`, `ollama`). Overrides the legacy pair below. |
+| `AGENT_LLM_CHAIN` | — | Ordered free-only chain, `provider:model,...` (`gemini`, `groq`, `cloudflare`, `openrouter`, `ollama`). Overrides the legacy pair below. |
 | `AGENT_LLM_RETRIES_PER_PROVIDER` | `1` | Retries on 429/503/timeouts per provider, 0–3. |
 | `AGENT_LLM_MAX_RETRY_WAIT_SECONDS` | `20` | Longer server retry-after → provider cooled down, next one tried. |
 | `AGENT_LLM_COOLDOWN_SECONDS` / `AGENT_LLM_DISABLE_SECONDS` | `60` / `3600` | Skip time after rate-limit/outage, and after auth / model-gone / cost-policy errors. |
@@ -33,6 +33,11 @@ store. Fatal misconfigurations stop the app at startup with the setting name
 | `OPENROUTER_APP_TITLE`, `OPENROUTER_HTTP_REFERER` | | optional attribution headers |
 | `OLLAMA_BASE_URL` | `http://localhost:11434/v1` | Local/private addresses only. |
 | `OLLAMA_API_KEY` | — | Usually empty. |
+| `GROQ_API_KEY` | — | existing setting, reused. |
+| `GROQ_FREE_TIER_CONFIRMED` | `false` | **Required for `groq:`**. Set `true` only after checking the Groq org is on the Free tier (the API cannot tell Free from the paid Developer tier). |
+| `GROQ_BASE_URL` | `https://api.groq.com/openai/v1` | |
+| `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` | — | Workers AI token (Workers AI read/edit) and account id. |
+| `CLOUDFLARE_WORKERS_FREE_PLAN_CONFIRMED` | `false` | **Required for `cloudflare:`**. Set `true` only after checking the account is on Workers **Free**: on Workers Paid, usage past the daily free allocation is billed, and the token cannot read the plan. |
 
 Routing: each provider gets bounded retries on 429/503/timeouts (honouring
 retry-after up to the max wait); auth errors, 404 "model unavailable" and
@@ -40,10 +45,35 @@ cost-policy blocks skip straight to the next provider; truncated output or a
 context-length 400 tries the next model. Any other HTTP 400/413/422 is an
 invalid request (`LLM_INVALID_REQUEST`): it fails clearly and is NOT hidden
 by another provider. Known provider-specific 400s (invalid key, model gone,
-region not supported) count as provider unavailable and do move on. If all fail, the job runner retries later (then dead letter)
+region not supported) count as provider unavailable and do move on, and a
+model that fails to emit valid JSON (Groq `json_validate_failed`) tries the
+next model. If all fail, the job runner retries later (then dead letter)
 for outages, sends truncation to human review, and marks config/cost errors
 FAILED. The router can only move down the configured chain — no paid model is
 ever added automatically.
+
+Recommended order (cloud first, strongest cost guarantee before weakest):
+
+```
+AGENT_LLM_CHAIN=gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite,groq:openai/gpt-oss-120b,openrouter:<vendor/model-1>:free,openrouter:<vendor/model-2>:free,cloudflare:@cf/mistralai/mistral-small-3.1-24b-instruct,ollama:<local-model>
+```
+
+Cloudflare sits after OpenRouter because OpenRouter's `:free` + `max_price=0`
+is enforced per request by OpenRouter, while Cloudflare's $0 depends on the
+account plan; its daily allocation is also the scarcest budget.
+
+### Zero-cost guard per provider
+
+| Provider | Can billing be proven via API? | Guards |
+|---|---|---|
+| Gemini | No | model must be on `AGENT_GEMINI_FREE_MODELS`; startup warning: keep the project on the free tier |
+| Groq | No | `GROQ_FREE_TIER_CONFIRMED=true` required (fail closed); model must be listed + active in the key's own catalog (fail closed if unreadable); JSON mode only if supported |
+| Cloudflare | No (token cannot read the plan) | `CLOUDFLARE_WORKERS_FREE_PLAN_CONFIRMED=true` required; catalog gate (fail closed): Text Generation, not `require_workers_paid`, not deprecated; daily allocation used up (4006) → cooldown until 00:00 UTC |
+| OpenRouter | Per request, yes | explicit `:free` id; catalog zero price (fail closed); `max_price=0` hard limit; reported cost > 0 disables the provider |
+| Ollama | n/a (local) | local/private URL only; 2 s reachability probe, skipped for 5 min when down |
+
+Model names come from env; check the providers' model lists before changing
+them (the gates refuse models that are not listed).
 
 Free tiers change; nothing in the agent depends on one staying free. With
 no LLM at all, ingestion/dedup/verification still run; extraction reports

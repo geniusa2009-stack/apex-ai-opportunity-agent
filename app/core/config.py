@@ -774,7 +774,8 @@ class Settings(BaseSettings):
     agent_llm_max_validation_retries: int = 2
     # Ordered, FREE-ONLY routing chain for the Agent (takes precedence over
     # AGENT_LLM_PROVIDER/MODEL + FALLBACK_* when set). Comma-separated
-    # "provider:model" entries, provider in gemini | openrouter | ollama.
+    # "provider:model" entries, provider in gemini | groq | cloudflare |
+    # openrouter | ollama.
     # Only the first ":" separates provider from model, so OpenRouter ids
     # such as "vendor/model:free" work. Example:
     #   gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite,
@@ -796,6 +797,18 @@ class Settings(BaseSettings):
         "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,"
         "gemini-3.5-flash-lite,gemini-3.1-flash-lite"
     )
+    # Groq (reuses GROQ_API_KEY above). The API cannot tell a Free-tier org
+    # from a paid Developer-tier one, so the agent refuses to use Groq until
+    # the operator confirms the org is on the Free tier.
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+    groq_free_tier_confirmed: bool = False
+    # Cloudflare Workers AI. Usage past the daily free allocation is BILLED
+    # on Workers Paid (it errors on Workers Free) and the token cannot read
+    # the plan, so the agent refuses to use it until the operator confirms
+    # the account is on Workers Free.
+    cloudflare_api_token: str | None = None
+    cloudflare_account_id: str | None = None
+    cloudflare_workers_free_plan_confirmed: bool = False
     # Local Ollama (or LM Studio / llama.cpp) OpenAI-compatible endpoint.
     # Must be a local/private address; public URLs are refused.
     ollama_base_url: str = "http://localhost:11434/v1"

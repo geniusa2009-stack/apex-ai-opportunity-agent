@@ -3,8 +3,12 @@
 * `GeminiProvider` -- google-genai SDK (already a backend dependency),
   same call shape the existing aggregator uses.
 * `OpenRouterProvider` -- OpenRouter, restricted to zero-priced models.
+* `GroqProvider`, `CloudflareWorkersAIProvider` -- OpenAI-compatible cloud
+  providers, gated by their own model catalog (fail closed) and by an
+  explicit operator confirmation of the free plan (billing state is not
+  readable through their APIs).
 * `OllamaProvider` -- a local OpenAI-compatible server (Ollama, LM Studio,
-  llama.cpp); refuses non-local URLs.
+  llama.cpp); refuses non-local URLs; used only when reachable.
 * `OpenAIEmbeddingProvider`, `GeminiEmbeddingProvider` -- embeddings,
   with a runtime check that every returned vector has the configured size.
 
@@ -47,10 +51,18 @@ _INVALID_KEY = re.compile(r"API_KEY_INVALID|API key not valid|invalid api key|No
 _REGION_BLOCKED = re.compile(r"location is not supported|not available in your (?:country|region)", re.IGNORECASE)
 _MODEL_GONE = re.compile(
     r"is not found for API version|not supported for generateContent|no longer available|"
-    r"No endpoints found|is not a valid model ID|model.{0,40}does not exist",
+    r"No endpoints found|is not a valid model ID|model.{0,40}does not exist|model_decommissioned|"
+    r"model_not_found|has been decommissioned|No such model",
     re.IGNORECASE,
 )
-_CONTEXT_TOO_LONG = re.compile(r"context length|context window|maximum context|too many tokens|input token count", re.IGNORECASE)
+_CONTEXT_TOO_LONG = re.compile(
+    r"context length|context window|maximum context|too many tokens|input token count|Request too large",
+    re.IGNORECASE,
+)
+# Groq: the model failed to produce valid JSON in JSON mode (model-specific).
+_JSON_GENERATION_FAILED = re.compile(r"json_validate_failed|Failed to generate JSON", re.IGNORECASE)
+# Cloudflare Workers AI: daily free allocation used up (error 4006).
+_DAILY_QUOTA = re.compile(r"\[4006\]|daily free allocation|used up your daily", re.IGNORECASE)
 
 
 def http_error(prefix: str, status: int, *, retry_after: float | None = None, detail: str = "",
@@ -71,6 +83,11 @@ def http_error(prefix: str, status: int, *, retry_after: float | None = None, de
 
     text = f"{detail} {body}"
     snippet = f": {redact(body.strip())[:160]}" if body.strip() and not detail else detail
+    if _DAILY_QUOTA.search(text):
+        # Free daily allocation exhausted: nothing to retry today. Cool the
+        # provider down until the allocation resets (00:00 UTC).
+        return AgentError(f"{prefix}: daily free allocation used up (HTTP {status})", code="LLM_QUOTA_EXHAUSTED",
+                          category=ErrorCategory.RATE_LIMIT, retry_after=seconds_until_utc_midnight())
     if status == 404 or (status == 400 and _MODEL_GONE.search(text)):
         return AgentError(f"{prefix}: model not available (HTTP {status}){snippet}", code="LLM_MODEL_UNAVAILABLE",
                           category=ErrorCategory.AUTHENTICATION)
@@ -80,12 +97,20 @@ def http_error(prefix: str, status: int, *, retry_after: float | None = None, de
     if status == 400 and _REGION_BLOCKED.search(text):
         return AgentError(f"{prefix}: not available in this region (HTTP 400)", code="LLM_PROVIDER_UNAVAILABLE",
                           category=ErrorCategory.AUTHENTICATION)
+    if status in (400, 422) and _JSON_GENERATION_FAILED.search(text):
+        return DataError(f"{prefix}: model could not produce valid JSON (HTTP {status})",
+                         code="LLM_JSON_GENERATION_FAILED")
     if status in (400, 413) and _CONTEXT_TOO_LONG.search(text):
         return DataError(f"{prefix}: input exceeds this model's context (HTTP {status})", code="LLM_CONTEXT_TOO_LONG")
     if status in (400, 413, 422):
         return DataError(f"{prefix}: invalid request (HTTP {status}){snippet}", code="LLM_INVALID_REQUEST")
     return AgentError(f"{prefix} HTTP {status}{snippet}", code=f"{prefix.upper()}_HTTP_{status}",
                       category=category_for_http_status(status), retry_after=retry_after)
+
+
+def seconds_until_utc_midnight(now: float | None = None) -> float:
+    current = time.time() if now is None else now
+    return 86400 - (current % 86400) + 60
 
 
 def _error_message(response: httpx.Response) -> str:
@@ -95,7 +120,11 @@ def _error_message(response: httpx.Response) -> str:
         error = payload.get("error") if isinstance(payload, dict) else None
         if isinstance(error, dict):
             raw = error.get("metadata", {}).get("raw") if isinstance(error.get("metadata"), dict) else None
-            return f"{error.get('message', '')} {raw or ''}"[:500]
+            extra = " ".join(str(error.get(k)) for k in ("code", "type") if error.get(k))
+            return f"{error.get('message', '')} {raw or ''} {extra}"[:500]
+        errors = payload.get("errors") if isinstance(payload, dict) else None
+        if isinstance(errors, list) and errors:  # Cloudflare v4 envelope
+            return " ".join(f"[{e.get('code')}] {e.get('message', '')}" for e in errors if isinstance(e, dict))[:500]
         return str(error or "")[:500]
     except ValueError:
         return response.text[:500]
@@ -197,6 +226,8 @@ logger = logging.getLogger(__name__)
 # is refused instead of routed to a paid endpoint.
 _ZERO_PRICE = {"prompt": 0, "completion": 0, "request": 0, "image": 0}
 _FREE_CATALOG_TTL_SECONDS = 3600
+_UNREACHABLE_COOLDOWN = 300.0
+_THINK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
 
 class OpenAICompatibleProvider:
@@ -220,6 +251,7 @@ class OpenAICompatibleProvider:
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout_seconds
         self._transport = transport
+        self.last_rate_limits: dict[str, str] = {}
         self._headers = {"Content-Type": "application/json"}
         if self._api_key:
             self._headers["Authorization"] = f"Bearer {self._api_key}"
@@ -242,6 +274,9 @@ class OpenAICompatibleProvider:
     def _extra_body(self) -> dict[str, Any]:
         return {}
 
+    def _supports_json_mode(self) -> bool:
+        return True
+
     def _after_response(self, payload: dict[str, Any]) -> None:
         """Cost-policy hook run on every successful response."""
 
@@ -257,7 +292,7 @@ class OpenAICompatibleProvider:
             "max_tokens": request.max_output_tokens,
             **self._extra_body(),
         }
-        if request.json_output:
+        if request.json_output and self._supports_json_mode():
             body["response_format"] = {"type": "json_object"}
         try:
             response = await self._post(body)
@@ -282,6 +317,7 @@ class OpenAICompatibleProvider:
             status = int(raw_code) if raw_code.isdigit() else 502
             raise http_error(self.name, status, detail=f": {str(error.get('message', ''))[:200]}")
         self._after_response(payload)
+        self.last_rate_limits = {k: v for k, v in response.headers.items() if "ratelimit" in k.lower()}
         try:
             choice = payload["choices"][0]
             text = choice["message"]["content"]
@@ -289,6 +325,9 @@ class OpenAICompatibleProvider:
             raise ExternalServiceError(f"{self.name} response has no choices", code="LLM_BAD_RESPONSE") from exc
         if choice.get("finish_reason") == "length":
             raise DataError(f"{self.name} output was truncated at max_tokens", code="LLM_OUTPUT_TRUNCATED")
+        if isinstance(text, str):
+            # Reasoning models served "raw" put their thoughts in the content.
+            text = _THINK.sub("", text).strip()
         if not text:
             raise ExternalServiceError(f"{self.name} returned empty content", code="LLM_EMPTY_RESPONSE")
         usage = payload.get("usage") or {}
@@ -415,6 +454,162 @@ class OllamaProvider(OpenAICompatibleProvider):
             raise CostPolicyError("OLLAMA_BASE_URL must point to a local/private host (a public URL could be a paid API)",
                                   code="LLM_NON_LOCAL_OLLAMA")
         super().__init__(api_key=api_key, model=model, base_url=base_url, **kwargs)
+
+    async def _before_request(self) -> None:
+        """Used only when reachable: a 2-second probe; if the local server is
+        down the router skips it for `_UNREACHABLE_COOLDOWN` seconds instead
+        of waiting for a full request timeout on every job."""
+        try:
+            async with httpx.AsyncClient(timeout=2.0, transport=self._transport) as client:
+                response = await client.get(f"{self._base_url}/models", headers=self._headers)
+        except httpx.HTTPError as exc:
+            raise ExternalServiceError(f"ollama not reachable ({type(exc).__name__})", code="LLM_PROVIDER_UNREACHABLE",
+                                       retry_after=_UNREACHABLE_COOLDOWN) from exc
+        if response.status_code >= 400:
+            raise ExternalServiceError(f"ollama not ready (HTTP {response.status_code})",
+                                       code="LLM_PROVIDER_UNREACHABLE", retry_after=_UNREACHABLE_COOLDOWN)
+
+
+class _CatalogGatedProvider(OpenAICompatibleProvider):
+    """Shared fail-closed catalog gate: before the first call (and hourly)
+    the provider's own model list is read; if it cannot be read, nothing is
+    sent. Subclasses implement `_fetch_catalog` and `_check_entry`."""
+
+    def __init__(self, *, clock=time.monotonic, **kwargs: Any):
+        super().__init__(**kwargs)
+        self._clock = clock
+        self._verified_until = 0.0
+        self._disabled_reason: str | None = None
+        self._entry: dict[str, Any] = {}
+
+    async def _fetch_catalog(self, client: httpx.AsyncClient) -> list[dict[str, Any]] | None:
+        raise NotImplementedError
+
+    def _entry_id(self, entry: dict[str, Any]) -> str | None:
+        return entry.get("id")
+
+    def _check_entry(self, entry: dict[str, Any]) -> None:
+        """Raise if the catalog entry is not allowed under the zero-cost policy."""
+
+    async def _before_request(self) -> None:
+        if self._disabled_reason:
+            raise CostPolicyError(self._disabled_reason, code="LLM_PAID_MODEL_BLOCKED")
+        if self._clock() < self._verified_until:
+            return
+        try:
+            async with self._client() as client:
+                catalog = await self._fetch_catalog(client)
+        except (httpx.HTTPError, ValueError) as exc:
+            raise ExternalServiceError(f"{self.name} model catalog unreachable ({type(exc).__name__}); refusing to "
+                                       "call a model that cannot be verified", code="LLM_FREE_CHECK_UNAVAILABLE") from exc
+        if not isinstance(catalog, list):
+            raise ExternalServiceError(f"{self.name} model catalog unavailable; refusing to call an unverified model",
+                                       code="LLM_FREE_CHECK_UNAVAILABLE")
+        entry = next((m for m in catalog if isinstance(m, dict) and self._entry_id(m) == self.model), None)
+        if entry is None:
+            raise AgentError(f"{self.name} model {self.model!r} is not in the account's model catalog",
+                             code="LLM_MODEL_UNAVAILABLE", category=ErrorCategory.AUTHENTICATION)
+        try:
+            self._check_entry(entry)
+        except CostPolicyError as exc:
+            self._disabled_reason = exc.message
+            logger.error("cost_policy: %s", exc.message)
+            raise
+        self._entry = entry
+        self._verified_until = self._clock() + _FREE_CATALOG_TTL_SECONDS
+
+
+class GroqProvider(_CatalogGatedProvider):
+    """Groq (OpenAI-compatible). The API cannot tell a Free-tier org from a
+    paid Developer-tier org (its catalog lists the paid-tier prices either
+    way), so the provider refuses to run until the operator confirms the org
+    is on the Free tier (GROQ_FREE_TIER_CONFIRMED=true). On the Free tier,
+    exhausted limits return 429 instead of billing. The model must be listed
+    and active for this key; JSON mode is used only if the model supports it.
+    """
+
+    name = "groq"
+
+    def __init__(self, *, api_key: str | None, model: str | None, free_tier_confirmed: bool = False,
+                 base_url: str = "https://api.groq.com/openai/v1", **kwargs: Any):
+        _require(api_key, "GROQ_API_KEY")
+        if not free_tier_confirmed:
+            raise CostPolicyError(
+                "groq billing tier cannot be verified via the API; set GROQ_FREE_TIER_CONFIRMED=true only after "
+                "checking the org is on the Free tier", code="LLM_FREE_TIER_UNCONFIRMED")
+        super().__init__(api_key=api_key, model=model, base_url=base_url, **kwargs)
+
+    async def _fetch_catalog(self, client: httpx.AsyncClient) -> list[dict[str, Any]] | None:
+        response = await client.get(f"{self._base_url}/models", headers=self._headers)
+        return response.json().get("data") if response.status_code < 400 else None
+
+    def _check_entry(self, entry: dict[str, Any]) -> None:
+        if entry.get("active") is False:
+            raise AgentError(f"groq model {self.model!r} is not active", code="LLM_MODEL_UNAVAILABLE",
+                             category=ErrorCategory.AUTHENTICATION)
+        outputs = entry.get("output_modalities")
+        if isinstance(outputs, list) and "text" not in outputs:
+            raise AgentError(f"groq model {self.model!r} does not generate text", code="LLM_MODEL_UNAVAILABLE",
+                             category=ErrorCategory.AUTHENTICATION)
+
+    def _supports_json_mode(self) -> bool:
+        features = self._entry.get("supported_features")
+        return not isinstance(features, list) or "json_mode" in features
+
+
+class CloudflareWorkersAIProvider(_CatalogGatedProvider):
+    """Cloudflare Workers AI (OpenAI-compatible endpoint). Every model draws
+    on the account's daily free allocation; past it, Workers Free accounts get
+    an error (4006) while Workers Paid accounts are BILLED. The API token
+    cannot read the plan, so the provider refuses to run until the operator
+    confirms Workers Free (CLOUDFLARE_WORKERS_FREE_PLAN_CONFIRMED=true).
+    Catalog gate: the model must be a Text Generation model of this account,
+    not flagged `require_workers_paid`, not past its deprecation date.
+    Quota exhaustion -> RATE_LIMIT with a cooldown until 00:00 UTC.
+    """
+
+    name = "cloudflare"
+
+    def __init__(self, *, api_token: str | None, account_id: str | None, model: str | None,
+                 free_plan_confirmed: bool = False, api_base: str = "https://api.cloudflare.com/client/v4",
+                 **kwargs: Any):
+        _require(api_token, "CLOUDFLARE_API_TOKEN")
+        account = _require(account_id, "CLOUDFLARE_ACCOUNT_ID")
+        if not free_plan_confirmed:
+            raise CostPolicyError(
+                "cloudflare Workers plan cannot be verified with this token; set "
+                "CLOUDFLARE_WORKERS_FREE_PLAN_CONFIRMED=true only after checking the account is on Workers Free",
+                code="LLM_FREE_TIER_UNCONFIRMED")
+        self._account_base = f"{api_base.rstrip('/')}/accounts/{account}"
+        super().__init__(api_key=api_token, model=model, base_url=f"{self._account_base}/ai/v1", **kwargs)
+
+    async def _fetch_catalog(self, client: httpx.AsyncClient) -> list[dict[str, Any]] | None:
+        models: list[dict[str, Any]] = []
+        for page in range(1, 6):
+            response = await client.get(f"{self._account_base}/ai/models/search", headers=self._headers,
+                                        params={"task": "Text Generation", "per_page": 100, "page": page})
+            body = response.json()
+            if response.status_code >= 400 or not body.get("success"):
+                return None
+            result = body.get("result") or []
+            models.extend(result)
+            info = body.get("result_info") or {}
+            if len(result) < 100 or page >= int(info.get("total_pages") or 1):
+                break
+        return models
+
+    def _entry_id(self, entry: dict[str, Any]) -> str | None:
+        return entry.get("name")
+
+    def _check_entry(self, entry: dict[str, Any]) -> None:
+        props = {p.get("property_id"): p.get("value") for p in entry.get("properties", []) if isinstance(p, dict)}
+        if str(props.get("require_workers_paid", "")).lower() in ("true", "1"):
+            raise CostPolicyError(f"cloudflare model {self.model!r} requires Workers Paid; refused",
+                                  code="LLM_PAID_MODEL_BLOCKED")
+        deprecation = props.get("planned_deprecation_date")
+        if deprecation and str(deprecation)[:10] <= time.strftime("%Y-%m-%d", time.gmtime()):
+            raise AgentError(f"cloudflare model {self.model!r} is deprecated", code="LLM_MODEL_UNAVAILABLE",
+                             category=ErrorCategory.AUTHENTICATION)
 
 
 # --------------------------------------------------------------------------

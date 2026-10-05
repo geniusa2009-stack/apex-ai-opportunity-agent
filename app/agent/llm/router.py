@@ -14,8 +14,8 @@ Per provider (one "slot" = provider + model):
 * AUTHENTICATION (401/402/403, model unavailable/404, cost-policy block,
   configuration): no retry; the slot is disabled for `disable_seconds`
   and the router moves on.
-* LLM_OUTPUT_TRUNCATED / LLM_CONTEXT_TOO_LONG: the next slot is tried (a
-  different model may fit); no cooldown.
+* LLM_OUTPUT_TRUNCATED / LLM_CONTEXT_TOO_LONG / LLM_JSON_GENERATION_FAILED:
+  model-specific limits; the next slot is tried; no cooldown.
 * any other DATA / VALIDATION (LLM_INVALID_REQUEST = an unrecognised HTTP
   400/413/422): raised immediately -- an invalid request must fail clearly,
   not be hidden by another provider. Known provider-specific 400s (invalid
@@ -62,7 +62,7 @@ from app.agent.observability import log_stage
 TRUNCATED = "LLM_OUTPUT_TRUNCATED"
 # DATA errors that depend on the MODEL, not on our request: another model
 # may succeed. Every other DATA/VALIDATION error is raised immediately.
-FALLBACK_DATA_CODES = frozenset({TRUNCATED, "LLM_CONTEXT_TOO_LONG"})
+FALLBACK_DATA_CODES = frozenset({TRUNCATED, "LLM_CONTEXT_TOO_LONG", "LLM_JSON_GENERATION_FAILED"})
 _RETRYABLE = frozenset(
     {ErrorCategory.RATE_LIMIT, ErrorCategory.TRANSIENT, ErrorCategory.EXTERNAL_SERVICE, ErrorCategory.SYSTEM}
 )

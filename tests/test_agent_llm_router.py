@@ -236,6 +236,8 @@ async def test_ollama_talks_openai_compatible_without_a_key():
     seen = {}
 
     def handler(request):
+        if request.method == "GET":  # reachability probe
+            return httpx.Response(200, json={"data": [{"id": "llama3.2"}]})
         seen["url"], seen["auth"] = str(request.url), request.headers.get("authorization")
         seen["body"] = json.loads(request.content)
         return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]})

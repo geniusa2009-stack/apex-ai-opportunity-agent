@@ -18,7 +18,7 @@ from app.core.config import settings as global_settings
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_LLM_PROVIDERS = frozenset({"gemini", "openrouter", "ollama", "none"})
+SUPPORTED_LLM_PROVIDERS = frozenset({"gemini", "groq", "cloudflare", "openrouter", "ollama", "none"})
 SUPPORTED_EMBEDDING_PROVIDERS = frozenset({"openai", "gemini", "none"})
 SUPPORTED_WRITER_MODES = frozenset({"template", "llm"})
 SUPPORTED_WHATSAPP_CONNECTORS = frozenset({"disabled", "mock", "cloud_api", "bridge"})
@@ -117,6 +117,20 @@ def collect_config_problems(cfg: Settings) -> list[ConfigProblem]:
         if provider == "openrouter" and model and not model.endswith(":free"):
             fatal(chain_setting, f"openrouter model {model!r} is not an explicit ':free' route; refusing a possibly "
                                  "paid model")
+        if provider == "groq":
+            if not cfg.groq_api_key:
+                fatal("GROQ_API_KEY", f"required by {chain_setting} (groq)")
+            if not cfg.groq_free_tier_confirmed:
+                fatal("GROQ_FREE_TIER_CONFIRMED", "Groq's billing tier is not readable via its API: set to true only "
+                                                  "after confirming the org is on the Free tier")
+        if provider == "cloudflare":
+            for setting, value in (("CLOUDFLARE_API_TOKEN", cfg.cloudflare_api_token),
+                                   ("CLOUDFLARE_ACCOUNT_ID", cfg.cloudflare_account_id)):
+                if not value:
+                    fatal(setting, f"required by {chain_setting} (cloudflare)")
+            if not cfg.cloudflare_workers_free_plan_confirmed:
+                fatal("CLOUDFLARE_WORKERS_FREE_PLAN_CONFIRMED", "Workers Paid bills usage past the free allocation and "
+                      "the token cannot read the plan: set to true only after confirming Workers Free")
         if provider == "ollama" and not is_local_base_url(cfg.ollama_base_url):
             fatal("OLLAMA_BASE_URL", "must be a local/private address (a public URL could be a paid API)")
     if not llm_entries:

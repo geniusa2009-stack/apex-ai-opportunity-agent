@@ -47,18 +47,22 @@ __all__ = [
 ]
 
 
-SUPPORTED_CHAIN_PROVIDERS = frozenset({"gemini", "openrouter", "ollama"})
+SUPPORTED_CHAIN_PROVIDERS = frozenset({"gemini", "groq", "cloudflare", "openrouter", "ollama"})
 
 
 def build_provider(name: str | None, model: str | None, cfg: Settings) -> LLMProvider | None:
     """Build ONE provider, enforcing the free-only policy:
 
     * gemini: the model must be on AGENT_GEMINI_FREE_MODELS (free tier);
-    * openrouter: verified zero-priced at call time (see OpenRouterProvider);
+    * groq / cloudflare: free plan confirmed by the operator + model checked
+      against the provider's own catalog at call time (fail closed);
+    * openrouter: explicit ':free' id, verified zero-priced at call time;
     * ollama: the base URL must be local/private.
     """
     from app.agent.llm.providers import (
+        CloudflareWorkersAIProvider,
         GeminiProvider,
+        GroqProvider,
         OllamaProvider,
         OpenRouterProvider,
     )
@@ -80,6 +84,22 @@ def build_provider(name: str | None, model: str | None, cfg: Settings) -> LLMPro
             base_url=cfg.openrouter_base_url,
             app_title=cfg.openrouter_app_title,
             http_referer=cfg.openrouter_http_referer,
+            timeout_seconds=cfg.agent_llm_timeout_seconds,
+        )
+    if name == "groq":
+        return GroqProvider(
+            api_key=cfg.groq_api_key,
+            model=model,
+            free_tier_confirmed=cfg.groq_free_tier_confirmed,
+            base_url=cfg.groq_base_url,
+            timeout_seconds=cfg.agent_llm_timeout_seconds,
+        )
+    if name == "cloudflare":
+        return CloudflareWorkersAIProvider(
+            api_token=cfg.cloudflare_api_token,
+            account_id=cfg.cloudflare_account_id,
+            model=model,
+            free_plan_confirmed=cfg.cloudflare_workers_free_plan_confirmed,
             timeout_seconds=cfg.agent_llm_timeout_seconds,
         )
     if name == "ollama":
