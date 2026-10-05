@@ -156,6 +156,15 @@ CREATE TABLE research_trajectory_steps (
     error_reason VARCHAR(500), created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, step_metadata TEXT
 )
 """
+_CREATE_OPPORTUNITY_CHANGE_HISTORY_SQL = """
+CREATE TABLE opportunity_change_history (
+    id VARCHAR(36) PRIMARY KEY, opportunity_id VARCHAR(36) NOT NULL, field_name VARCHAR(50) NOT NULL,
+    old_value TEXT, new_value TEXT, source_id VARCHAR(36), evidence_id VARCHAR(36),
+    change_reason TEXT NOT NULL, severity VARCHAR(20),
+    changed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
 
 _CREATE_ENTITY_RELATIONSHIPS_SQL = """
 CREATE TABLE entity_relationships (
@@ -187,6 +196,7 @@ async def db_session_factory():
         await conn.execute(text(_CREATE_ENTITY_RELATIONSHIPS_SQL))
         await conn.execute(text(_CREATE_RESEARCH_TRAJECTORIES_SQL))
         await conn.execute(text(_CREATE_RESEARCH_TRAJECTORY_STEPS_SQL))
+        await conn.execute(text(_CREATE_OPPORTUNITY_CHANGE_HISTORY_SQL))
     session_factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
     yield session_factory
     await engine.dispose()
@@ -561,6 +571,60 @@ class TestIsVerifiedWritePathIsEvidenceBacked:
             assert claim_count > 0
             assert evidence_count > 0
 
+            # F-LIFECYCLE regression (P0-A): before this fix,
+            # `opportunity_state_machine.reevaluate_opportunity_state` had
+            # zero production callers -- `lifecycle_state` would still be
+            # stuck at its "discovered" default here even though D6
+            # reached a real VERIFIED decision. This is the one real
+            # production call site's own proof: a VERIFIED decision with
+            # no deadline-closure signal must advance lifecycle_state to
+            # "open" (not leave it at "discovered"), and must leave
+            # exactly one real audit-trail row behind.
+            lifecycle_row = (await db.execute(
+                text("SELECT lifecycle_state, lifecycle_state_reason, lifecycle_state_evaluated_at "
+                     "FROM opportunities WHERE id = :id"),
+                {"id": opp_id.hex},
+            )).first()
+            assert lifecycle_row[0] == "open"
+            assert lifecycle_row[1] is not None
+            assert lifecycle_row[2] is not None
+
+            history_row = (await db.execute(
+                text("SELECT field_name, old_value, new_value FROM opportunity_change_history "
+                     "WHERE opportunity_id = :id"),
+                {"id": opp_id.hex},
+            )).first()
+            assert history_row == ("lifecycle_state", "discovered", "open")
+
+    async def test_reevaluate_opportunity_state_is_actually_called_by_the_production_loop(
+        self, db_session_factory
+    ):
+        """F-LIFECYCLE regression (P0-A), direct wiring proof: patches
+        `opportunity_state_machine.reevaluate_opportunity_state` itself
+        (as imported into `app.workers.tasks`) and asserts the production
+        loop calls it exactly once per processed opportunity, with the
+        real opportunity id -- not just that its downstream side effects
+        happen to match, but that the real production function is the one
+        actually invoked."""
+        from app.workers.tasks import _verify_new_opportunities
+
+        async with db_session_factory() as db:
+            source_id = await _make_source(db)
+            opp_id = await _make_opportunity(db, source_id=source_id, raw='{"description": "Real listing text."}')
+
+        with _mock_verify_and_embed():
+            with patch("app.workers.tasks.AsyncSessionLocal", db_session_factory), patch(
+                "app.workers.tasks.engine", new=AsyncMock()
+            ), patch(
+                "app.workers.tasks.opportunity_state_machine.reevaluate_opportunity_state",
+                new=AsyncMock(wraps=None),
+            ) as mock_reevaluate:
+                await _verify_new_opportunities(limit=10)
+
+        mock_reevaluate.assert_called_once()
+        _, kwargs = mock_reevaluate.call_args
+        assert kwargs["opportunity_id"] == opp_id
+
     async def test_ai_legitimate_alone_cannot_verify_when_d6_pipeline_fails(self, db_session_factory):
         """No LLM output alone can set is_verified: even with
         is_legitimate=True and confidence above threshold, if D6's real
@@ -616,3 +680,24 @@ class TestIsVerifiedWritePathIsEvidenceBacked:
         async with db_session_factory() as db:
             row = (await db.execute(text("SELECT is_verified FROM opportunities WHERE id = :id"), {"id": opp_id.hex})).first()
             assert row[0] == 0
+
+            # F-LIFECYCLE regression (P0-A): proves the real production
+            # wiring reaches this non-VERIFIED branch too, not just the
+            # VERIFIED happy path above. Expected result here is
+            # "discovered", not "conflict" -- and that is itself the
+            # correct, intentional behavior to lock in: `_run_d6_evidence_
+            # pipeline` is mocked in this test (no real Claim/Evidence rows
+            # exist), and `reevaluate_opportunity_state` never trusts this
+            # function's own already-computed `fake_decision` object --
+            # it independently re-derives the D6 status from the real,
+            # persisted evidence via `evidence_verification.
+            # evaluate_verification_readonly` (see that module's own
+            # docstring). Zero real claims evaluated correctly proposes
+            # DISCOVERED ("not yet established"), never a HOLD/CONFLICT
+            # this opportunity's real evidence never actually earned --
+            # exactly Part G's "no raw text/LLM output reaches this
+            # module" trust boundary holding even against a mocked caller.
+            lifecycle_row = (await db.execute(
+                text("SELECT lifecycle_state FROM opportunities WHERE id = :id"), {"id": opp_id.hex}
+            )).first()
+            assert lifecycle_row[0] == "discovered"

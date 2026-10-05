@@ -720,6 +720,31 @@ class Settings(BaseSettings):
     # multi-day window).
     live_session_reminder_minutes_before: int = 60
 
+    # APEX Staging Deployment Readiness: the app previously had NO CORS
+    # configuration at all (confirmed: no `CORSMiddleware` anywhere in
+    # this codebase before this step). That was invisible in every
+    # deployment so far because the frontend has always called this
+    # backend via a RELATIVE path (`const API_BASE = '/api/v1'`, same
+    # convention in all 19 frontend pages that call the API) -- i.e.
+    # same-origin, where CORS is irrelevant. It only becomes a real gap
+    # the moment frontend and backend are deployed to two DIFFERENT
+    # origins (e.g. a separate static host + a separate API host), which
+    # is what a conventional staging split would do.
+    #
+    # Comma-separated list of exact allowed origins (e.g.
+    # "https://staging-apex.example.com"), read from `CORS_ORIGINS`.
+    # Deliberately NOT a wildcard, and deliberately opt-in: an empty
+    # value (the default) adds the middleware with zero allowed origins,
+    # which is the exact same "no cross-origin access" behavior this app
+    # already had with no CORS middleware at all -- so this setting is
+    # pure addition, not a behavior change, until a staging/production
+    # deployment actually sets it.
+    cors_origins: str = ""
+
+    @property
+    def cors_allowed_origins(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
 
 def get_settings() -> Settings:
     """Cached settings accessor so we don't re-parse env vars on every call."""

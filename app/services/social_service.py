@@ -6,7 +6,7 @@ from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types as genai_types
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
@@ -235,6 +235,159 @@ async def _get_friend_ids(db: AsyncSession, user_id: UUID) -> set[UUID]:
     return friend_ids
 
 
+def _relationship_from_friend_ids(friend_ids: set[UUID], viewer_id: UUID, target_id: UUID) -> str:
+    """Pure, no-query classifier -- "self"/"connection"/"stranger" given
+    an already-fetched friend-id set. Factored out of `get_relationship`
+    so `get_relationships_bulk` (below) can classify many targets
+    against ONE fetched set instead of re-fetching it per target."""
+    if viewer_id == target_id:
+        return "self"
+    return "connection" if target_id in friend_ids else "stranger"
+
+
+async def get_relationship(db: AsyncSession, viewer_id: UUID, target_id: UUID) -> str:
+    """Server-resolved relationship of `viewer_id` to a SINGLE
+    `target_id` -- "self", "connection", or "stranger". This is the ONE
+    place that resolution happens for a single-target lookup (e.g.
+    `GET /users/{user_id}/profile`); `app/services/privacy_service.py`'s
+    field filtering calls this or `get_relationships_bulk` rather than
+    each re-deriving it (or, worse, trusting a client-supplied
+    relationship claim -- Rule 3: the server is the security boundary).
+
+    For resolving MANY targets against the same viewer in one request
+    (e.g. `GET /users/search`'s result list), use `get_relationships_
+    bulk` instead -- calling this function once per row in a loop
+    re-fetches the SAME viewer friend-id set on every iteration, an N+1
+    query pattern confirmed during this phase's performance audit."""
+    if viewer_id == target_id:
+        return "self"
+    friend_ids = await _get_friend_ids(db, viewer_id)
+    return _relationship_from_friend_ids(friend_ids, viewer_id, target_id)
+
+
+async def get_relationships_bulk(
+    db: AsyncSession, viewer_id: UUID, target_ids: list[UUID]
+) -> dict[UUID, str]:
+    """PERFORMANCE FIX (Final Hardening Gate, Section 3): `GET /users/
+    search` used to call `get_relationship` once per result row, and
+    each call independently re-ran the SAME `_get_friend_ids(db,
+    viewer_id)` query -- a real N+1, confirmed by counting queries in
+    `tests/test_privacy.py::TestSearchPerformance` before this fix (N
+    friend-list queries for N results) and after (exactly 1, regardless
+    of N). `viewer_id`'s friend-id set is fetched exactly ONCE here and
+    reused to classify every target in `target_ids` -- O(1) additional
+    queries with respect to result-set size, not O(N)."""
+    friend_ids = await _get_friend_ids(db, viewer_id)
+    return {
+        target_id: _relationship_from_friend_ids(friend_ids, viewer_id, target_id)
+        for target_id in target_ids
+    }
+
+
+ConnectionState = str  # "self" | "connected" | "request_sent" | "request_received" | "none"
+
+
+async def _get_edges_touching(db: AsyncSession, viewer_id: UUID) -> list[UserConnection]:
+    """Every `UserConnection` row where `viewer_id` is EITHER party,
+    any status -- the one query `get_connection_state(s)` below is built
+    on. Separate from `_get_friend_ids` (which only wants ACCEPTED rows,
+    collapsed to a bare id set) because connection-STATE resolution
+    (Network 2.0) also needs to tell a pending outgoing request apart
+    from a pending incoming one, which requires the row's direction and
+    status, not just "are we connected or not"."""
+    result = await db.execute(
+        select(UserConnection).where(
+            or_(UserConnection.user_id == viewer_id, UserConnection.friend_id == viewer_id)
+        )
+    )
+    return list(result.scalars().all())
+
+
+def _connection_state_from_edges(
+    edges: list[UserConnection], viewer_id: UUID, target_id: UUID
+) -> str:
+    """Pure, no-query classifier -- NETWORK 2.0's canonical UI
+    connection-state contract, resolved server-side from the SAME
+    `UserConnection` rows `get_relationship` already uses (no second,
+    parallel social-graph model -- see this module's own docstring on
+    why `UserConnection` is the one source of truth). Distinct from
+    `Relationship` (self/connection/stranger, used for PRIVACY field
+    filtering): this is a finer-grained, UI-only classification that
+    tells a pending outgoing request apart from a pending incoming one
+    so the frontend can render the right action (Connect / Request
+    Sent / Accept+Decline / Message) without guessing or trusting any
+    client-supplied state.
+
+    One of: "self", "connected", "request_sent", "request_received",
+    "none"."""
+    if viewer_id == target_id:
+        return "self"
+    for edge in edges:
+        other_id = edge.friend_id if edge.user_id == viewer_id else edge.user_id
+        if other_id != target_id:
+            continue
+        if edge.status == "accepted":
+            return "connected"
+        if edge.status == "pending":
+            return "request_sent" if edge.user_id == viewer_id else "request_received"
+        # "declined" rows carry no live state -- see `request_friend`'s
+        # own docstring: a declined edge no longer blocks a fresh
+        # request in either direction, so it classifies the same as no
+        # edge at all here.
+    return "none"
+
+
+async def get_connection_state(db: AsyncSession, viewer_id: UUID, target_id: UUID) -> str:
+    """Server-resolved connection state of `viewer_id` to a SINGLE
+    `target_id` -- see `_connection_state_from_edges`'s docstring for
+    the full contract. Single-target counterpart of
+    `get_connection_states_bulk` below; use that one instead when
+    resolving many targets against the same viewer in one request (same
+    N+1 reasoning as `get_relationship`/`get_relationships_bulk`)."""
+    if viewer_id == target_id:
+        return "self"
+    edges = await _get_edges_touching(db, viewer_id)
+    return _connection_state_from_edges(edges, viewer_id, target_id)
+
+
+async def get_connection_states_bulk(
+    db: AsyncSession, viewer_id: UUID, target_ids: list[UUID]
+) -> dict[UUID, str]:
+    """PERFORMANCE: bulk counterpart of `get_connection_state`, same
+    "fetch the viewer's edges exactly once, classify every target in
+    Python" shape as `get_relationships_bulk` -- O(1) additional
+    queries with respect to `target_ids`' length, not O(N). Used by
+    `GET /users/search` to annotate each result row with a real
+    connection-state-aware action, without adding a query per row."""
+    edges = await _get_edges_touching(db, viewer_id)
+    return {
+        target_id: _connection_state_from_edges(edges, viewer_id, target_id)
+        for target_id in target_ids
+    }
+
+
+async def list_pending_incoming_requests(db: AsyncSession, user_id: UUID) -> list[tuple[UserConnection, User]]:
+    """Necessary plumbing behind the new `GET /social/friends/requests/
+    pending` endpoint -- disclosed gap found during this phase's audit:
+    `respond_to_friend_request` (accept/decline) already existed and is
+    IDOR-safe (recipient-only, row-locked), but nothing let a recipient
+    actually SEE their own incoming pending requests to act on -- no
+    endpoint listed them, and `notifications.js` renders no accept/
+    decline UI keyed by a notification's `payload.connection_id` despite
+    an existing code comment claiming it does. Every request created by
+    `request_friend` was reachable only by already knowing its
+    `connection_id` out of band. Returns (connection, sender) pairs,
+    oldest first, so the router can build a minimal, sensitive-field-
+    free `PendingFriendRequestOut` per row without a second query."""
+    result = await db.execute(
+        select(UserConnection, User)
+        .join(User, User.id == UserConnection.user_id)
+        .where(UserConnection.friend_id == user_id, UserConnection.status == "pending")
+        .order_by(UserConnection.created_at.asc())
+    )
+    return [(connection, sender) for connection, sender in result.all()]
+
+
 async def get_feed(db: AsyncSession, user_id: UUID) -> list[AchievementPost]:
     """Necessary plumbing behind `GET /social/feed` -- the ask names the
     endpoint ("Returns a feed of public achievements and friends'
@@ -366,8 +519,28 @@ async def request_friend(db: AsyncSession, user_id: UUID, friend_id: UUID) -> Us
     friend-request each other around the same time would end up with
     two permanently-`pending` rows instead of becoming friends. If
     they're already `accepted` friends, this is a harmless idempotent
-    no-op that returns the existing connection.
-    """
+    no-op that returns the existing connection. A `declined` reverse row
+    carries no live state (see below) and falls through to normal
+    forward-direction handling rather than being returned as-is.
+
+    LIFECYCLE FIX (Network 2.0, Phase 8's explicit "DECLINE -> NO
+    CONNECTION" state diagram): the previous implementation had no
+    forward-direction existing-row check at all -- a fresh request
+    after an earlier DECLINED one (in either direction) hit the
+    `(user_id, friend_id)` UNIQUE constraint on INSERT and was
+    misreported as `DuplicateConnectionError`, permanently blocking the
+    original sender from ever re-requesting that person again. A
+    declined connection is a real, legitimate terminal state a user
+    should be able to move on from (NO_CONNECTION), not a permanent
+    dead end. Fixed by checking for an existing FORWARD row first and
+    reusing it: `declined` -> flipped back to `pending` (a genuine new
+    ask, re-notifies the recipient); `pending` -> `DuplicateConnectionError`
+    (a real, still-open duplicate); `accepted` -> returned as-is
+    (idempotent, already friends). Only the true "no row exists at all"
+    case still falls through to a fresh INSERT, with the original
+    `IntegrityError` catch kept as a race-condition safety net (two
+    concurrent first-time requests, covered by `tests/test_social_
+    concurrency.py`)."""
     if user_id == friend_id:
         raise SelfConnectionError("A student can't send a friend request to themselves.")
 
@@ -383,7 +556,41 @@ async def request_friend(db: AsyncSession, user_id: UUID, friend_id: UUID) -> Us
             db.add(reverse_row)
             await db.commit()
             await db.refresh(reverse_row)
-        return reverse_row
+            return reverse_row
+        if reverse_row.status == "accepted":
+            return reverse_row
+        # status == "declined": no special handling -- fall through to
+        # the forward-direction check below, which is the row that
+        # actually matters for a NEW request initiated by `user_id`.
+
+    forward_result = await db.execute(
+        select(UserConnection).where(
+            UserConnection.user_id == user_id, UserConnection.friend_id == friend_id
+        )
+    )
+    forward_row = forward_result.scalar_one_or_none()
+    if forward_row is not None:
+        if forward_row.status == "accepted":
+            return forward_row
+        if forward_row.status == "pending":
+            raise DuplicateConnectionError(
+                f"A connection between {user_id} and {friend_id} already exists."
+            )
+        # status == "declined": reuse the row, flip back to pending --
+        # a genuine new request, not a duplicate of the old one.
+        forward_row.status = "pending"
+        db.add(forward_row)
+        await db.commit()
+        await db.refresh(forward_row)
+        try:
+            await notification_service.create_notification(
+                db, friend_id, "SYSTEM", "New friend request",
+                "You have a new study-buddy friend request.",
+                payload={"type": "friend_request", "connection_id": str(forward_row.id)},
+            )
+        except Exception:
+            logger.exception("Notifications: failed to notify user %s of friend request", friend_id)
+        return forward_row
 
     connection = UserConnection(user_id=user_id, friend_id=friend_id, status="pending")
     db.add(connection)
@@ -420,22 +627,51 @@ async def respond_to_friend_request(
     one, every connection created by `request_friend` would be stuck
     `pending` forever, and `get_friends_list`/the feed's `friends_only`
     visibility would never have anyone to show. `action` is `"accept"`
-    or `"decline"`."""
+    or `"decline"`.
+
+    CONCURRENCY FIX (Final Hardening Gate, Section 9): this used to do
+    a `SELECT ... FOR UPDATE` row-lock read followed by a separate
+    UPDATE, relying on the lock to serialize two concurrent responses to
+    the same request. Real concurrency testing
+    (`tests/test_social_concurrency.py`, cases B/C, run as genuinely
+    interleaved `asyncio` tasks against independent DB connections)
+    proved that lock hint is a silent no-op under SQLite -- both
+    concurrent calls observed `status="pending"` before either wrote,
+    and BOTH completed without raising, a "last write wins" LOST UPDATE
+    with no error at all. Rewritten to use a single atomic conditional
+    UPDATE (`WHERE id = ... AND status = 'pending'`) and check its
+    matched-row count instead of trusting a prior SELECT's snapshot: a
+    single UPDATE statement's WHERE clause is evaluated and applied
+    atomically per-row by any real SQL engine (SQLite included), so
+    exactly one concurrent caller can ever flip `pending` -> a terminal
+    status, and every other concurrent caller sees 0 rows matched and
+    raises `InvalidStateError` -- this does not depend on `FOR UPDATE`
+    support at all, so it is correct on both SQLite and Postgres."""
     result = await db.execute(
-        select(UserConnection).where(UserConnection.id == connection_id).with_for_update()
+        select(UserConnection).where(UserConnection.id == connection_id)
     )
     connection = result.scalar_one_or_none()
     if connection is None:
         raise ConnectionNotFoundError(str(connection_id))
-
     if connection.friend_id != user_id:
         raise NotAParticipantError("Only the request's recipient can respond to it.")
-    if connection.status != "pending":
+
+    new_status = "accepted" if action == "accept" else "declined"
+    update_result = await db.execute(
+        update(UserConnection)
+        .where(UserConnection.id == connection_id, UserConnection.status == "pending")
+        .values(status=new_status)
+    )
+    await db.commit()
+
+    if update_result.rowcount == 0:
+        # Already resolved -- either it was resolved before our initial
+        # read above, or a concurrent call resolved it between that read
+        # and this UPDATE. Either way, "not pending anymore" is the
+        # correct terminal answer; re-read to report its real status.
+        await db.refresh(connection)
         raise InvalidStateError(f"Connection is already {connection.status!r}.")
 
-    connection.status = "accepted" if action == "accept" else "declined"
-    db.add(connection)
-    await db.commit()
     await db.refresh(connection)
     return connection
 
@@ -471,7 +707,21 @@ async def get_friend_suggestions(db: AsyncSession, user_id: UUID, limit: int = 1
     Excludes: the user themself, existing friends (any status --
     pending, accepted, or declined all mean "already connected/asked,"
     not a fresh suggestion).
-    """
+
+    PERFORMANCE FIX (Final Hardening Gate, Section 5 -- inspecting
+    other touched social/profile paths beyond `/users/search` for the
+    same N+1 shape): the previous implementation issued 2 extra queries
+    PER CANDIDATE user on the platform (`their_courses_result` +
+    `db.get(GamificationProfile, ...)` inside the scoring loop), so
+    calling this once from `GET /social/friends/suggestions` (reached
+    from the Network page this phase's own Phase 1 work rewrote) scaled
+    O(N) in the total candidate-user count, not a page size. Rewritten
+    to bulk-fetch every candidate's enrollments and gamification
+    profile in exactly 2 queries up front (`UserEnrollment.user_id.
+    in_(candidate_ids)`, `GamificationProfile.user_id.in_(
+    candidate_ids)`), then score entirely in Python against those two
+    lookup dicts -- the query count is now fixed regardless of how many
+    candidates exist."""
     connected_result = await db.execute(
         select(UserConnection.user_id, UserConnection.friend_id).where(
             or_(UserConnection.user_id == user_id, UserConnection.friend_id == user_id)
@@ -503,17 +753,33 @@ async def get_friend_suggestions(db: AsyncSession, user_id: UUID, limit: int = 1
 
     candidates_result = await db.execute(select(User).where(~User.id.in_(excluded_ids)))
     candidates = list(candidates_result.scalars().all())
+    candidate_ids = [candidate.id for candidate in candidates]
+
+    course_ids_by_user: dict[UUID, set] = {}
+    if candidate_ids:
+        enrollments_result = await db.execute(
+            select(UserEnrollment.user_id, UserEnrollment.course_id).where(
+                UserEnrollment.user_id.in_(candidate_ids)
+            )
+        )
+        for candidate_id, course_id in enrollments_result.all():
+            course_ids_by_user.setdefault(candidate_id, set()).add(course_id)
+
+    xp_by_user: dict[UUID, int] = {}
+    if candidate_ids:
+        profiles_result = await db.execute(
+            select(GamificationProfile.user_id, GamificationProfile.total_xp).where(
+                GamificationProfile.user_id.in_(candidate_ids)
+            )
+        )
+        xp_by_user = dict(profiles_result.all())
 
     scored: list[dict] = []
     for candidate in candidates:
-        their_courses_result = await db.execute(
-            select(UserEnrollment.course_id).where(UserEnrollment.user_id == candidate.id)
-        )
-        their_course_ids = set(their_courses_result.scalars().all())
+        their_course_ids = course_ids_by_user.get(candidate.id, set())
         shared_course_ids = my_course_ids & their_course_ids
 
-        their_profile = await db.get(GamificationProfile, candidate.id)
-        their_xp = their_profile.total_xp if their_profile else 0
+        their_xp = xp_by_user.get(candidate.id, 0)
 
         score = len(shared_course_ids) * 3
         if _xp_band(their_xp) == my_band:

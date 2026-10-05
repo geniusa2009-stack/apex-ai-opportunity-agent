@@ -59,7 +59,7 @@ CREATE TABLE users (
     role_granted_at DATETIME,
     nationality VARCHAR(120), residency_country VARCHAR(120), languages TEXT,
     interests TEXT, application_goals TEXT, preferred_opportunity_types TEXT,
-    remote_preference BOOLEAN, funding_preference VARCHAR(30), deadline_lead_time_days INTEGER,
+    remote_preference BOOLEAN, funding_preference VARCHAR(30), deadline_lead_time_days INTEGER, date_of_birth DATE, english_level VARCHAR(20), other_nationalities TEXT, onboarding_completed_at DATETIME,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 )
@@ -539,6 +539,55 @@ class TestHardFilterSafety:
                 db, user=user, opportunities=[opportunity], bookmarked_opportunity_ids=set(), now=dt.datetime.now(dt.timezone.utc),
             )
             assert ranked == []
+
+    async def test_hold_opportunity_excluded(self, db_session_factory):
+        """F-HOLDFILTER regression (P0-A): before this fix, `rank_candidates`
+        excluded CLOSED only -- a HOLD opportunity (D6's evidence pipeline
+        found the available evidence insufficient/outdated) passed straight
+        through to ranking/display exactly like a verified-OPEN one."""
+        async with db_session_factory() as db:
+            user_id = await _make_user(db)
+            source_id = await _make_source(db)
+            opp_id = await _make_opportunity(db, source_id=source_id, lifecycle_state="hold")
+            user = await db.get(User, user_id)
+            opportunity = await db.get(Opportunity, opp_id)
+            ranked = await rank_candidates(
+                db, user=user, opportunities=[opportunity], bookmarked_opportunity_ids=set(), now=dt.datetime.now(dt.timezone.utc),
+            )
+            assert ranked == []
+
+    async def test_conflict_opportunity_excluded(self, db_session_factory):
+        """F-HOLDFILTER regression (P0-A): a CONFLICT opportunity (D6 found
+        unresolved contradictory authoritative evidence) must be excluded
+        exactly like CLOSED/HOLD -- there is no surface where showing one
+        is safe."""
+        async with db_session_factory() as db:
+            user_id = await _make_user(db)
+            source_id = await _make_source(db)
+            opp_id = await _make_opportunity(db, source_id=source_id, lifecycle_state="conflict")
+            user = await db.get(User, user_id)
+            opportunity = await db.get(Opportunity, opp_id)
+            ranked = await rank_candidates(
+                db, user=user, opportunities=[opportunity], bookmarked_opportunity_ids=set(), now=dt.datetime.now(dt.timezone.utc),
+            )
+            assert ranked == []
+
+    async def test_open_opportunity_still_survives(self, db_session_factory):
+        """Sanity check alongside the two regressions above: the fix must
+        exclude CLOSED/HOLD/CONFLICT specifically, not silently broaden
+        into excluding everything -- a real OPEN opportunity must still
+        survive `rank_candidates` unchanged."""
+        async with db_session_factory() as db:
+            user_id = await _make_user(db)
+            source_id = await _make_source(db)
+            opp_id = await _make_opportunity(db, source_id=source_id, lifecycle_state="open")
+            user = await db.get(User, user_id)
+            opportunity = await db.get(Opportunity, opp_id)
+            ranked = await rank_candidates(
+                db, user=user, opportunities=[opportunity], bookmarked_opportunity_ids=set(), now=dt.datetime.now(dt.timezone.utc),
+            )
+            assert len(ranked) == 1
+            assert ranked[0].opportunity.id == opp_id
 
     async def test_unknown_and_eligible_both_survive_distinctly(self, db_session_factory):
         async with db_session_factory() as db:

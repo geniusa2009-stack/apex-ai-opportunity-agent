@@ -42,7 +42,7 @@ CREATE TABLE users (
     phone VARCHAR(50), degree_level VARCHAR(100), major VARCHAR(255), gpa FLOAT, graduation_year INTEGER,
     skills TEXT, target_country VARCHAR(120), age_group VARCHAR(50), age INTEGER, academic_level VARCHAR(20),
     gender VARCHAR(10), bio TEXT, search_vector TEXT, role VARCHAR(20) NOT NULL DEFAULT 'student',
-    admin_role VARCHAR(20), role_granted_at DATETIME, nationality VARCHAR(120), residency_country VARCHAR(120), languages TEXT, interests TEXT, application_goals TEXT, preferred_opportunity_types TEXT, remote_preference BOOLEAN, funding_preference VARCHAR(30), deadline_lead_time_days INTEGER, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    admin_role VARCHAR(20), role_granted_at DATETIME, nationality VARCHAR(120), residency_country VARCHAR(120), languages TEXT, interests TEXT, application_goals TEXT, preferred_opportunity_types TEXT, remote_preference BOOLEAN, funding_preference VARCHAR(30), deadline_lead_time_days INTEGER, date_of_birth DATE, english_level VARCHAR(20), other_nationalities TEXT, onboarding_completed_at DATETIME, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 )
 """

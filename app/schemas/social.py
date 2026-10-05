@@ -93,6 +93,19 @@ class FriendOut(BaseModel):
     full_name: str | None
 
 
+class PendingFriendRequestOut(BaseModel):
+    """One entry in GET /social/friends/requests/pending -- disclosed
+    necessary addition, see `social_service.list_pending_incoming_
+    requests`'s docstring for why this endpoint has to exist at all.
+    Deliberately minimal (no email/phone/gpa/gender) -- same
+    minimization posture as `app/schemas/privacy.PublicSearchProfileOut`."""
+
+    connection_id: UUID
+    from_user_id: UUID
+    from_user_name: str | None
+    created_at: datetime
+
+
 class FriendSuggestionOut(BaseModel):
     """One entry in `GET /social/friends/suggestions` -- see
     `social_service.get_friend_suggestions` for the scoring logic."""

@@ -3,13 +3,21 @@ from typing import TYPE_CHECKING
 
 import datetime as dt
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Float, Integer, String, Text
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import ARRAY, TSVECTOR, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
-from app.models.enums import AcademicLevel, AdminRole, ApplicationGoal, Gender, OpportunityType, UserRole
+from app.models.enums import (
+    AcademicLevel,
+    AdminRole,
+    ApplicationGoal,
+    EnglishLevel,
+    Gender,
+    OpportunityType,
+    UserRole,
+)
 from app.models.mixins import TimestampMixin
 
 if TYPE_CHECKING:
@@ -399,6 +407,70 @@ class User(Base, TimestampMixin):
     # genuinely new; nothing on this model previously captured a
     # deadline-proximity preference at all.
     deadline_lead_time_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # --- APEX Onboarding Production Integration step ---
+    #
+    # `date_of_birth` -- genuinely new. The pre-existing `age` (Integer,
+    # above) is a once-entered snapshot that goes stale every year and
+    # cannot answer "is this user 13 on a specific future date" the way
+    # a scholarship's own age-cutoff rule needs. The onboarding directive
+    # explicitly requires the EXACT date of birth as the authoritative
+    # source of age, with age derived deterministically from it (see
+    # `app/services/age.py`), not trusted as a stored integer. `age`
+    # itself is left in place, unmodified, for any existing caller that
+    # already reads it -- this is an additive, backward-compatible
+    # extension, not a replacement. Never exposed through any public
+    # profile/search view (see `app/services/privacy_service.py` --
+    # `ProfileViewOut`/`PublicSearchProfileOut` have no DOB field).
+    date_of_birth: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+
+    # `english_level` -- see `EnglishLevel`'s own docstring
+    # (app/models/enums.py) for the full "confirmed genuinely missing"
+    # disclosure. Native Postgres ENUM, same `values_callable` fix as
+    # `academic_level`/`gender` above.
+    english_level: Mapped["EnglishLevel | None"] = mapped_column(
+        SAEnum(
+            EnglishLevel,
+            name="english_level",
+            native_enum=True,
+            values_callable=lambda enum_cls: [e.value for e in enum_cls],
+        ),
+        nullable=True,
+    )
+
+    # `other_nationalities` -- the pre-existing `nationality` (String,
+    # above) remains the single PRIMARY nationality every existing
+    # caller (`eligibility_engine.py`, `user_intelligence.py`,
+    # `privacy_service.py`) already reads and keeps reading unchanged.
+    # The onboarding UI's own approved design lets a user add more than
+    # one nationality as chips -- persisting only the first and silently
+    # dropping the rest would discard real, explicitly provided user
+    # data, which this program's own standing rules forbid. Rather than
+    # replace `nationality` or build a second nationality system, this
+    # is the smallest backward-compatible extension: an additional
+    # nullable array holding any nationalities BEYOND the primary one,
+    # same `ARRAY(String)` posture as `languages`/`skills`. No existing
+    # code reads this column yet -- it exists so the data is preserved,
+    # available the moment any future eligibility/personalization rule
+    # needs more than one nationality.
+    other_nationalities: Mapped[list[str] | None] = mapped_column(
+        ARRAY(String(120)), nullable=True
+    )
+
+    # `onboarding_completed_at` -- the single real, server-set source of
+    # truth for "has this user actually finished onboarding," set once
+    # (and only once) by `POST /users/me/onboarding/complete`
+    # (app/api/v1/endpoints/user_onboarding.py) the moment that endpoint's
+    # explicit-field persistence actually commits -- never trusted from
+    # a client-supplied flag (this program's own standing security rule).
+    # `None` for every user who has never completed it, including every
+    # account that existed before this step. A second call to that same
+    # endpoint (refresh/retry/back-button) leaves this timestamp
+    # unchanged -- idempotent by construction, not by a separate dedup
+    # table.
+    onboarding_completed_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # lazy="selectin" issues a second batched query instead of a lazy-load,
     # which is the safe pattern under asyncio (a plain lazy="select" would

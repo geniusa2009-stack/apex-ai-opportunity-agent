@@ -160,6 +160,37 @@ def _deadline_state(opportunity: Opportunity | None, deadline: dt.datetime | Non
     return classify_deadline_text(raw_text or None, parsed_deadline=deadline)
 
 
+def _current_deadline(opportunity: Opportunity | None, tracker: ApplicationTracker) -> dt.datetime | None:
+    """P0-C (Product-Wide Integration Recovery): the single place that
+    decides which deadline value is CURRENT for this snapshot.
+
+    `Opportunity.deadline` is the canonical, live value -- kept fresh by
+    `opportunity_reverification.py`/`app/workers/tasks.py` every time the
+    opportunity is re-verified. `ApplicationTracker.deadline` is only a
+    ONE-TIME SNAPSHOT taken by `application_tracker_service.create_tracker`
+    at tracker-creation time and never resynced afterward (confirmed via
+    direct repository inspection, not just the audit doc, before this fix
+    was written) -- reading it as if it were "the current deadline" is
+    exactly the stale self-contradiction this phase's audit found
+    (F-STALEDEADLINE).
+
+    Fix: prefer the live `opportunity.deadline` whenever a real,
+    catalog-linked `Opportunity` is available -- even if that value is
+    `None` (e.g. the opportunity has since gone rolling/undated; showing
+    an honestly-unknown deadline beats resurrecting a stale snapshot).
+    `tracker.deadline` is used ONLY as the fallback for the genuinely
+    off-catalog case (`opportunity is None`), where no live value exists
+    at all. This never mutates `tracker.deadline` itself -- it stays
+    exactly what `create_tracker` set, untouched, for every other
+    consumer (e.g. `deadline_alerts.py`'s milestone planning, which is
+    deliberately a separate, frozen-at-generation-time concept reviewed
+    and excluded from this fix).
+    """
+    if opportunity is not None:
+        return opportunity.deadline
+    return tracker.deadline
+
+
 async def build_application_intelligence_snapshot(
     db: AsyncSession, *, tracker: ApplicationTracker, now: dt.datetime | None = None
 ) -> ApplicationIntelligenceSnapshot:
@@ -167,7 +198,8 @@ async def build_application_intelligence_snapshot(
 
     opportunity = tracker.opportunity  # lazy="selectin" relationship, already loaded
 
-    deadline_state = _deadline_state(opportunity, tracker.deadline)
+    current_deadline = _current_deadline(opportunity, tracker)
+    deadline_state = _deadline_state(opportunity, current_deadline)
     requirements = await _load_requirements(db, tracker=tracker, opportunity=opportunity)
     changes = await _recent_opportunity_changes(db, opportunity_id=tracker.opportunity_id, now=now)
 
@@ -183,7 +215,7 @@ async def build_application_intelligence_snapshot(
         institution=tracker.institution,
         opportunity_id=tracker.opportunity_id,
         opportunity_title=opportunity.title if opportunity else None,
-        deadline=tracker.deadline,
+        deadline=current_deadline,
         deadline_state=deadline_state.value,
         requirements=requirements,
         ai_checklist=ai_checklist,

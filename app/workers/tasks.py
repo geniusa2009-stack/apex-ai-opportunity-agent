@@ -12,6 +12,7 @@ from app.models.enums import AcademicLevel, Gender
 from app.services import (
     contradiction_hunter,
     entity_relationship_service,
+    opportunity_state_machine,
     research_orchestrator,
     research_trajectory_memory,
 )
@@ -346,6 +347,65 @@ async def _verify_new_opportunities(limit: int) -> dict:
                     # these later without re-scraping anything.
                     opportunity.ai_confidence_score = verification.confidence_score
                     flagged += 1
+
+                # Taxonomy Evolution + Temporal State Machine integration point
+                # (P0-A repair) -- the ONE real production call site for
+                # `opportunity_state_machine.reevaluate_opportunity_state`.
+                # Previously this module was fully built, fully tested, and
+                # had ZERO production callers (confirmed via repo-wide grep
+                # before this change: only its own test file called it) --
+                # `Opportunity.lifecycle_state` never advanced past its
+                # DISCOVERED default for any real opportunity, and every
+                # downstream HOLD/CONFLICT exclusion fix is pointless until
+                # this call exists. Runs once per processed opportunity,
+                # after is_verified/ai_confidence_score are already settled
+                # above (covers all three branches: D6/D7-VERIFIED,
+                # D6/D7-ran-but-not-VERIFIED, and AI-said-not-legitimate/
+                # low-confidence) -- `reevaluate_opportunity_state` is a
+                # fully self-contained read-current-DB-state-and-write
+                # operation (it re-derives the D6 decision itself via
+                # `evidence_verification.evaluate_verification_readonly`,
+                # the same real function D6 itself uses), so it needs
+                # nothing passed in beyond the opportunity id, and is
+                # idempotent/safe to call even for the AI-said-not-
+                # legitimate branch (zero claims persisted there resolves
+                # to DISCOVERED, a no-op from the real default). Best-
+                # effort: a state-machine failure must never block or
+                # unwind the verification write that already committed
+                # above in this same transaction.
+                # Captured as a plain value (not re-read from the ORM instance) for
+                # the exception log below: a `begin_nested()` rollback expires every
+                # attribute SQLAlchemy loaded/touched since the savepoint began, and
+                # logging `opportunity.id` after such a rollback would trigger an
+                # implicit, synchronous lazy-reload of an already-rolled-back ORM
+                # object from inside an exception handler -- exactly the kind of
+                # second, unrelated failure a best-effort block must never risk.
+                opportunity_id_for_logging = opportunity.id
+                try:
+                    # SAVEPOINT (not the outer transaction) -- `record_change_if_meaningful`
+                    # (called by `reevaluate_opportunity_state` whenever the state actually
+                    # transitions) does an eager `await db.flush()`, so a real DB-level failure
+                    # here raises immediately, inside this try, rather than silently deferring
+                    # to the batch's final `await session.commit()` far below. Catching the
+                    # Python exception alone would NOT be enough: a failed flush leaves the
+                    # session's outer transaction in a needs-rollback state, and the later
+                    # `session.commit()` would then raise for the ENTIRE batch (rolling back
+                    # every other opportunity this run already verified) over one opportunity's
+                    # lifecycle-state write. `begin_nested()` gives this one call its own
+                    # SAVEPOINT so a failure here rolls back only this opportunity's
+                    # lifecycle_state/history write and leaves the outer transaction -- and every
+                    # other opportunity already processed in this same run -- untouched.
+                    async with session.begin_nested():
+                        await opportunity_state_machine.reevaluate_opportunity_state(
+                            session, opportunity_id=opportunity.id
+                        )
+                except Exception:
+                    logger.exception(
+                        "opportunity_state_machine.reevaluate_opportunity_state failed for "
+                        "opportunity %s -- verification/is_verified itself still stands; "
+                        "lifecycle_state left at its prior persisted value",
+                        opportunity_id_for_logging,
+                    )
 
                 # Search Trajectory Memory addition (Deliverable 3) --
                 # closes the loop from this real, decoupled verification

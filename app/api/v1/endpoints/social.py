@@ -16,6 +16,7 @@ from app.schemas.social import (
     FriendOut,
     FriendRequestCreate,
     FriendSuggestionOut,
+    PendingFriendRequestOut,
     StudyDuelOut,
 )
 from app.services import coach_service, social_service
@@ -100,6 +101,28 @@ async def friend_suggestions(current_user: CurrentUser, db: DbSession) -> list[F
     get_friend_suggestions` for the shared-course/similar-XP scoring."""
     suggestions = await social_service.get_friend_suggestions(db, current_user.id)
     return [FriendSuggestionOut(**s) for s in suggestions]
+
+
+@router.get("/friends/requests/pending", response_model=list[PendingFriendRequestOut])
+async def pending_friend_requests(current_user: CurrentUser, db: DbSession) -> list[PendingFriendRequestOut]:
+    """Disclosed necessary addition (privacy/social audit finding): the
+    only way to ACT on a pending friend request was `POST /social/
+    friends/{connection_id}/respond`, but nothing let a recipient
+    discover their own incoming requests' `connection_id`s in the first
+    place -- see `social_service.list_pending_incoming_requests`'s
+    docstring. Scoped to the caller's own incoming requests only
+    (`friend_id == current_user.id`, enforced in the service query, not
+    trusted from any client input)."""
+    pairs = await social_service.list_pending_incoming_requests(db, current_user.id)
+    return [
+        PendingFriendRequestOut(
+            connection_id=connection.id,
+            from_user_id=sender.id,
+            from_user_name=sender.full_name,
+            created_at=connection.created_at,
+        )
+        for connection, sender in pairs
+    ]
 
 
 # --- Disclosed necessary plumbing: the ask names `POST

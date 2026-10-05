@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from starlette.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import api_router
 from app.core.config import settings
@@ -74,9 +75,39 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# APEX Staging Deployment Readiness: additive-only CORS wiring -- see
+# `Settings.cors_origins`'s own comment in app/core/config.py for why
+# this was previously entirely absent and why an empty `CORS_ORIGINS`
+# env var reproduces the exact prior behavior (no cross-origin access)
+# rather than changing it. `allow_credentials=True` because the
+# frontend sends the Supabase-issued bearer token via an `Authorization`
+# header (not a cookie), which still requires this flag under CORS for
+# the header itself to be allowed through on the preflight response --
+# it does NOT mean cookies are shared cross-origin (none are used here).
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(api_router, prefix=settings.api_v1_prefix)
 
 
 @app.get("/")
 async def root() -> dict:
     return {"message": f"{settings.project_name} API is running"}
+
+
+# APEX Staging Deployment Readiness: minimal, non-destructive health
+# check. Deliberately separate from `GET /` (which is a human-facing
+# "is this even the right API" sanity message, pre-existing, left
+# unchanged) -- a deploy platform's own health-check prober needs a
+# fast, dependency-free 200 it can poll every few seconds without that
+# load ever touching the database or Redis. Returns no connection
+# strings, secrets, tokens, or credentials -- only the fact that this
+# process is alive.
+@app.get("/health")
+async def health() -> dict:
+    return {"status": "ok"}

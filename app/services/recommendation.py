@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.enums import OpportunityReviewStatus
 from app.models.opportunity import Opportunity
+from app.services.opportunity_state_machine import USER_FACING_EXCLUDED_LIFECYCLE_STATES
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,10 @@ async def get_similar_opportunities(
             # the real pre-publish gate, not `is_verified` (see
             # `admin_opportunities.py`'s own module docstring).
             Opportunity.review_status == OpportunityReviewStatus.PUBLISHED.value,
+            # F-HOLDFILTER repair (P0-A): see opportunity_search.py's
+            # identical addition -- same gap, same fix, same shared
+            # single-source-of-truth exclusion set.
+            Opportunity.lifecycle_state.not_in(USER_FACING_EXCLUDED_LIFECYCLE_STATES),
             Opportunity.embedding.is_not(None),
         )
         .order_by(distance.asc())
@@ -154,6 +159,8 @@ async def get_related_opportunities(
         .where(
             EntityRelationship.opportunity_id == opportunity_id,
             Opportunity.review_status == OpportunityReviewStatus.PUBLISHED.value,
+            # F-HOLDFILTER repair (P0-A): same gap/fix as get_similar_opportunities above.
+            Opportunity.lifecycle_state.not_in(USER_FACING_EXCLUDED_LIFECYCLE_STATES),
         )
         .order_by(EntityRelationship.created_at.asc())
         .limit(limit)

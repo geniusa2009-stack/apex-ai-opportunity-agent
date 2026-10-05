@@ -7,6 +7,7 @@ from app.core.config import settings
 from app.models.enums import OpportunityReviewStatus
 from app.models.opportunity import Opportunity
 from app.schemas.opportunity import OpportunityOut, OpportunitySearchResult
+from app.services.opportunity_state_machine import USER_FACING_EXCLUDED_LIFECYCLE_STATES
 from app.services.ai import ai_gateway
 
 logger = logging.getLogger(__name__)
@@ -78,6 +79,15 @@ async def semantic_search(
             # judgment -- see `admin_opportunities.py`'s own module
             # docstring for the full reasoning).
             Opportunity.review_status == OpportunityReviewStatus.PUBLISHED.value,
+            # F-HOLDFILTER repair (P0-A): this query previously had no
+            # `lifecycle_state` filter at all -- a CLOSED, HOLD, or
+            # CONFLICT opportunity (see `opportunity_state_machine.py`'s
+            # own docstring for what each means) was exactly as
+            # searchable as a verified-OPEN one. `review_status` is a
+            # deliberately orthogonal editorial publish gate (confirmed
+            # by the audit's own canonical-sources table), not a
+            # substitute for this check.
+            Opportunity.lifecycle_state.not_in(USER_FACING_EXCLUDED_LIFECYCLE_STATES),
             Opportunity.embedding.is_not(None),
             similarity >= threshold,
             *(extra_filters or []),

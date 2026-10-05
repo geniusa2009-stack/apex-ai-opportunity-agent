@@ -132,6 +132,15 @@ CREATE TABLE research_trajectory_steps (
     error_reason VARCHAR(500), created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, step_metadata TEXT
 )
 """
+_CREATE_OPPORTUNITY_CHANGE_HISTORY_SQL = """
+CREATE TABLE opportunity_change_history (
+    id VARCHAR(36) PRIMARY KEY, opportunity_id VARCHAR(36) NOT NULL, field_name VARCHAR(50) NOT NULL,
+    old_value TEXT, new_value TEXT, source_id VARCHAR(36), evidence_id VARCHAR(36),
+    change_reason TEXT NOT NULL, severity VARCHAR(20),
+    changed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
 
 _CREATE_ENTITY_RELATIONSHIPS_SQL = """
 CREATE TABLE entity_relationships (
@@ -164,6 +173,7 @@ async def db_session_factory():
         await conn.execute(text(_CREATE_ENTITY_RELATIONSHIPS_SQL))
         await conn.execute(text(_CREATE_RESEARCH_TRAJECTORIES_SQL))
         await conn.execute(text(_CREATE_RESEARCH_TRAJECTORY_STEPS_SQL))
+        await conn.execute(text(_CREATE_OPPORTUNITY_CHANGE_HISTORY_SQL))
     session_factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
     yield session_factory
     await engine.dispose()

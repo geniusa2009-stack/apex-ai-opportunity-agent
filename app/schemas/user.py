@@ -1,9 +1,16 @@
-from datetime import datetime
+from datetime import date, datetime, timezone
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
-from app.models.enums import AcademicLevel, ApplicationGoal, Gender, OpportunityType, UserRole
+from app.models.enums import (
+    AcademicLevel,
+    ApplicationGoal,
+    EnglishLevel,
+    Gender,
+    OpportunityType,
+    UserRole,
+)
 
 # `UserCreate` and `Token` were removed as part of the Supabase
 # integration step -- both existed solely for the local `POST
@@ -68,6 +75,38 @@ class UserOut(BaseModel):
     # `Gender`'s own docstring (app/models/enums.py) for the "confirmed
     # genuinely net-new" disclosure.
     gender: Gender | None
+
+    # AUDITED FIX (Privacy + Social Identity Layer phase): these nine
+    # fields were settable via `PATCH /users/me` (Personalized
+    # Opportunity Intelligence step, Part A) but were never added to
+    # `UserOut` -- meaning a user could set their own nationality,
+    # languages, interests, etc. but could never read them back via
+    # `GET /users/me`. Self-only real bug fix, not a new capability:
+    # this is exactly the "PERSONAL INTELLIGENCE" data category, which
+    # stays self-only (never returned by any cross-user response --
+    # `PublicSearchProfileOut`/`ProfileViewOut` in app/schemas/privacy.py
+    # deliberately omit all nine) but must be readable by the user it
+    # belongs to.
+    nationality: str | None
+    residency_country: str | None
+    languages: list[str] | None
+    interests: list[str] | None
+    application_goals: list[ApplicationGoal] | None
+    preferred_opportunity_types: list[OpportunityType] | None
+    remote_preference: bool | None
+    funding_preference: str | None
+    deadline_lead_time_days: int | None
+
+    # APEX Production Vertical Slice (Signup -> Onboarding -> Intelligence
+    # -> Eligibility -> Feed): exposed here, not just on
+    # `OnboardingCompleteResponse`, because the FRONTEND needs it too --
+    # `GET /users/me` is the one real, backend-authoritative way for the
+    # onboarding page itself (and any other page) to detect "has this
+    # user already completed onboarding" without relying on localStorage
+    # (which can be cleared, stale, or absent on a new device). The
+    # column already existed (P0-D migration 0067); this is a read-only
+    # schema exposure, not a new field, no new migration needed.
+    onboarding_completed_at: datetime | None
 
 
 class UserProfileUpdate(BaseModel):
@@ -137,3 +176,94 @@ class UserProfileUpdate(BaseModel):
     remote_preference: bool | None = None
     funding_preference: str | None = Field(default=None, max_length=30)
     deadline_lead_time_days: int | None = Field(default=None, ge=0, le=365)
+
+    # Added for the APEX Onboarding Production Integration step --
+    # same established "None means leave unchanged" PATCH semantics as
+    # every field above. `date_of_birth`/`english_level`/
+    # `other_nationalities` back the new `User` columns of the same
+    # name (app/models/user.py); see that model's own comment for why
+    # each is a genuinely new, additive field.
+    date_of_birth: date | None = None
+    english_level: EnglishLevel | None = None
+    other_nationalities: list[str] | None = None
+
+
+# ---------------------------------------------------------------------
+# APEX Onboarding Production Integration -- POST /users/me/onboarding/complete
+# ---------------------------------------------------------------------
+#
+# A dedicated request/response contract, separate from `UserProfileUpdate`,
+# because this single submission needs validation `PATCH /users/me` does
+# not and should not perform generically: a hard minimum-age check, and
+# deterministic taxonomy mapping from the onboarding UI's own vocabulary.
+# Internally, the endpoint still persists through the same `User` model
+# fields `UserProfileUpdate` already exposes -- no second profile model.
+class OnboardingCompleteRequest(BaseModel):
+    """Mirrors the onboarding prototype's own `toProfile()` shape
+    (`apex-onboarding.html`) field-for-field, so the frontend does not
+    need a translation layer of its own -- the translation (taxonomy
+    mapping, age validation) happens here, server-side."""
+
+    # Step 1
+    date_of_birth: date
+
+    # Step 2
+    first_name: str = Field(min_length=1, max_length=255)
+    last_name: str | None = Field(default=None, max_length=255)
+    country: str = Field(min_length=1, max_length=120)
+    nationalities: list[str] = Field(min_length=1)
+
+    # Step 4
+    stage: str = Field(min_length=1, max_length=50)
+    grade: str | None = Field(default=None, max_length=50)
+    english_level: EnglishLevel
+
+    # Step 5
+    interests: list[str] = Field(min_length=1, max_length=20)
+
+    # Step 6
+    looking_for: list[str] = Field(min_length=1)
+    funding: str
+    where: str
+    goal: str
+    intent: str | None = Field(default=None, max_length=400)
+
+    @field_validator("date_of_birth")
+    @classmethod
+    def _date_of_birth_not_future_or_absurd(cls, value: date) -> date:
+        # "Future DOB" and "impossible dates" from the governing
+        # directive's own security checklist. Pydantic's `date` type
+        # already rejects a calendar-impossible date (e.g. Feb 30) at
+        # parse time -- this validator only needs to add the
+        # future/implausibly-old checks on top of that.
+        today = datetime.now(timezone.utc).date()
+        if value > today:
+            raise ValueError("Date of birth cannot be in the future.")
+        if value.year < today.year - 120:
+            raise ValueError("Date of birth is not valid.")
+        return value
+
+
+class OnboardingTaxonomyNotes(BaseModel):
+    """Disclosure of exactly which submitted values had no safe backend
+    mapping -- populated by `app.services.onboarding_taxonomy`, never
+    silently swallowed. Empty lists mean every submitted value mapped
+    cleanly."""
+
+    unmapped_academic_level: bool = False
+    unmapped_opportunity_types: list[str] = Field(default_factory=list)
+    unmapped_goal: bool = False
+    unmapped_funding: bool = False
+
+
+class OnboardingCompleteResponse(BaseModel):
+    """What actually happened -- never a fabricated progress percentage
+    or a claim of AI analysis that did not occur (governing directive,
+    Section 14)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    profile: UserOut
+    taxonomy_notes: OnboardingTaxonomyNotes
+    ai_enrichment_applied: bool
+    onboarding_completed_at: datetime

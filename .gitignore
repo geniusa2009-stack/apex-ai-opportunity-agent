@@ -17,3 +17,16 @@ postgres_data/
 .env.bak*
 .env.verify_tmp
 _delete_test.txt
+
+# APEX GitHub Release Scope Audit -- additive hardening (the specific
+# .env.bak*/.env.verify_tmp/.env.local entries above already cover the
+# actual files found in this repo; this blanket pattern is extra
+# margin for any future .env.<name> file, while the negation keeps the
+# safe, placeholder-only .env.example tracked as intended).
+.env.*
+!.env.example
+
+coverage/
+dist/
+build/
+node_modules/

@@ -36,7 +36,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.entity_relationship import EntityRelationship
-from app.models.enums import EligibilityStatus, MatchLevel, OpportunityLifecycleState
+from app.models.enums import EligibilityStatus, MatchLevel
+from app.services.opportunity_state_machine import USER_FACING_EXCLUDED_LIFECYCLE_STATES
 from app.models.opportunity import Opportunity
 from app.models.user import User
 from app.services import funding_intelligence
@@ -282,7 +283,7 @@ async def rank_candidates(
     """Part H's own safe pipeline, exactly:
 
     1. Remove clearly INELIGIBLE.
-    2. Remove CLOSED (lifecycle state).
+    2. Remove CLOSED/HOLD/CONFLICT (lifecycle state; F-HOLDFILTER repair).
     3. Keep ELIGIBLE separately from UNKNOWN/CONDITIONAL (never mixed
        silently -- both are returned, each item carries its own real
        `eligibility.status`, so a caller/UI can always tell which is
@@ -296,9 +297,16 @@ async def rank_candidates(
     now = now or dt.datetime.now(dt.timezone.utc)
     rng = rng or random.Random()
 
+    # F-HOLDFILTER repair (P0-A): previously excluded CLOSED only --
+    # HOLD/CONFLICT opportunities (D6 evidence insufficient/contradicted,
+    # or an unresolved authoritative contradiction) passed straight
+    # through to ranking/display, exactly like a fully OPEN opportunity.
+    # Now excludes every state the shared, single-source-of-truth
+    # `USER_FACING_EXCLUDED_LIFECYCLE_STATES` set says a user-facing
+    # surface must never show.
     survivors = [
         o for o in opportunities
-        if o.lifecycle_state != OpportunityLifecycleState.CLOSED.value
+        if o.lifecycle_state not in USER_FACING_EXCLUDED_LIFECYCLE_STATES
     ]
 
     candidate_ids = [o.id for o in survivors]

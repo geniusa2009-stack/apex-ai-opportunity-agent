@@ -45,6 +45,25 @@ from app.services.evidence_verification import evaluate_verification_readonly
 # `STALE_EVIDENCE_MAX_AGE_DAYS`.
 DEADLINE_APPROACHING_WINDOW_DAYS = 7
 
+# F-HOLDFILTER repair (P0-A, second half): the single, shared definition of
+# "which lifecycle states a user-facing surface must never show", imported
+# by every feed/search/recommendation consumer instead of each keeping its
+# own copy of this list. Before this constant existed, `personalized_
+# ranking.py` filtered out CLOSED only (HOLD/CONFLICT passed straight
+# through to ranking/display), and `opportunity_search.py`/`recommendation.
+# py` filtered on lifecycle_state not at all -- confirmed by direct grep
+# across all four surfaces before this change (see the audit's own
+# F-HOLDFILTER finding). A HOLD/CONFLICT opportunity is exactly as
+# unsafe to show a student as a CLOSED one (Part B1: HOLD means the
+# evidence pipeline found insufficient/contradictory support, CONFLICT
+# means unresolved contradictory authoritative evidence) -- there is no
+# surface where it is correct to show one but not the other.
+USER_FACING_EXCLUDED_LIFECYCLE_STATES: frozenset[str] = frozenset({
+    OpportunityLifecycleState.CLOSED.value,
+    OpportunityLifecycleState.HOLD.value,
+    OpportunityLifecycleState.CONFLICT.value,
+})
+
 # ---------------------------------------------------------------------
 # Deterministic transition table (Part B2). Keys are the CURRENT state;
 # values are every state this module may ever propose moving TO from

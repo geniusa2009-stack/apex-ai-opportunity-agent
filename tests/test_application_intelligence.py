@@ -16,7 +16,7 @@ import uuid
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -41,7 +41,7 @@ CREATE TABLE users (
     admin_role VARCHAR(20), role_granted_at DATETIME,
     nationality VARCHAR(120), residency_country VARCHAR(120), languages TEXT,
     interests TEXT, application_goals TEXT, preferred_opportunity_types TEXT,
-    remote_preference BOOLEAN, funding_preference VARCHAR(30), deadline_lead_time_days INTEGER,
+    remote_preference BOOLEAN, funding_preference VARCHAR(30), deadline_lead_time_days INTEGER, date_of_birth DATE, english_level VARCHAR(20), other_nationalities TEXT, onboarding_completed_at DATETIME,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 )
 """
@@ -201,6 +201,15 @@ async def _make_opportunity(db: AsyncSession, *, source_id: uuid.UUID, **overrid
 
 def _now():
     return dt.datetime.now(dt.timezone.utc)
+
+
+def _naive(value: dt.datetime) -> dt.datetime:
+    """Strips tzinfo for comparison -- SQLite round-trips a DATETIME column
+    inconsistently (sometimes tz-aware, sometimes naive) depending on the
+    write path (raw `text()` UPDATE vs. ORM INSERT), a pre-existing,
+    disclosed environment quirk across this test suite, not something
+    P0-C changes."""
+    return value.replace(tzinfo=None) if value.tzinfo else value
 
 
 # ---------------------------------------------------------------------
@@ -497,6 +506,111 @@ class TestDeadlineIntegration:
             snapshot = await application_intelligence.build_application_intelligence_snapshot(db, tracker=tracker)
             assert snapshot.deadline_state == DeadlineState.UNKNOWN.value
             assert snapshot.deadline is None
+
+    # -----------------------------------------------------------------
+    # P0-C (Product-Wide Integration Recovery) regression coverage:
+    # F-STALEDEADLINE. `ApplicationTracker.deadline` is a one-time
+    # snapshot taken by `create_tracker` at creation time and never
+    # resynced afterward (confirmed by direct code inspection of
+    # `application_tracker.py::create_tracker`). Application
+    # Intelligence must report the opportunity's CURRENT deadline, not
+    # that stale snapshot, whenever a real catalog `Opportunity` is
+    # linked. These three tests would all fail against the pre-fix
+    # implementation (which read `tracker.deadline` directly in both
+    # `_deadline_state(...)` and the returned snapshot).
+    # -----------------------------------------------------------------
+
+    async def test_opportunity_deadline_wins_over_stale_tracker_snapshot(self, db_session_factory):
+        async with db_session_factory() as db:
+            user_id = await _make_user(db)
+            source_id = await _make_source(db)
+            old_deadline = _now() + dt.timedelta(days=10)
+            opp_id = await _make_opportunity(db, source_id=source_id, deadline=old_deadline)
+            tracker = await tracker_service.create_tracker(db, user_id, opportunity_id=opp_id)
+            # Sanity check: create_tracker really did take a one-time
+            # snapshot equal to the opportunity's deadline at creation.
+            assert tracker.deadline == old_deadline.replace(tzinfo=None)
+            tracker_id = tracker.id  # captured BEFORE expire_all(): see note below.
+
+            # Simulate the opportunity's deadline moving after tracker
+            # creation -- the same kind of write
+            # `opportunity_reverification.py`/`app/workers/tasks.py`
+            # makes on re-verification. Done as a direct row update
+            # (not through create_tracker) specifically so this test
+            # proves Application Intelligence reads the live value
+            # rather than anything cached on the tracker.
+            new_deadline = _now() + dt.timedelta(days=45)
+            await db.execute(
+                text("UPDATE opportunities SET deadline = :deadline WHERE id = :id"),
+                {"deadline": new_deadline, "id": opp_id.hex},
+            )
+            await db.commit()
+            db.expire_all()
+            # `tracker_id` (a plain value captured above), not
+            # `tracker.id` -- `tracker` is now expired, and building a
+            # `select(...)` WHERE clause against one of its attributes
+            # evaluates that attribute access synchronously (outside any
+            # await), which would try to lazily reload the expired
+            # object outside the async greenlet context and raise
+            # `MissingGreenlet`.
+            result = await db.execute(select(ApplicationTracker).where(ApplicationTracker.id == tracker_id))
+            refreshed_tracker = result.scalar_one()
+
+            snapshot = await application_intelligence.build_application_intelligence_snapshot(
+                db, tracker=refreshed_tracker
+            )
+
+            assert _naive(snapshot.deadline) == _naive(new_deadline)
+            assert _naive(snapshot.deadline) != _naive(old_deadline)
+            # The deadline STATE must also be derived from the live
+            # value, not silently stay pinned to whatever the stale
+            # snapshot would have classified to.
+            assert snapshot.deadline_state in {DeadlineState.EXACT.value, DeadlineState.DATE_ONLY.value}
+
+    async def test_off_catalog_tracker_falls_back_to_tracker_deadline(self, db_session_factory):
+        async with db_session_factory() as db:
+            user_id = await _make_user(db)
+            custom_deadline = _now() + dt.timedelta(days=20)
+            tracker = await tracker_service.create_tracker(
+                db, user_id, scholarship_name="Freeform Award", deadline=custom_deadline,
+            )
+            # No Opportunity object exists at all for this tracker --
+            # there is no live value to prefer, so the only honest
+            # fallback is the student's own tracker.deadline.
+            snapshot = await application_intelligence.build_application_intelligence_snapshot(db, tracker=tracker)
+            assert _naive(snapshot.deadline) == _naive(custom_deadline)
+            assert snapshot.deadline_state in {DeadlineState.EXACT.value, DeadlineState.DATE_ONLY.value}
+
+    async def test_building_snapshot_never_mutates_tracker_deadline(self, db_session_factory):
+        async with db_session_factory() as db:
+            user_id = await _make_user(db)
+            source_id = await _make_source(db)
+            old_deadline = _now() + dt.timedelta(days=10)
+            opp_id = await _make_opportunity(db, source_id=source_id, deadline=old_deadline)
+            tracker = await tracker_service.create_tracker(db, user_id, opportunity_id=opp_id)
+            tracker_id = tracker.id  # captured BEFORE expire_all(): see note in the test above.
+
+            new_deadline = _now() + dt.timedelta(days=45)
+            await db.execute(
+                text("UPDATE opportunities SET deadline = :deadline WHERE id = :id"),
+                {"deadline": new_deadline, "id": opp_id.hex},
+            )
+            await db.commit()
+            db.expire_all()
+            result = await db.execute(select(ApplicationTracker).where(ApplicationTracker.id == tracker_id))
+            refreshed_tracker = result.scalar_one()
+
+            await application_intelligence.build_application_intelligence_snapshot(db, tracker=refreshed_tracker)
+
+            # P0-C is explicitly a READ-projection fix -- building a
+            # snapshot must never write back to `ApplicationTracker.deadline`
+            # (that would be inventing a sync job the ask forbade, and
+            # would silently discard the tracker's own historical
+            # creation-time value).
+            db.expire_all()
+            result = await db.execute(select(ApplicationTracker).where(ApplicationTracker.id == tracker_id))
+            tracker_after = result.scalar_one()
+            assert _naive(tracker_after.deadline) == _naive(old_deadline)
 
 
 # ---------------------------------------------------------------------

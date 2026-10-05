@@ -358,6 +358,40 @@ class Gender(str, enum.Enum):
     FEMALE = "female"
 
 
+class EnglishLevel(str, enum.Enum):
+    """A student's self-reported English proficiency (APEX Onboarding
+    Production Integration step, Part 7).
+
+    DISCLOSED, NECESSARY ADDITION: a full-repo grep before adding this
+    (`grep -rn -i "english_level\\|EnglishLevel\\|language_level" app/`)
+    found no persisted field anywhere on `User` for this -- the only
+    existing hit, `test_pathway_planner.py`'s `english_level`, is a
+    transient request parameter for a one-off AI prompt, never stored.
+    `User.languages` (ARRAY(String), Personalized Opportunity Intelligence
+    step) is a distinct, pre-existing concept -- which languages the user
+    speaks at all, not a proficiency LEVEL in any one of them -- and is
+    reused unchanged; this is a new, narrow addition alongside it, not a
+    duplicate language system.
+
+    A closed, 4-value, constrained enum (matching the onboarding
+    prototype's own `ENGLISH` chip vocabulary exactly) rather than open
+    free text -- same "small, stable classification enum" posture as
+    `Gender`/`AcademicLevel` immediately above, and the same reason: an
+    arbitrary free-text or AI-generated proficiency label would not be
+    reliably comparable against any future opportunity eligibility filter.
+
+    Lives on `User.english_level` (app/models/user.py). Nullable,
+    self-reported, unverified -- same trust model as every other profile
+    field on this model. Native Postgres ENUM type, same precedent as
+    `Gender`/`AcademicLevel`.
+    """
+
+    BASIC = "basic"
+    INTERMEDIATE = "intermediate"
+    ADVANCED = "advanced"
+    FLUENT = "fluent"
+
+
 class MentorshipStatus(str, enum.Enum):
     """Lifecycle state of a `MentorshipRelation` (Hyper-Personalized
     Platform step's "Mentorship Relation Model (Maturity 7)").

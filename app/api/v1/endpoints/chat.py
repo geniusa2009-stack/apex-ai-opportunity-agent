@@ -39,6 +39,7 @@ from app.services import (
     chatbot,
     moderation_log_service,
     notification_service,
+    social_service,
 )
 from app.services.chat_connection_manager import manager, publish_message
 
@@ -164,7 +165,49 @@ async def create_room(
     flow, not this REST surface, but a chat feature with no way to ever
     CREATE a room in the first place would leave the WebSocket endpoint
     unreachable for any real conversation.
+
+    P0-B repair (Integration Recovery Phase 1): a DM (`is_group=False`)
+    now requires an ACCEPTED connection between the caller and the
+    target, enforced here at the router boundary, BEFORE
+    `get_or_create_dm_room` is ever called. This was a real, confirmed
+    gap -- the backend previously had no relationship check at all, even
+    though both frontend surfaces that create a DM already assume one:
+    `chat.html`'s own "New Chat" picker sources candidates exclusively
+    from `GET /social/friends/list` (accepted connections), with an
+    explicit comment that `/social/friends/suggestions` is deliberately
+    excluded because it "represents strangers with no relationship
+    yet"; `network.html`'s connection-state-aware action button renders
+    "Message" only when `connectionState === 'connected'`. Both already
+    assumed the backend would reject an unconnected target -- it never
+    did. This closes that gap using the existing, single source of
+    truth for connection state (`social_service.get_connection_state`,
+    the same function `GET /users/{user_id}` and `GET /users/search`
+    already use), not a new relationship check of its own.
+
+    Self-DM is intentionally left to `chat_service.get_or_create_dm_room`'s
+    own existing `SelfDMError` (still a 422 below), not folded into this
+    new 403 -- `get_connection_state` would itself return `"self"` for
+    `current_user.id == payload.participant_ids[0]`, which is not
+    `"connected"`, so without this ordering a self-DM attempt would be
+    misreported as an authorization failure (403) instead of its real,
+    pre-existing, more specific validation error (422). The connection
+    check below only runs for a DM with a genuinely different target.
+
+    Group rooms (`is_group=True`) are unaffected -- no equivalent
+    connection-based policy is established for arbitrary group
+    membership (see this phase's own policy-reconstruction evidence),
+    so `create_group_room`'s existing behavior is untouched.
     """
+    if not payload.is_group and current_user.id != payload.participant_ids[0]:
+        connection_state = await social_service.get_connection_state(
+            db, current_user.id, payload.participant_ids[0]
+        )
+        if connection_state != "connected":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only message a user you are connected with.",
+            )
+
     try:
         if payload.is_group:
             room = await chat_service.create_group_room(
