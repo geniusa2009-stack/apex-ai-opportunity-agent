@@ -230,10 +230,12 @@ class AgentPostDraft(Base, TimestampMixin):
     review_decision: Mapped[str | None] = mapped_column(String(20), nullable=True)
     review_reasons: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONType, nullable=True)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default=DraftStatus.DRAFT.value, index=True)
-    # Lexical/semantic vector for historical RAG. Stored as JSON (not
-    # pgvector) so its size is independent of `embedding_dimension`; RAG
-    # ranks a bounded recent window in Python -- see app/agent/rag.py.
-    embedding: Mapped[list[float] | None] = mapped_column(JSONType, nullable=True)
+    # Optional embedding for historical RAG: {"model": "<name>", "vector": [...]}.
+    # Stored as JSON (not pgvector) so it is independent of
+    # `embedding_dimension` and of the model used for opportunities; vectors
+    # are only ever compared with vectors from the SAME model. RAG ranks a
+    # bounded recent window in Python -- see app/agent/rag.py.
+    embedding: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
     decided_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     decided_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     decision_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
