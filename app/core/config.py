@@ -761,7 +761,7 @@ class Settings(BaseSettings):
     # (deterministic stages still work; LLM stages report a clear error).
     # ------------------------------------------------------------------
     # LLM used for extraction (and optionally writer/reviewer).
-    agent_llm_provider: str = "none"  # gemini | openrouter | none
+    agent_llm_provider: str = "none"  # gemini | openrouter | ollama | none
     agent_llm_model: str | None = None
     # Optional second provider tried when the primary fails with a
     # transient/rate-limit/auth error (never on a validation failure).
@@ -772,6 +772,34 @@ class Settings(BaseSettings):
     # Bounded self-correction: extra attempts AFTER the first one when the
     # model output fails Pydantic validation (the errors are sent back).
     agent_llm_max_validation_retries: int = 2
+    # Ordered, FREE-ONLY routing chain for the Agent (takes precedence over
+    # AGENT_LLM_PROVIDER/MODEL + FALLBACK_* when set). Comma-separated
+    # "provider:model" entries, provider in gemini | openrouter | ollama.
+    # Only the first ":" separates provider from model, so OpenRouter ids
+    # such as "vendor/model:free" work. Example:
+    #   gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite,
+    #   openrouter:<vendor/model>:free,ollama:<local-model>
+    agent_llm_chain: str = ""
+    # Bounded in-call retries per provider on 429/503/timeouts (0-3), and
+    # the longest retry-after the router will sleep for before moving on.
+    agent_llm_retries_per_provider: int = 1
+    agent_llm_max_retry_wait_seconds: float = 20.0
+    # Seconds a provider is skipped after exhausting retries (rate limit /
+    # outage) and after an auth / model-unavailable / cost-policy error.
+    agent_llm_cooldown_seconds: float = 60.0
+    agent_llm_disable_seconds: float = 3600.0
+    # Gemini models the Agent may use. Mirrors the models Google lists with
+    # a FREE tier on https://ai.google.dev/gemini-api/docs/pricing (checked
+    # Oct 2026; Pro models are paid-only). Any other Gemini model in the
+    # chain is refused at startup. Re-check the pricing page when changing.
+    agent_gemini_free_models: str = (
+        "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,"
+        "gemini-3.5-flash-lite,gemini-3.1-flash-lite"
+    )
+    # Local Ollama (or LM Studio / llama.cpp) OpenAI-compatible endpoint.
+    # Must be a local/private address; public URLs are refused.
+    ollama_base_url: str = "http://localhost:11434/v1"
+    ollama_api_key: str | None = None
 
     # OpenRouter-compatible endpoint (any OpenAI-compatible
     # /chat/completions server works, e.g. a local Ollama/LM Studio).
@@ -859,6 +887,29 @@ class Settings(BaseSettings):
     @property
     def whatsapp_bot_id_set(self) -> frozenset[str]:
         return frozenset(self._csv(self.whatsapp_bot_ids))
+
+    @property
+    def agent_llm_chain_entries(self) -> list[tuple[str, str | None]]:
+        """(provider, model) pairs of the Agent routing chain. Falls back to
+        the legacy AGENT_LLM_PROVIDER/MODEL + AGENT_LLM_FALLBACK_* pair."""
+        entries: list[tuple[str, str | None]] = []
+        if self.agent_llm_chain.strip():
+            for item in self._csv(self.agent_llm_chain):
+                provider, _, model = item.partition(":")
+                entries.append((provider.strip().lower(), model.strip() or None))
+            return entries
+        legacy: list[tuple[str | None, str | None]] = [
+            (self.agent_llm_provider, self.agent_llm_model),
+            (self.agent_llm_fallback_provider, self.agent_llm_fallback_model),
+        ]
+        for provider, model in legacy:
+            if provider and provider.lower() != "none":
+                entries.append((provider.lower(), model))
+        return entries
+
+    @property
+    def agent_gemini_free_model_set(self) -> frozenset[str]:
+        return frozenset(self._csv(self.agent_gemini_free_models))
 
     @property
     def agent_publisher_names(self) -> list[str]:

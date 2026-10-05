@@ -42,10 +42,19 @@ class AgentError(Exception):
 
     category: ErrorCategory = ErrorCategory.SYSTEM
 
-    def __init__(self, message: str, *, code: str = "AGENT_ERROR", category: ErrorCategory | None = None):
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "AGENT_ERROR",
+        category: ErrorCategory | None = None,
+        retry_after: float | None = None,
+    ):
         super().__init__(message)
         self.message = message
         self.code = code
+        # Seconds the remote service asked us to wait (429/503), if it said so.
+        self.retry_after = retry_after
         if category is not None:
             self.category = category
 
@@ -79,6 +88,13 @@ class ValidationFailedError(AgentError):
 
 class DataError(AgentError):
     category = ErrorCategory.DATA
+
+
+class CostPolicyError(AgentError):
+    """A provider/model would (or did) cost money. Never retried; the router
+    disables that provider and moves on to the next free one."""
+
+    category = ErrorCategory.AUTHENTICATION
 
 
 class ConfigurationError(AgentError):

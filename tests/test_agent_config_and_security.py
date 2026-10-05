@@ -126,9 +126,53 @@ def test_llm_provider_without_model_or_key_is_fatal_and_no_model_is_assumed():
 
 def test_llm_provider_fully_configured_is_fine():
     problems = collect_config_problems(
-        _settings(agent_llm_provider="gemini", agent_llm_model="some-model", gemini_api_key="secret-value-123")
+        _settings(agent_llm_provider="gemini", agent_llm_model="gemini-3.5-flash-lite", gemini_api_key="secret-value-123")
     )
     assert not _fatal_settings(problems)
+
+
+def test_gemini_model_outside_free_allowlist_is_fatal():
+    problems = collect_config_problems(
+        _settings(agent_llm_chain="gemini:gemini-3.8-pro", gemini_api_key="secret-value-123")
+    )
+    assert "AGENT_LLM_CHAIN" in _fatal_settings(problems)
+
+
+def test_full_free_chain_is_fine_and_warns_about_gemini_billing():
+    problems = collect_config_problems(
+        _settings(
+            agent_llm_chain="gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite,"
+            "openrouter:vendor/model:free,ollama:llama3.2",
+            gemini_api_key="g-secret",
+            openrouter_api_key="or-secret",
+        )
+    )
+    assert not _fatal_settings(problems)
+    assert any(p.setting == "GEMINI_API_KEY" and p.severity == "warning" for p in problems)
+
+
+def test_chain_problems_unknown_provider_missing_key_public_ollama():
+    fatal = _fatal_settings(
+        collect_config_problems(
+            _settings(agent_llm_chain="openai:gpt-x,openrouter:vendor/m:free,ollama:m",
+                      ollama_base_url="https://api.example.com/v1")
+        )
+    )
+    assert {"AGENT_LLM_CHAIN", "OPENROUTER_API_KEY", "OLLAMA_BASE_URL"} <= fatal
+
+
+def test_chain_entries_parse_openrouter_free_suffix_and_legacy_pair():
+    cfg = _settings(agent_llm_chain=" gemini:gemini-3.8-flash , openrouter:vendor/model:free ")
+    assert cfg.agent_llm_chain_entries == [("gemini", "gemini-3.8-flash"), ("openrouter", "vendor/model:free")]
+    legacy = _settings(agent_llm_provider="gemini", agent_llm_model="a",
+                       agent_llm_fallback_provider="ollama", agent_llm_fallback_model="b")
+    assert legacy.agent_llm_chain_entries == [("gemini", "a"), ("ollama", "b")]
+
+
+def test_router_retries_are_bounded():
+    assert "AGENT_LLM_RETRIES_PER_PROVIDER" in _fatal_settings(
+        collect_config_problems(_settings(agent_llm_retries_per_provider=10))
+    )
 
 
 def test_unknown_provider_is_fatal():

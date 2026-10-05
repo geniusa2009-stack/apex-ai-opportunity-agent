@@ -17,16 +17,30 @@ store. Fatal misconfigurations stop the app at startup with the setting name
 
 | Variable | Default | Notes |
 |---|---|---|
-| `AGENT_LLM_PROVIDER` | `none` | `gemini`, `openrouter`, `none` |
-| `AGENT_LLM_MODEL` | — | **Required** with a provider. No model name is assumed. |
-| `AGENT_LLM_FALLBACK_PROVIDER` / `_MODEL` | — | Tried once on transport/rate-limit/auth errors (not on validation failures). |
+| `AGENT_LLM_CHAIN` | — | Ordered free-only chain, `provider:model,...` (`gemini`, `openrouter`, `ollama`). Overrides the legacy pair below. |
+| `AGENT_LLM_RETRIES_PER_PROVIDER` | `1` | Retries on 429/503/timeouts per provider, 0–3. |
+| `AGENT_LLM_MAX_RETRY_WAIT_SECONDS` | `20` | Longer server retry-after → provider cooled down, next one tried. |
+| `AGENT_LLM_COOLDOWN_SECONDS` / `AGENT_LLM_DISABLE_SECONDS` | `60` / `3600` | Skip time after rate-limit/outage, and after auth / model-gone / cost-policy errors. |
+| `AGENT_GEMINI_FREE_MODELS` | free-tier Flash models | Gemini models the agent may use; others are fatal at startup. |
+| `AGENT_LLM_PROVIDER` / `AGENT_LLM_MODEL` | `none` | Legacy single provider (used only when the chain is empty). |
+| `AGENT_LLM_FALLBACK_PROVIDER` / `_MODEL` | — | Legacy second slot. |
 | `AGENT_LLM_TIMEOUT_SECONDS` | `60` | |
 | `AGENT_LLM_TEMPERATURE` | `0.1` | |
-| `AGENT_LLM_MAX_VALIDATION_RETRIES` | `2` | Self-correction rounds, 0–5. |
-| `GEMINI_API_KEY` | — | existing setting, reused |
-| `OPENROUTER_API_KEY` | — | |
-| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | Any OpenAI-compatible server, e.g. local Ollama `http://localhost:11434/v1` (zero cost). |
+| `AGENT_LLM_MAX_VALIDATION_RETRIES` | `2` | Self-correction rounds, 0–5. Schema failures never switch provider. |
+| `GEMINI_API_KEY` | — | existing setting, reused. Keep its project on the free tier. |
+| `OPENROUTER_API_KEY` | — | Only zero-priced models are called (catalog check fail-closed, `max_price=0`, reported cost checked). |
+| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | |
 | `OPENROUTER_APP_TITLE`, `OPENROUTER_HTTP_REFERER` | | optional attribution headers |
+| `OLLAMA_BASE_URL` | `http://localhost:11434/v1` | Local/private addresses only. |
+| `OLLAMA_API_KEY` | — | Usually empty. |
+
+Routing: each provider gets bounded retries on 429/503/timeouts (honouring
+retry-after up to the max wait); auth errors, 404 "model unavailable" and
+cost-policy blocks skip straight to the next provider; truncated output tries
+the next model. If all fail, the job runner retries later (then dead letter)
+for outages, sends truncation to human review, and marks config/cost errors
+FAILED. The router can only move down the configured chain — no paid model is
+ever added automatically.
 
 Free tiers change; nothing in the agent depends on one staying free. With
 no LLM at all, ingestion/dedup/verification still run; extraction reports
@@ -78,10 +92,7 @@ See WHATSAPP.md: `WHATSAPP_CONNECTOR`, `ALLOWED_WHATSAPP_GROUP_IDS`,
 ## Example: zero-cost setup
 
 ```
-AGENT_LLM_PROVIDER=openrouter
-OPENROUTER_BASE_URL=http://localhost:11434/v1   # self-hosted Ollama
-OPENROUTER_API_KEY=ollama                        # any non-empty value for local servers
-AGENT_LLM_MODEL=<a model you pulled locally>
+AGENT_LLM_CHAIN=gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite,ollama:<a model you pulled locally>
 AGENT_WRITER_MODE=template
 AGENT_PUBLISHERS=manual
 WHATSAPP_CONNECTOR=disabled                      # use volunteer submissions first

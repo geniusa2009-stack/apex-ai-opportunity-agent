@@ -18,7 +18,7 @@ from app.core.config import settings as global_settings
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_LLM_PROVIDERS = frozenset({"gemini", "openrouter", "none"})
+SUPPORTED_LLM_PROVIDERS = frozenset({"gemini", "openrouter", "ollama", "none"})
 SUPPORTED_EMBEDDING_PROVIDERS = frozenset({"openai", "gemini", "none"})
 SUPPORTED_WRITER_MODES = frozenset({"template", "llm"})
 SUPPORTED_WHATSAPP_CONNECTORS = frozenset({"disabled", "mock", "cloud_api", "bridge"})
@@ -90,43 +90,58 @@ def collect_config_problems(cfg: Settings) -> list[ConfigProblem]:
         if not value:
             fatal(name, f"required by AGENT_EMBEDDING_PROVIDER={cfg.agent_embedding_provider}")
 
-    # --- LLM ----------------------------------------------------------
-    for provider_setting, model_setting, provider, model in (
-        ("AGENT_LLM_PROVIDER", "AGENT_LLM_MODEL", cfg.agent_llm_provider, cfg.agent_llm_model),
-        (
-            "AGENT_LLM_FALLBACK_PROVIDER",
-            "AGENT_LLM_FALLBACK_MODEL",
-            cfg.agent_llm_fallback_provider or "none",
-            cfg.agent_llm_fallback_model,
-        ),
-    ):
-        if provider not in SUPPORTED_LLM_PROVIDERS:
+    # --- LLM (free-only routing chain) --------------------------------
+    from app.agent.llm.providers import is_local_base_url
+
+    chain_setting = "AGENT_LLM_CHAIN" if cfg.agent_llm_chain.strip() else "AGENT_LLM_PROVIDER"
+    for provider_setting in ("AGENT_LLM_PROVIDER", "AGENT_LLM_FALLBACK_PROVIDER"):
+        value = (cfg.agent_llm_provider if provider_setting == "AGENT_LLM_PROVIDER"
+                 else cfg.agent_llm_fallback_provider) or "none"
+        if value.lower() not in SUPPORTED_LLM_PROVIDERS:
             fatal(provider_setting, f"must be one of {sorted(SUPPORTED_LLM_PROVIDERS)}")
-            continue
-        if provider == "none":
+    llm_entries = cfg.agent_llm_chain_entries
+    for provider, model in llm_entries:
+        if provider not in SUPPORTED_LLM_PROVIDERS - {"none"}:
+            fatal(chain_setting, f"unknown provider {provider!r}; supported: {sorted(SUPPORTED_LLM_PROVIDERS - {'none'})}")
             continue
         if not model:
-            fatal(model_setting, f"required when {provider_setting}={provider} (no model name is assumed)")
-        if provider == "gemini" and not cfg.gemini_api_key:
-            fatal("GEMINI_API_KEY", f"required by {provider_setting}=gemini")
+            fatal("AGENT_LLM_CHAIN" if cfg.agent_llm_chain.strip() else "AGENT_LLM_MODEL", f"{provider} entry has no model (no model name is assumed)")
+        if provider == "gemini":
+            if not cfg.gemini_api_key:
+                fatal("GEMINI_API_KEY", f"required by {chain_setting} (gemini)")
+            if model and model not in cfg.agent_gemini_free_model_set:
+                fatal(chain_setting, f"gemini model {model!r} is not on AGENT_GEMINI_FREE_MODELS (free-tier "
+                                     "allowlist); refusing a possibly paid model")
         if provider == "openrouter" and not cfg.openrouter_api_key:
-            fatal("OPENROUTER_API_KEY", f"required by {provider_setting}=openrouter")
-    if cfg.agent_llm_provider == "none":
+            fatal("OPENROUTER_API_KEY", f"required by {chain_setting} (openrouter)")
+        if provider == "ollama" and not is_local_base_url(cfg.ollama_base_url):
+            fatal("OLLAMA_BASE_URL", "must be a local/private address (a public URL could be a paid API)")
+    if not llm_entries:
         warn(
-            "AGENT_LLM_PROVIDER",
+            "AGENT_LLM_CHAIN",
             "no LLM configured: messages will stop at extraction with a clear "
             "configuration error (deterministic stages still run).",
         )
+    if any(p == "gemini" for p, _ in llm_entries):
+        warn(
+            "GEMINI_API_KEY",
+            "the Gemini free tier cannot be detected from the API: keep this key's project on the free tier "
+            "(do not 'Upgrade to Paid' / attach billing), otherwise usage is billed.",
+        )
+    if not 0 <= cfg.agent_llm_retries_per_provider <= 3:
+        fatal("AGENT_LLM_RETRIES_PER_PROVIDER", "must be between 0 and 3 (no endless retries)")
+    if not 0 < cfg.agent_llm_max_retry_wait_seconds <= 120:
+        fatal("AGENT_LLM_MAX_RETRY_WAIT_SECONDS", "must be > 0 and <= 120")
     if not 0 <= cfg.agent_llm_max_validation_retries <= 5:
         fatal("AGENT_LLM_MAX_VALIDATION_RETRIES", "must be between 0 and 5 (bounded self-correction)")
 
     # --- Writer / reviewer -------------------------------------------
     if cfg.agent_writer_mode not in SUPPORTED_WRITER_MODES:
         fatal("AGENT_WRITER_MODE", f"must be one of {sorted(SUPPORTED_WRITER_MODES)}")
-    if cfg.agent_writer_mode == "llm" and cfg.agent_llm_provider == "none":
-        fatal("AGENT_WRITER_MODE", "llm writer needs AGENT_LLM_PROVIDER")
-    if cfg.agent_reviewer_llm_enabled and cfg.agent_llm_provider == "none":
-        fatal("AGENT_REVIEWER_LLM_ENABLED", "LLM reviewer needs AGENT_LLM_PROVIDER")
+    if cfg.agent_writer_mode == "llm" and not llm_entries:
+        fatal("AGENT_WRITER_MODE", "llm writer needs AGENT_LLM_CHAIN")
+    if cfg.agent_reviewer_llm_enabled and not llm_entries:
+        fatal("AGENT_REVIEWER_LLM_ENABLED", "LLM reviewer needs AGENT_LLM_CHAIN")
     if not 0 <= cfg.agent_max_revision_rounds <= 3:
         fatal("AGENT_MAX_REVISION_ROUNDS", "must be between 0 and 3")
 

@@ -1,8 +1,10 @@
 """LLM abstraction for the AI Opportunity Agent.
 
-`build_llm_client()` turns configuration into an `LLMClient` (primary +
-optional fallback provider). Swapping providers is a configuration change:
-AGENT_LLM_PROVIDER / AGENT_LLM_MODEL (+ the provider's key).
+`build_llm_client()` turns configuration into an `LLMClient` whose provider
+is an `LLMRouter` over the free-only chain AGENT_LLM_CHAIN (or the legacy
+AGENT_LLM_PROVIDER/MODEL + AGENT_LLM_FALLBACK_* pair). Swapping providers is
+a configuration change; every provider is checked against the free-only
+policy when it is built.
 """
 
 from __future__ import annotations
@@ -12,7 +14,7 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
-from app.agent.errors import ConfigurationError
+from app.agent.errors import ConfigurationError, CostPolicyError
 from app.agent.llm.base import (
     ChatMessage,
     EmbeddingProvider,
@@ -20,7 +22,9 @@ from app.agent.llm.base import (
     LLMRequest,
     LLMResponse,
 )
+from app.agent.llm.router import LLMRouter, RouterPolicy
 from app.agent.llm.structured import StructuredResult, generate_structured
+from app.agent.observability import log_stage
 from app.core.config import Settings
 from app.core.config import settings as global_settings
 
@@ -33,20 +37,41 @@ __all__ = [
     "LLMProvider",
     "LLMRequest",
     "LLMResponse",
+    "LLMRouter",
+    "RouterPolicy",
     "StructuredResult",
     "build_embedding_provider",
     "build_llm_client",
     "build_provider",
+    "build_router",
 ]
 
 
+SUPPORTED_CHAIN_PROVIDERS = frozenset({"gemini", "openrouter", "ollama"})
+
+
 def build_provider(name: str | None, model: str | None, cfg: Settings) -> LLMProvider | None:
-    from app.agent.llm.providers import GeminiProvider, OpenRouterProvider
+    """Build ONE provider, enforcing the free-only policy:
+
+    * gemini: the model must be on AGENT_GEMINI_FREE_MODELS (free tier);
+    * openrouter: verified zero-priced at call time (see OpenRouterProvider);
+    * ollama: the base URL must be local/private.
+    """
+    from app.agent.llm.providers import (
+        GeminiProvider,
+        OllamaProvider,
+        OpenRouterProvider,
+    )
 
     name = (name or "none").lower()
     if name == "none":
         return None
     if name == "gemini":
+        if model and model not in cfg.agent_gemini_free_model_set:
+            raise CostPolicyError(
+                f"gemini model {model!r} is not on AGENT_GEMINI_FREE_MODELS (free-tier allowlist); refused",
+                code="LLM_PAID_MODEL_BLOCKED",
+            )
         return GeminiProvider(api_key=cfg.gemini_api_key, model=model, timeout_seconds=cfg.agent_llm_timeout_seconds)
     if name == "openrouter":
         return OpenRouterProvider(
@@ -57,11 +82,39 @@ def build_provider(name: str | None, model: str | None, cfg: Settings) -> LLMPro
             http_referer=cfg.openrouter_http_referer,
             timeout_seconds=cfg.agent_llm_timeout_seconds,
         )
+    if name == "ollama":
+        return OllamaProvider(
+            model=model,
+            base_url=cfg.ollama_base_url,
+            api_key=cfg.ollama_api_key,
+            timeout_seconds=cfg.agent_llm_timeout_seconds,
+        )
     raise ConfigurationError(f"unknown LLM provider {name!r}", code="LLM_UNKNOWN_PROVIDER")
+
+
+def router_policy(cfg: Settings) -> RouterPolicy:
+    return RouterPolicy(
+        retries_per_provider=max(0, min(3, cfg.agent_llm_retries_per_provider)),
+        max_retry_wait_seconds=cfg.agent_llm_max_retry_wait_seconds,
+        cooldown_seconds=cfg.agent_llm_cooldown_seconds,
+        disable_seconds=cfg.agent_llm_disable_seconds,
+    )
+
+
+def build_router(cfg: Settings) -> LLMRouter | None:
+    providers = [p for p in (build_provider(n, m, cfg) for n, m in cfg.agent_llm_chain_entries) if p is not None]
+    if not providers:
+        return None
+    router = LLMRouter(providers, router_policy(cfg))
+    log_stage("llm_chain", chain=router.chain)
+    return router
 
 
 @dataclasses.dataclass
 class LLMClient:
+    """`primary` is normally an `LLMRouter` (the whole free-only chain);
+    `fallback` is kept for callers/tests that pass two plain providers."""
+
     primary: LLMProvider | None
     fallback: LLMProvider | None = None
     max_validation_retries: int = 2
@@ -83,7 +136,7 @@ class LLMClient:
     ) -> StructuredResult[T]:
         if self.primary is None:
             raise ConfigurationError(
-                "no LLM provider configured (set AGENT_LLM_PROVIDER and AGENT_LLM_MODEL)", code="LLM_NOT_CONFIGURED"
+                "no LLM provider configured (set AGENT_LLM_CHAIN)", code="LLM_NOT_CONFIGURED"
             )
         return await generate_structured(
             self.primary,
@@ -101,15 +154,8 @@ class LLMClient:
 
 def build_llm_client(cfg: Settings | None = None) -> LLMClient:
     cfg = cfg or global_settings
-    primary = build_provider(cfg.agent_llm_provider, cfg.agent_llm_model, cfg)
-    fallback = (
-        build_provider(cfg.agent_llm_fallback_provider, cfg.agent_llm_fallback_model, cfg)
-        if cfg.agent_llm_fallback_provider
-        else None
-    )
     return LLMClient(
-        primary=primary,
-        fallback=fallback,
+        primary=build_router(cfg),
         max_validation_retries=cfg.agent_llm_max_validation_retries,
         temperature=cfg.agent_llm_temperature,
     )
