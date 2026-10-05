@@ -178,7 +178,7 @@ def sample_extraction(**overrides: Any) -> dict[str, Any]:
         "start_date": None,
         "end_date": None,
         "application_url": "https://www.daad.de/en/study-and-research-in-germany/scholarships/",
-        "official_url": "https://www.daad.de",
+        "official_url": None,
         "required_documents": [],
         "contact": None,
         "language": "ar",
