@@ -28,7 +28,7 @@ store. Fatal misconfigurations stop the app at startup with the setting name
 | `AGENT_LLM_TEMPERATURE` | `0.1` | |
 | `AGENT_LLM_MAX_VALIDATION_RETRIES` | `2` | Self-correction rounds, 0–5. Schema failures never switch provider. |
 | `GEMINI_API_KEY` | — | existing setting, reused. Keep its project on the free tier. |
-| `OPENROUTER_API_KEY` | — | Only zero-priced models are called (catalog check fail-closed, `max_price=0`, reported cost checked). |
+| `OPENROUTER_API_KEY` | — | Only explicit `:free` model ids that are also zero-priced in the live catalog are called (catalog check fail-closed, `max_price=0`, reported cost checked). Free routes share upstream capacity and can return 429 "rate-limited upstream"; list more than one. |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | |
 | `OPENROUTER_APP_TITLE`, `OPENROUTER_HTTP_REFERER` | | optional attribution headers |
 | `OLLAMA_BASE_URL` | `http://localhost:11434/v1` | Local/private addresses only. |
@@ -36,8 +36,11 @@ store. Fatal misconfigurations stop the app at startup with the setting name
 
 Routing: each provider gets bounded retries on 429/503/timeouts (honouring
 retry-after up to the max wait); auth errors, 404 "model unavailable" and
-cost-policy blocks skip straight to the next provider; truncated output tries
-the next model. If all fail, the job runner retries later (then dead letter)
+cost-policy blocks skip straight to the next provider; truncated output or a
+context-length 400 tries the next model. Any other HTTP 400/413/422 is an
+invalid request (`LLM_INVALID_REQUEST`): it fails clearly and is NOT hidden
+by another provider. Known provider-specific 400s (invalid key, model gone,
+region not supported) count as provider unavailable and do move on. If all fail, the job runner retries later (then dead letter)
 for outages, sends truncation to human review, and marks config/cost errors
 FAILED. The router can only move down the configured chain — no paid model is
 ever added automatically.

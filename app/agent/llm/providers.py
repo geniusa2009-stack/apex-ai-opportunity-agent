@@ -40,15 +40,65 @@ from app.agent.llm.base import LLMRequest, LLMResponse
 _RETRY_DELAY = re.compile(r"retryDelay['\"]?\s*[:=]\s*['\"]?(\d+(?:\.\d+)?)s")
 
 
-def http_error(prefix: str, status: int, *, retry_after: float | None = None, detail: str = "") -> AgentError:
-    """Map an HTTP failure to an AgentError. 404 on a generation endpoint means
-    the MODEL is not available to this key (e.g. retired for new users) -- a
-    provider problem the router routes around, not a data problem."""
-    if status == 404:
-        return AgentError(f"{prefix}: model not available (HTTP 404){detail}", code="LLM_MODEL_UNAVAILABLE",
+# Known provider-specific 4xx cases, matched on the error body. Everything
+# else that is a 400/413/422 is treated as an INVALID REQUEST: it fails
+# clearly (job -> NEEDS_REVIEW) instead of being hidden by another provider.
+_INVALID_KEY = re.compile(r"API_KEY_INVALID|API key not valid|invalid api key|No auth credentials", re.IGNORECASE)
+_REGION_BLOCKED = re.compile(r"location is not supported|not available in your (?:country|region)", re.IGNORECASE)
+_MODEL_GONE = re.compile(
+    r"is not found for API version|not supported for generateContent|no longer available|"
+    r"No endpoints found|is not a valid model ID|model.{0,40}does not exist",
+    re.IGNORECASE,
+)
+_CONTEXT_TOO_LONG = re.compile(r"context length|context window|maximum context|too many tokens|input token count", re.IGNORECASE)
+
+
+def http_error(prefix: str, status: int, *, retry_after: float | None = None, detail: str = "",
+               body: str = "") -> AgentError:
+    """Map an HTTP failure to an AgentError.
+
+    * 404, and 400s whose body says the model is gone / has no endpoint ->
+      LLM_MODEL_UNAVAILABLE (provider problem: the router moves on).
+    * 400 "API key not valid" (Gemini answers 400, not 401) -> auth.
+    * 400 "location is not supported" -> provider unavailable here.
+    * 400 context-length exceeded -> LLM_CONTEXT_TOO_LONG (model-specific
+      limit: another model may accept it).
+    * any other 400/413/422 -> LLM_INVALID_REQUEST (DATA): our request is
+      wrong; no fallback, a human looks at it.
+    * 401/402/403 auth, 429 rate limit, 5xx external service: unchanged.
+    """
+    from app.agent.observability import redact
+
+    text = f"{detail} {body}"
+    snippet = f": {redact(body.strip())[:160]}" if body.strip() and not detail else detail
+    if status == 404 or (status == 400 and _MODEL_GONE.search(text)):
+        return AgentError(f"{prefix}: model not available (HTTP {status}){snippet}", code="LLM_MODEL_UNAVAILABLE",
                           category=ErrorCategory.AUTHENTICATION)
-    return AgentError(f"{prefix} HTTP {status}{detail}", code=f"{prefix.upper()}_HTTP_{status}",
+    if status == 400 and _INVALID_KEY.search(text):
+        return AgentError(f"{prefix}: API key rejected (HTTP 400)", code="LLM_AUTH_INVALID",
+                          category=ErrorCategory.AUTHENTICATION)
+    if status == 400 and _REGION_BLOCKED.search(text):
+        return AgentError(f"{prefix}: not available in this region (HTTP 400)", code="LLM_PROVIDER_UNAVAILABLE",
+                          category=ErrorCategory.AUTHENTICATION)
+    if status in (400, 413) and _CONTEXT_TOO_LONG.search(text):
+        return DataError(f"{prefix}: input exceeds this model's context (HTTP {status})", code="LLM_CONTEXT_TOO_LONG")
+    if status in (400, 413, 422):
+        return DataError(f"{prefix}: invalid request (HTTP {status}){snippet}", code="LLM_INVALID_REQUEST")
+    return AgentError(f"{prefix} HTTP {status}{snippet}", code=f"{prefix.upper()}_HTTP_{status}",
                       category=category_for_http_status(status), retry_after=retry_after)
+
+
+def _error_message(response: httpx.Response) -> str:
+    """The provider's error message (never request headers, so never a key)."""
+    try:
+        payload = response.json()
+        error = payload.get("error") if isinstance(payload, dict) else None
+        if isinstance(error, dict):
+            raw = error.get("metadata", {}).get("raw") if isinstance(error.get("metadata"), dict) else None
+            return f"{error.get('message', '')} {raw or ''}"[:500]
+        return str(error or "")[:500]
+    except ValueError:
+        return response.text[:500]
 
 
 def _retry_after_header(response: httpx.Response) -> float | None:
@@ -109,7 +159,8 @@ class GeminiProvider:
         except genai_errors.APIError as exc:
             status = int(getattr(exc, "code", None) or 500)
             match = _RETRY_DELAY.search(str(getattr(exc, "details", "") or exc))
-            raise http_error("gemini", status, retry_after=float(match.group(1)) if match else None) from exc
+            raise http_error("gemini", status, retry_after=float(match.group(1)) if match else None,
+                             body=str(getattr(exc, "message", "") or "")[:500]) from exc
         except (httpx.TimeoutException, httpx.NetworkError) as exc:
             raise TransientError(f"gemini network error: {type(exc).__name__}", code="LLM_NETWORK_ERROR") from exc
         candidates = getattr(response, "candidates", None) or []
@@ -219,7 +270,8 @@ class OpenAICompatibleProvider:
             raise TransientError(f"{self.name} network error: {type(exc).__name__}", code="LLM_NETWORK_ERROR") from exc
 
         if response.status_code >= 400:
-            raise http_error(self.name, response.status_code, retry_after=_retry_after_header(response))
+            raise http_error(self.name, response.status_code, retry_after=_retry_after_header(response),
+                             body=_error_message(response))
         try:
             payload = response.json()
         except ValueError as exc:
@@ -250,7 +302,12 @@ class OpenAICompatibleProvider:
 
 
 class OpenRouterProvider(OpenAICompatibleProvider):
-    """OpenRouter, FREE models only. Three independent guards:
+    """OpenRouter, FREE models only. Four independent guards:
+
+    0. The model id must be an explicit ``:free`` route. Some catalog entries
+       show prompt/completion = 0 without being a free route (e.g. preview or
+       audio models billed in units the catalog does not list); those are
+       refused outright.
 
     1. Before the first call (and hourly) the public model catalog is read and
        the configured model must have ALL prices equal to 0. If the catalog
@@ -267,6 +324,11 @@ class OpenRouterProvider(OpenAICompatibleProvider):
                  base_url: str = "https://openrouter.ai/api/v1", clock=time.monotonic, **kwargs: Any):
         _require(api_key, "OPENROUTER_API_KEY")
         super().__init__(api_key=api_key, model=model, base_url=base_url, **kwargs)
+        if not is_free_route(self.model):
+            raise CostPolicyError(
+                f"openrouter model {self.model!r} is not an explicit ':free' route; refused by the free-only policy",
+                code="LLM_PAID_MODEL_BLOCKED",
+            )
         self._clock = clock
         self._verified_until = 0.0
         self._disabled_reason: str | None = None
@@ -308,6 +370,11 @@ class OpenRouterProvider(OpenAICompatibleProvider):
         if charged:
             self._disabled_reason = f"openrouter reported a non-zero cost ({cost}); provider disabled"
             logger.error("cost_policy: %s", self._disabled_reason)
+
+
+def is_free_route(model_id: str) -> bool:
+    """OpenRouter's explicit free variants end in ':free'."""
+    return model_id.endswith(":free")
 
 
 def is_zero_priced(pricing: Any) -> bool:

@@ -159,6 +159,9 @@ def test_chain_problems_unknown_provider_missing_key_public_ollama():
         )
     )
     assert {"AGENT_LLM_CHAIN", "OPENROUTER_API_KEY", "OLLAMA_BASE_URL"} <= fatal
+    fatal = _fatal_settings(collect_config_problems(
+        _settings(agent_llm_chain="openrouter:vendor/model", openrouter_api_key="k")))
+    assert "AGENT_LLM_CHAIN" in fatal  # not an explicit :free route
 
 
 def test_chain_entries_parse_openrouter_free_suffix_and_legacy_pair():

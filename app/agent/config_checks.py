@@ -114,6 +114,9 @@ def collect_config_problems(cfg: Settings) -> list[ConfigProblem]:
                                      "allowlist); refusing a possibly paid model")
         if provider == "openrouter" and not cfg.openrouter_api_key:
             fatal("OPENROUTER_API_KEY", f"required by {chain_setting} (openrouter)")
+        if provider == "openrouter" and model and not model.endswith(":free"):
+            fatal(chain_setting, f"openrouter model {model!r} is not an explicit ':free' route; refusing a possibly "
+                                 "paid model")
         if provider == "ollama" and not is_local_base_url(cfg.ollama_base_url):
             fatal("OLLAMA_BASE_URL", "must be a local/private address (a public URL could be a paid API)")
     if not llm_entries:

@@ -14,8 +14,13 @@ Per provider (one "slot" = provider + model):
 * AUTHENTICATION (401/402/403, model unavailable/404, cost-policy block,
   configuration): no retry; the slot is disabled for `disable_seconds`
   and the router moves on.
-* DATA from a provider (LLM_OUTPUT_TRUNCATED, HTTP 400/413/422): the next
-  slot is tried (a different model may fit the budget); no cooldown.
+* LLM_OUTPUT_TRUNCATED / LLM_CONTEXT_TOO_LONG: the next slot is tried (a
+  different model may fit); no cooldown.
+* any other DATA / VALIDATION (LLM_INVALID_REQUEST = an unrecognised HTTP
+  400/413/422): raised immediately -- an invalid request must fail clearly,
+  not be hidden by another provider. Known provider-specific 400s (invalid
+  key, model gone, region blocked) are classified as AUTHENTICATION by the
+  adapters and therefore DO move to the next provider.
 
 Application-level validation (JSON/Pydantic schema, grounding of links and
 dates) happens ABOVE the router in `structured.py`: those failures are
@@ -24,7 +29,7 @@ they never trigger a provider fallback.
 
 If every slot fails, one aggregated error is raised whose category feeds the
 existing job runner: retryable if any slot failed transiently (retry with
-backoff, then DEAD_LETTER), DATA if slots only rejected the request
+backoff, then DEAD_LETTER), DATA if slots only hit model-specific limits
 (NEEDS_REVIEW),
 otherwise AUTHENTICATION (FAILED: an operator must fix the config).
 
@@ -55,6 +60,9 @@ from app.agent.llm.base import LLMProvider, LLMRequest, LLMResponse
 from app.agent.observability import log_stage
 
 TRUNCATED = "LLM_OUTPUT_TRUNCATED"
+# DATA errors that depend on the MODEL, not on our request: another model
+# may succeed. Every other DATA/VALIDATION error is raised immediately.
+FALLBACK_DATA_CODES = frozenset({TRUNCATED, "LLM_CONTEXT_TOO_LONG"})
 _RETRYABLE = frozenset(
     {ErrorCategory.RATE_LIMIT, ErrorCategory.TRANSIENT, ErrorCategory.EXTERNAL_SERVICE, ErrorCategory.SYSTEM}
 )
@@ -164,11 +172,14 @@ class LLMRouter:
                 log_stage("llm_route_error", level=logging.WARNING, provider=provider.name, model=provider.model,
                           position=position, attempt=attempt, error_code=error.code, category=error.category.value)
                 if error.category in (ErrorCategory.VALIDATION, ErrorCategory.DATA):
-                    # This provider could not serve THIS request (truncated
-                    # output, HTTP 400/413/422): the next model may. No
-                    # cooldown -- the provider itself is fine.
-                    failures.append(error)
-                    break
+                    if error.code in FALLBACK_DATA_CODES:
+                        # Model-specific limit (truncated output / context
+                        # size): the next model may fit. No cooldown.
+                        failures.append(error)
+                        break
+                    # Invalid request / schema / config: fail clearly, never
+                    # hidden by another provider.
+                    raise error
                 if error.category not in _RETRYABLE:  # AUTHENTICATION incl. cost policy / model gone
                     self.cooldowns.put(key, self.policy.disable_seconds, error)
                     failures.append(error)
@@ -192,6 +203,6 @@ class LLMRouter:
             return cls(message, code="LLM_ALL_PROVIDERS_FAILED", retry_after=min(waits) if waits else None)
         data = [f for f in failures if f.category in (ErrorCategory.VALIDATION, ErrorCategory.DATA)]
         if data:
-            code = TRUNCATED if all(f.code == TRUNCATED for f in data) else "LLM_ALL_PROVIDERS_REJECTED_REQUEST"
+            code = TRUNCATED if all(f.code == TRUNCATED for f in data) else "LLM_CONTEXT_TOO_LONG"
             return DataError(message, code=code)
         return AuthenticationError(message, code="LLM_ALL_PROVIDERS_FAILED")

@@ -273,7 +273,7 @@ class TestOpenRouterFreeOnly:
 
     async def test_paid_model_is_blocked_before_any_chat_call(self):
         chats = []
-        provider = _router_provider(lambda r: chats.append(1) or _ok(r),
+        provider = _router_provider(lambda r: chats.append(1) or _ok(r), model="vendor/now-paid:free",
                                     pricing={"prompt": "0.000001", "completion": "0.000002", "request": "0"})
         for _ in range(2):  # stays blocked
             with pytest.raises(CostPolicyError) as info:
@@ -281,10 +281,20 @@ class TestOpenRouterFreeOnly:
             assert info.value.code == "LLM_PAID_MODEL_BLOCKED"
         assert chats == []
 
+    async def test_zero_priced_but_not_a_free_route_is_refused(self):
+        # live catalog (Oct 2026) had e.g. preview/audio models priced 0 per token without ':free'
+        with pytest.raises(CostPolicyError) as info:
+            OpenRouterProvider(api_key="k", model="google/some-preview-model")
+        assert info.value.code == "LLM_PAID_MODEL_BLOCKED"
+        with pytest.raises(CostPolicyError):
+            OpenRouterProvider(api_key="k", model="openrouter/free")  # meta-router: cannot pin what it picks
+        with pytest.raises(CostPolicyError):
+            build_llm_client(_settings(agent_llm_chain="openrouter:vendor/model", openrouter_api_key="k"))
+
     async def test_missing_pricing_is_treated_as_paid(self):
         no_pricing = OpenRouterProvider(
-            api_key="k", model="m",
-            transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"data": [{"id": "m"}]})))
+            api_key="k", model="m:free",
+            transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"data": [{"id": "m:free"}]})))
         with pytest.raises(CostPolicyError):
             await no_pricing.complete(REQ)
 
@@ -294,7 +304,7 @@ class TestOpenRouterFreeOnly:
                 raise httpx.ConnectError("down")
             raise AssertionError("chat must not be called when the price cannot be verified")
 
-        provider = OpenRouterProvider(api_key="k", model="m", transport=httpx.MockTransport(handler))
+        provider = OpenRouterProvider(api_key="k", model="m:free", transport=httpx.MockTransport(handler))
         with pytest.raises(ExternalServiceError) as info:
             await provider.complete(REQ)
         assert info.value.code == "LLM_FREE_CHECK_UNAVAILABLE"
@@ -333,7 +343,7 @@ class TestOpenRouterFreeOnly:
             await provider.complete(REQ)
 
     async def test_router_skips_blocked_openrouter_and_uses_local(self):
-        paid = _router_provider(_ok, model="vendor/paid", pricing={"prompt": "0.00001", "completion": "0"})
+        paid = _router_provider(_ok, model="vendor/paid:free", pricing={"prompt": "0.00001", "completion": "0"})
         local = fake("ollama", OK)
         router, _ = make_router(paid, local)
         assert (await router.complete(REQ)).provider == "ollama"
@@ -344,3 +354,90 @@ def test_errors_never_contain_the_key():
     assert "sk-" not in str(error) and error.category == ErrorCategory.AUTHENTICATION
     assert http_error("gemini", 503, retry_after=3).retry_after == 3
     assert TransientError("x").retryable
+
+
+# --------------------------------------------------------------------------
+# HTTP 400 classification: no blanket fallback
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("status,body,code,category", [
+    (400, "API key not valid. Please pass a valid API key. [reason: API_KEY_INVALID]", "LLM_AUTH_INVALID",
+     ErrorCategory.AUTHENTICATION),
+    (400, "User location is not supported for the API use.", "LLM_PROVIDER_UNAVAILABLE", ErrorCategory.AUTHENTICATION),
+    (400, "models/x is not found for API version v1beta, or is not supported for generateContent",
+     "LLM_MODEL_UNAVAILABLE", ErrorCategory.AUTHENTICATION),
+    (400, "vendor/old:free is not a valid model ID", "LLM_MODEL_UNAVAILABLE", ErrorCategory.AUTHENTICATION),
+    (400, "This endpoint's maximum context length is 8192 tokens", "LLM_CONTEXT_TOO_LONG", ErrorCategory.DATA),
+    (400, "Invalid value for 'temperature'", "LLM_INVALID_REQUEST", ErrorCategory.DATA),
+    (400, "", "LLM_INVALID_REQUEST", ErrorCategory.DATA),
+    (422, "messages: field required", "LLM_INVALID_REQUEST", ErrorCategory.DATA),
+    (404, "", "LLM_MODEL_UNAVAILABLE", ErrorCategory.AUTHENTICATION),
+    (429, "quota", "GEMINI_HTTP_429", ErrorCategory.RATE_LIMIT),
+    (503, "high demand", "GEMINI_HTTP_503", ErrorCategory.EXTERNAL_SERVICE),
+])
+def test_http_errors_are_classified_explicitly(status, body, code, category):
+    error = http_error("gemini", status, body=body)
+    assert (error.code, error.category) == (code, category)
+
+
+def test_error_snippet_is_redacted():
+    error = http_error("openrouter", 400, body="bad request, Authorization: Bearer FAKE-TOKEN-NOT-A-KEY-0123456789")
+    assert "FAKE-TOKEN-NOT-A-KEY" not in str(error)
+
+
+@pytest.mark.asyncio
+class TestRouter400Policy:
+    async def test_generic_invalid_request_fails_clearly_without_fallback(self):
+        bad = fake("gemini", http_error("gemini", 400, body="Invalid value for 'temperature'"))
+        backup = fake("openrouter", OK)
+        router, sleeps = make_router(bad, backup)
+        with pytest.raises(DataError) as info:
+            await router.complete(REQ)
+        assert info.value.code == "LLM_INVALID_REQUEST"
+        assert backup.calls == 0 and bad.calls == 1 and sleeps == []
+        # the provider is NOT put on cooldown: the request was the problem
+        assert router.cooldowns.get("gemini:gemini-model") is None
+
+    async def test_context_too_long_tries_next_model(self):
+        small = fake("ollama", http_error("ollama", 400, body="maximum context length is 4096 tokens"))
+        big = fake("gemini", OK)
+        router, _ = make_router(small, big)
+        assert (await router.complete(REQ)).provider == "gemini"
+
+    async def test_invalid_key_400_moves_on_and_disables(self):
+        rejected = fake("gemini", http_error("gemini", 400, body="API key not valid [reason: API_KEY_INVALID]"))
+        backup = fake("openrouter", OK)
+        router, _ = make_router(rejected, backup)
+        assert (await router.complete(REQ)).provider == "openrouter"
+        await router.complete(REQ)
+        assert rejected.calls == 1  # disabled, not retried
+
+    async def test_openrouter_400_body_is_classified(self):
+        def handler(request):
+            return httpx.Response(400, json={"error": {"code": 400, "message": "Provider returned error",
+                                                       "metadata": {"raw": "context length exceeded"}}})
+
+        with pytest.raises(DataError) as info:
+            await _router_provider(handler).complete(REQ)
+        assert info.value.code == "LLM_CONTEXT_TOO_LONG"
+
+        def bad(request):
+            return httpx.Response(400, json={"error": {"code": 400, "message": "messages must be an array"}})
+
+        with pytest.raises(DataError) as info:
+            await _router_provider(bad).complete(REQ)
+        assert info.value.code == "LLM_INVALID_REQUEST"
+
+    async def test_gemini_sdk_400_invalid_key_is_auth(self):
+        from google.genai import errors as genai_errors
+
+        from app.agent.llm.providers import GeminiProvider
+        from tests.test_agent_llm_and_extraction import _FakeGeminiClient
+
+        def raise_400():
+            raise genai_errors.ClientError(400, {"error": {"code": 400, "status": "INVALID_ARGUMENT",
+                                                           "message": "API key not valid. Please pass a valid API key."}})
+
+        with pytest.raises(AgentError) as info:
+            await GeminiProvider(api_key="g", model="m", client=_FakeGeminiClient(raise_400)).complete(REQ)
+        assert info.value.code == "LLM_AUTH_INVALID" and info.value.category == ErrorCategory.AUTHENTICATION

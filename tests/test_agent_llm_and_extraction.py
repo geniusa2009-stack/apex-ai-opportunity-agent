@@ -160,13 +160,13 @@ def test_grounding_context_and_schema_without_context():
 def test_build_llm_client_from_settings():
     assert build_llm_client(_settings()).available is False
     client = build_llm_client(
-        _settings(agent_llm_provider="openrouter", agent_llm_model="vendor/some-model", openrouter_api_key="k",
+        _settings(agent_llm_provider="openrouter", agent_llm_model="vendor/some-model:free", openrouter_api_key="k",
                   agent_llm_fallback_provider="gemini", agent_llm_fallback_model="gemini-3.5-flash-lite",
                   gemini_api_key="g")
     )
     # legacy primary/fallback pair becomes a two-slot router
     assert client.primary.name == "router"
-    assert client.primary.chain == ["openrouter:vendor/some-model", "gemini:gemini-3.5-flash-lite"]
+    assert client.primary.chain == ["openrouter:vendor/some-model:free", "gemini:gemini-3.5-flash-lite"]
     with pytest.raises(ConfigurationError):
         build_llm_client(_settings(agent_llm_provider="openrouter", openrouter_api_key="k"))  # no model assumed
 
@@ -178,7 +178,7 @@ def test_build_llm_client_from_settings():
 FREE_PRICING = {"prompt": "0", "completion": "0", "request": "0", "image": "0"}
 
 
-def with_free_catalog(handler, model="vendor/model", pricing=None):
+def with_free_catalog(handler, model="vendor/model:free", pricing=None):
     """OpenRouterProvider reads the public model catalog first (free-only
     check); serve it, then delegate chat calls to `handler`."""
 
@@ -191,7 +191,7 @@ def with_free_catalog(handler, model="vendor/model", pricing=None):
 
 
 def _openrouter(handler) -> OpenRouterProvider:
-    return OpenRouterProvider(api_key="sk-test", model="vendor/model",
+    return OpenRouterProvider(api_key="sk-test", model="vendor/model:free",
                               transport=httpx.MockTransport(with_free_catalog(handler)),
                               app_title="APEX", http_referer="https://apex.example")
 
