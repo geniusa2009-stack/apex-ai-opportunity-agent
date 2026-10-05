@@ -52,3 +52,9 @@ LLM/page/publisher): see the docstring of `scripts/agent_live_proof.py`.
 * Migrations: 0068 → 0070 upgrade/downgrade/upgrade on real Postgres; zero
   model/schema drift for the agent tables.
 * `ruff check` and `mypy` (0 issues) on all agent modules.
+* Docker: image built from this Dockerfile (in the sandbox, only the egress
+  proxy's CA had to be added for pip). Verified inside the image: runs as
+  `apex` (uid 999); `.env`, `.env.bak_realenv`, `.venv`, `.git` absent even
+  though they existed in the build context; HEALTHCHECK `healthy`;
+  `docker stop` exits 0 in ~1 s; `EMBEDDING_DIMENSION=768` makes the
+  container refuse to start with a clear message.
