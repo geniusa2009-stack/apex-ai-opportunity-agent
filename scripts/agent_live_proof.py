@@ -82,7 +82,8 @@ async def db_setup_and_pipeline(stage):
             async with factory() as db:
                 mod = User(id=uuid.uuid4(), email="live-mod@apex.test", full_name="Live Mod", is_active=True, is_superuser=False, admin_role=AdminRole.MODERATOR)
                 student = User(id=uuid.uuid4(), email="live-student@apex.test", full_name="Student", is_active=True, is_superuser=False)
-                db.add_all([mod, student]); await db.commit()
+                db.add_all([mod, student])
+                await db.commit()
                 return mod.id, student.id
         deps = AgentDependencies(llm=LLMClient(primary=FakeLLMProvider([sample_extraction()])), fetcher=FakeFetcher(),
                                  publishers=[MockPublisher()], today=lambda: dt.date(2026, 10, 5))
@@ -98,9 +99,12 @@ def main():
     try:
         for _ in range(60):
             try:
-                if http("GET", "/health")[0] == 200: break
-            except Exception: time.sleep(0.5)
-        mod = token_for(mod_id, "live-mod@apex.test"); student = token_for(student_id, "live-student@apex.test")
+                if http("GET", "/health")[0] == 200:
+                    break
+            except Exception:
+                time.sleep(0.5)
+        mod = token_for(mod_id, "live-mod@apex.test")
+        student = token_for(student_id, "live-student@apex.test")
         check("health 200", http("GET", "/health") == (200, {"status": "ok"}))
         code, body = http("GET", "/ready")
         check("ready reports db ok + embedding ok + redis unavailable (503)", code == 503 and body["checks"]["database"] == "ok" and body["checks"]["embedding_dimension"] == "ok" and body["checks"]["redis"].startswith("unavailable"), body)
@@ -145,7 +149,8 @@ def main():
         code, detail = http("GET", f"/api/v1/admin/agent/jobs/{queue[0]['draft']['job_id']}", token=mod)
         check("job audit trail over HTTP", code == 200 and "human_approved" in [e["stage"] for e in detail["events"]])
     finally:
-        server.terminate(); server.wait(10)
+        server.terminate()
+        server.wait(10)
     passed = sum(ok for _, ok in results)
     print(f"\nLIVE PROOF: {passed}/{len(results)} checks passed")
     sys.exit(0 if passed == len(results) else 1)
