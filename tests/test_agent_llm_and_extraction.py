@@ -289,3 +289,33 @@ def test_provider_requires_explicit_model_and_key():
     with pytest.raises(ConfigurationError):
         GeminiProvider(api_key=None, model="m")
     assert AuthenticationError("x").category == ErrorCategory.AUTHENTICATION
+
+
+@pytest.mark.asyncio
+async def test_truncated_output_is_never_returned_as_an_answer():
+    """Live finding (gemini, thinking model): with a small max_output_tokens the
+    hidden thinking tokens used the whole budget and the API returned a partial
+    'APEX_' with finish_reason=MAX_TOKENS. Partial text must raise, not pass."""
+    from google.genai import types as genai_types
+
+    truncated = type("R", (), {
+        "text": "APEX_",
+        "usage_metadata": None,
+        "candidates": [type("C", (), {"finish_reason": genai_types.FinishReason.MAX_TOKENS})()],
+    })()
+    with pytest.raises(Exception) as info:
+        await GeminiProvider(api_key="g", model="m", client=_FakeGeminiClient(lambda: truncated)).complete(REQ)
+    assert info.value.code == "LLM_OUTPUT_TRUNCATED" and info.value.category == ErrorCategory.DATA
+
+    finished = type("R", (), {
+        "text": "APEX_OK",
+        "usage_metadata": None,
+        "candidates": [type("C", (), {"finish_reason": genai_types.FinishReason.STOP})()],
+    })()
+    ok = await GeminiProvider(api_key="g", model="m", client=_FakeGeminiClient(lambda: finished)).complete(REQ)
+    assert ok.text == "APEX_OK"
+
+    provider = _openrouter(lambda r: httpx.Response(200, json={"choices": [{"message": {"content": "{\"a\""}, "finish_reason": "length"}]}))
+    with pytest.raises(Exception) as info:
+        await provider.complete(REQ)
+    assert info.value.code == "LLM_OUTPUT_TRUNCATED"

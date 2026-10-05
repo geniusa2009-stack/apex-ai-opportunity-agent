@@ -85,6 +85,16 @@ class GeminiProvider:
             ) from exc
         except (httpx.TimeoutException, httpx.NetworkError) as exc:
             raise TransientError(f"gemini network error: {type(exc).__name__}", code="LLM_NETWORK_ERROR") from exc
+        candidates = getattr(response, "candidates", None) or []
+        finish = getattr(candidates[0], "finish_reason", None) if candidates else None
+        if finish is not None and str(getattr(finish, "name", finish)).upper().endswith("MAX_TOKENS"):
+            # Partial output must never be treated as an answer. Note: on
+            # "thinking" models the hidden reasoning tokens count against
+            # max_output_tokens too (seen live: 61 thought tokens exhausted a
+            # 64-token budget), so a too-small budget truncates the reply.
+            raise DataError(
+                "gemini output was truncated at max_output_tokens", code="LLM_OUTPUT_TRUNCATED"
+            )
         text = getattr(response, "text", None)
         if not text:
             raise ExternalServiceError("gemini returned no content (possibly blocked)", code="LLM_EMPTY_RESPONSE")
@@ -177,6 +187,8 @@ class OpenRouterProvider:
             text = choice["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
             raise ExternalServiceError("openrouter response has no choices", code="LLM_BAD_RESPONSE") from exc
+        if choice.get("finish_reason") == "length":
+            raise DataError("openrouter output was truncated at max_tokens", code="LLM_OUTPUT_TRUNCATED")
         if not text:
             raise ExternalServiceError("openrouter returned empty content", code="LLM_EMPTY_RESPONSE")
         usage = payload.get("usage") or {}
