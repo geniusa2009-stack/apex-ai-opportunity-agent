@@ -86,9 +86,18 @@ CREATE TABLE user_bookmarks (
 
 CREATE_MODERATION_LOG_SQL = """
 CREATE TABLE moderation_log_entries (
-    id VARCHAR(36) PRIMARY KEY, actor_id VARCHAR(36), actor_role VARCHAR(30), action VARCHAR(50) NOT NULL,
-    target_type VARCHAR(50) NOT NULL, target_id VARCHAR(36) NOT NULL, outcome VARCHAR(50), notes TEXT,
-    details TEXT, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    id VARCHAR(36) PRIMARY KEY, actor_id VARCHAR(36), actor_role VARCHAR(20), action VARCHAR(30) NOT NULL,
+    target_type VARCHAR(30) NOT NULL, target_id VARCHAR(36) NOT NULL, outcome TEXT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
+CREATE_CHANGE_HISTORY_SQL = """
+CREATE TABLE opportunity_change_history (
+    id VARCHAR(36) PRIMARY KEY, opportunity_id VARCHAR(36) NOT NULL, field_name VARCHAR(50) NOT NULL,
+    old_value TEXT, new_value TEXT, source_id VARCHAR(36), evidence_id VARCHAR(36),
+    change_reason TEXT NOT NULL, changed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    severity VARCHAR(20)
 )
 """
 
@@ -115,7 +124,8 @@ async def make_engine_and_session_factory():
         pool_reset_on_return=None,
     )
     async with engine.begin() as conn:
-        for ddl in (CREATE_SOURCES_SQL, CREATE_OPPORTUNITIES_SQL, CREATE_CLAIMS_SQL, CREATE_EVIDENCE_SQL, CREATE_USER_BOOKMARKS_SQL):
+        for ddl in (CREATE_SOURCES_SQL, CREATE_OPPORTUNITIES_SQL, CREATE_CLAIMS_SQL, CREATE_EVIDENCE_SQL,
+                    CREATE_USER_BOOKMARKS_SQL, CREATE_MODERATION_LOG_SQL, CREATE_CHANGE_HISTORY_SQL):
             await conn.execute(text(ddl))
         for table in AGENT_TABLES:
             await conn.run_sync(table.create)

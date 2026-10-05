@@ -83,6 +83,9 @@ def quality_gate(
         add("VERIFICATION_REJECTED", "error", "verification rejected the opportunity (e.g. expired)")
     elif level == VerificationLevel.CONTRADICTED.value:
         add("CONTRADICTED", "error", "the official source contradicts the facts")
+    elif level == "human_override":
+        add("VERIFICATION_OVERRIDDEN", "warning",
+            "a team member let this continue despite verification problems -- re-check before approving")
     elif level == VerificationLevel.SOURCE_ONLY.value:
         add("SOURCE_ONLY", "warning", "facts are supported only by the incoming message, not by an official page")
     elif level == VerificationLevel.PARTIALLY_CONFIRMED.value:

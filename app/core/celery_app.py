@@ -20,6 +20,9 @@ celery_app = Celery(
         # `app/workers/` (this codebase's established convention) path
         # deviation.
         "app.workers.aggregator_tasks",
+        # APEX AI Opportunity Agent -- persistent-job pipeline runner and
+        # RSS polling; see that module's own docstring.
+        "app.workers.agent_tasks",
         # Cloud Garbage Collection (IPFS Unpinning & R2 Deletion) -- same
         # disclosed `app/worker/tasks/` -> `app/workers/` path deviation
         # as `aggregator_tasks` above; see that module's own docstring.
@@ -156,5 +159,16 @@ celery_app.conf.beat_schedule = {
     "prune-research-trajectory-steps": {
         "task": "app.workers.trajectory_retention_tasks.prune_research_trajectory_steps_task",
         "schedule": crontab(hour=4, minute=0),
+    },
+    # APEX AI Opportunity Agent. The pipeline task only CLAIMS due rows from
+    # `pipeline_jobs` (leases), so running it every minute is cheap and a
+    # missed/duplicated trigger is harmless.
+    "agent-run-pipeline": {
+        "task": "app.workers.agent_tasks.run_agent_pipeline_task",
+        "schedule": crontab(minute="*"),
+    },
+    "agent-poll-feeds": {
+        "task": "app.workers.agent_tasks.poll_agent_feeds_task",
+        "schedule": crontab(minute="*/30"),
     },
 }

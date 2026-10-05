@@ -811,6 +811,13 @@ class Settings(BaseSettings):
     agent_official_page_timeout_seconds: float = 10.0
     agent_official_page_max_bytes: int = 1_500_000
 
+    # Comma-separated RSS/Atom feed URLs polled every 30 minutes (only
+    # feeds the team chose; nothing else is crawled).
+    agent_rss_feeds: str = ""
+    # Kick the Celery pipeline task right after ingestion/approval (the
+    # every-minute beat schedule is the safety net either way).
+    agent_celery_trigger_enabled: bool = True
+
     # Publishing. Comma-separated publisher names that are ENABLED:
     # mock | manual | telegram. Real publishers also need their own config.
     agent_publishers: str = "manual"

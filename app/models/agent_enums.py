@@ -114,6 +114,9 @@ class PublicationStatus(str, enum.Enum):
     PUBLISHING = "publishing"
     PUBLISHED = "published"
     FAILED = "failed"
+    # Manual publisher: the post text is ready; a team member posts it (e.g.
+    # in a WhatsApp community) and confirms with the link -> PUBLISHED.
+    AWAITING_MANUAL = "awaiting_manual"
     # A previous attempt may or may not have reached the platform (crash
     # between "send" and "record"). Never auto-republished: a human or the
     # publisher's own lookup must resolve it. At-most-once by design.

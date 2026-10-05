@@ -13,6 +13,7 @@ from app.api.v1.endpoints.admin_case_notes import router as admin_case_notes_rou
 from app.api.v1.endpoints.admin_dangerous_actions import router as admin_dangerous_actions_router
 from app.api.v1.endpoints.admin_escalations import router as admin_escalations_router
 from app.api.v1.endpoints.admin_opportunities import router as admin_opportunities_router
+from app.api.v1.endpoints.agent import router as agent_router
 from app.api.v1.endpoints.admin_repeat_offenders import router as admin_repeat_offenders_router
 from app.api.v1.endpoints.moderation_appeals import router as moderation_appeals_router
 from app.api.v1.endpoints.admin_claims import router as admin_claims_router
@@ -467,3 +468,6 @@ api_router.include_router(ai_cv_builder_router)
 # as `mentorship_router`/`ai_cv_builder_router` above. Placed last for the
 # same low-stakes reason: most recently added router.
 api_router.include_router(career_compass_router)
+# APEX AI Opportunity Agent (app/agent/) -- ingestion webhooks, volunteer
+# submissions and the human-approval/admin endpoints.
+api_router.include_router(agent_router)
