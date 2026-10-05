@@ -76,6 +76,14 @@ CREATE TABLE evidence (
 )
 """
 
+CREATE_USER_BOOKMARKS_SQL = """
+CREATE TABLE user_bookmarks (
+    id VARCHAR(36) PRIMARY KEY, user_id VARCHAR(36) NOT NULL, opportunity_id VARCHAR(36) NOT NULL,
+    course_id VARCHAR(36), status VARCHAR(20) NOT NULL DEFAULT 'saved',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
 CREATE_MODERATION_LOG_SQL = """
 CREATE TABLE moderation_log_entries (
     id VARCHAR(36) PRIMARY KEY, actor_id VARCHAR(36), actor_role VARCHAR(30), action VARCHAR(50) NOT NULL,
@@ -107,7 +115,7 @@ async def make_engine_and_session_factory():
         pool_reset_on_return=None,
     )
     async with engine.begin() as conn:
-        for ddl in (CREATE_SOURCES_SQL, CREATE_OPPORTUNITIES_SQL, CREATE_CLAIMS_SQL, CREATE_EVIDENCE_SQL):
+        for ddl in (CREATE_SOURCES_SQL, CREATE_OPPORTUNITIES_SQL, CREATE_CLAIMS_SQL, CREATE_EVIDENCE_SQL, CREATE_USER_BOOKMARKS_SQL):
             await conn.execute(text(ddl))
         for table in AGENT_TABLES:
             await conn.run_sync(table.create)
