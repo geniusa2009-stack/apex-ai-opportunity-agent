@@ -48,19 +48,33 @@ from app.agent.publishing import PublisherConnector, build_publishers, publish_d
 from app.agent.rag import retrieve_style_examples
 from app.agent.reputation import TrustEvent, updated_trust
 from app.agent.review import review_post
-from app.agent.verification import HttpPageFetcher, NullPageFetcher, PageFetcher, verify_opportunity
+from app.agent.verification import (
+    HttpPageFetcher,
+    NullPageFetcher,
+    PageFetcher,
+    verify_opportunity,
+)
 from app.agent.writer import PostFacts, write_post
-from app.core.config import Settings, settings as global_settings
-from app.models.agent import AgentOpportunityFacts, AgentPostDraft, PipelineJob, Publication, SourceMessage
+from app.core.config import Settings
+from app.core.config import settings as global_settings
+from app.models.agent import (
+    AgentOpportunityFacts,
+    AgentPostDraft,
+    PipelineJob,
+    Publication,
+    SourceMessage,
+)
 from app.models.agent_enums import (
     DedupOutcome,
     DraftStatus,
     JobOutcome,
-    PipelineJobStatus as S,
     PublicationStatus,
     ReviewDecision,
     SourceMessageStatus,
     VerificationLevel,
+)
+from app.models.agent_enums import (
+    PipelineJobStatus as S,
 )
 from app.models.enums import OpportunityReviewStatus
 from app.models.opportunity import Opportunity
@@ -130,6 +144,13 @@ def semantic_search_for(db: AsyncSession, embedder: EmbeddingProvider | None, cf
 # Helpers
 # --------------------------------------------------------------------------
 
+async def _opportunity(db: AsyncSession, opportunity_id: uuid.UUID | None) -> Opportunity:
+    opportunity = await db.get(Opportunity, opportunity_id) if opportunity_id else None
+    if opportunity is None:
+        raise DataError("opportunity referenced by the job no longer exists", code="OPPORTUNITY_NOT_FOUND")
+    return opportunity
+
+
 async def _message(db: AsyncSession, job: PipelineJob) -> SourceMessage:
     message = await db.get(SourceMessage, job.source_message_id) if job.source_message_id else None
     if message is None:
@@ -194,8 +215,9 @@ async def stage_processing(db: AsyncSession, job: PipelineJob, deps: AgentDepend
             message.processing_status = SourceMessageStatus.PROCESSED.value
             message.dedup_outcome = duplicate.outcome.value
             message.dedup_details = duplicate.as_dict()
-            await link_message(db, duplicate.opportunity_id, message, "duplicate")
-            job.opportunity_id = duplicate.opportunity_id
+            opportunity = await _opportunity(db, duplicate.opportunity_id)
+            await link_message(db, opportunity.id, message, "duplicate")
+            job.opportunity_id = opportunity.id
             await _complete(db, job, JobOutcome.DUPLICATE, stage="exact_dedup", detail={"reasons": duplicate.reasons},
                             duration_ms=elapsed())
             return
@@ -229,15 +251,16 @@ async def stage_extracting(db: AsyncSession, job: PipelineJob, deps: AgentDepend
             message.dedup_details = decision.as_dict()
 
             if decision.outcome == DedupOutcome.DUPLICATE:
-                await link_message(db, decision.opportunity_id, message, "duplicate")
+                existing = await _opportunity(db, decision.opportunity_id)
+                await link_message(db, existing.id, message, "duplicate")
                 message.processing_status = SourceMessageStatus.PROCESSED.value
-                job.opportunity_id = decision.opportunity_id
+                job.opportunity_id = existing.id
                 await _complete(db, job, JobOutcome.DUPLICATE, stage="dedup", detail={"reasons": decision.reasons},
                                 duration_ms=elapsed())
                 return
 
             if decision.outcome == DedupOutcome.UPDATE_EXISTING:
-                opportunity = await db.get(Opportunity, decision.opportunity_id)
+                opportunity = await _opportunity(db, decision.opportunity_id)
                 facts_row = await db.get(AgentOpportunityFacts, decision.opportunity_id)
                 proposal = compute_update_proposal(opportunity, facts_row, extraction)
                 await link_message(db, opportunity.id, message, "update")
@@ -288,7 +311,7 @@ async def stage_verifying(db: AsyncSession, job: PipelineJob, deps: AgentDepende
             source.trust_score = updated_trust(source.trust_score, TrustEvent.VERIFICATION_CONTRADICTED)
         if report.expired:
             if not _payload(job).get("update_proposal"):
-                opportunity = await db.get(Opportunity, job.opportunity_id)
+                opportunity = await _opportunity(db, job.opportunity_id)
                 opportunity.review_status = OpportunityReviewStatus.REJECTED
             await _complete(db, job, JobOutcome.EXPIRED, stage="verification", detail={"level": report.level.value},
                             duration_ms=elapsed())

@@ -34,7 +34,9 @@ def test_parse_rss_and_atom():
 
 
 def test_xml_entity_expansion_is_refused():
-    with pytest.raises(Exception):
+    from defusedxml import DefusedXmlException
+
+    with pytest.raises(DefusedXmlException):
         parse_feed(EVIL)
 
 

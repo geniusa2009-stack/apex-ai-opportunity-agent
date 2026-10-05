@@ -15,12 +15,23 @@ from app.agent.llm.fake import FakeLLMProvider
 from app.agent.performance import PerformanceInput, engagement_score, record_performance
 from app.agent.rag import lexical_similarity, rank_examples, retrieve_style_examples
 from app.agent.review import quality_gate, review_post
-from app.agent.writer import APEX_SIGNATURE, PostFacts, fact_guard, format_date_ar, render_template, write_post
+from app.agent.writer import (
+    APEX_SIGNATURE,
+    PostFacts,
+    fact_guard,
+    format_date_ar,
+    render_template,
+    write_post,
+)
 from app.models.agent import AgentPostDraft, Publication
 from app.models.agent_enums import DraftStatus, ReviewDecision
 from app.models.enums import OpportunityType
 from app.models.opportunity import Opportunity
-from tests.agent_support import make_engine_and_session_factory, make_source, sample_extraction
+from tests.agent_support import (
+    make_engine_and_session_factory,
+    make_source,
+    sample_extraction,
+)
 
 
 def facts(**overrides) -> PostFacts:

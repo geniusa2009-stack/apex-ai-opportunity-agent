@@ -13,9 +13,16 @@ from typing import Any, TypeVar
 from pydantic import BaseModel
 
 from app.agent.errors import ConfigurationError
-from app.agent.llm.base import ChatMessage, EmbeddingProvider, LLMProvider, LLMRequest, LLMResponse
+from app.agent.llm.base import (
+    ChatMessage,
+    EmbeddingProvider,
+    LLMProvider,
+    LLMRequest,
+    LLMResponse,
+)
 from app.agent.llm.structured import StructuredResult, generate_structured
-from app.core.config import Settings, settings as global_settings
+from app.core.config import Settings
+from app.core.config import settings as global_settings
 
 T = TypeVar("T", bound=BaseModel)
 

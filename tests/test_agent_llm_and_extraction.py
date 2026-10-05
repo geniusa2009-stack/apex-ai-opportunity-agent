@@ -26,7 +26,11 @@ from app.agent.extraction import (
 from app.agent.llm import LLMClient, build_llm_client
 from app.agent.llm.base import ChatMessage, LLMRequest
 from app.agent.llm.fake import FakeLLMProvider
-from app.agent.llm.providers import GeminiProvider, OpenAIEmbeddingProvider, OpenRouterProvider
+from app.agent.llm.providers import (
+    GeminiProvider,
+    OpenAIEmbeddingProvider,
+    OpenRouterProvider,
+)
 from app.agent.llm.structured import parse_json_object
 from app.agent.normalization import extract_links
 from tests.agent_support import SAMPLE_OPPORTUNITY_TEXT, sample_extraction

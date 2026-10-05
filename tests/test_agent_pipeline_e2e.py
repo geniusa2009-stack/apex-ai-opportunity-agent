@@ -41,7 +41,12 @@ from app.agent.ingestion import IngestionEvent, ingest_event
 from app.agent.llm import LLMClient
 from app.agent.llm.fake import FakeLLMProvider
 from app.agent.pipeline import AgentDependencies, run_due_jobs, run_job
-from app.agent.publishing import MockPublisher, PublishPayload, TelegramBotPublisher, publish_draft
+from app.agent.publishing import (
+    MockPublisher,
+    PublishPayload,
+    TelegramBotPublisher,
+    publish_draft,
+)
 from app.agent.verification import FetchedPage, html_to_text
 from app.api.deps import get_current_user
 from app.core.config import settings
@@ -51,18 +56,22 @@ from app.models.agent import (
     AgentPostDraft,
     OpportunitySourceMessage,
     PipelineJob,
-    PostPerformance,
     Publication,
     SourceMessage,
 )
-from app.models.agent_enums import DraftStatus, JobOutcome, PipelineJobStatus as S, PublicationStatus
+from app.models.agent_enums import DraftStatus, JobOutcome, PublicationStatus
+from app.models.agent_enums import PipelineJobStatus as S
 from app.models.enums import AdminRole, OpportunityReviewStatus, SourceType
 from app.models.moderation_log import ModerationLogEntry
 from app.models.opportunity import Opportunity
 from app.models.opportunity_change_history import OpportunityChangeHistory
 from app.models.source import Source
 from app.models.user import User
-from tests.agent_support import SAMPLE_OPPORTUNITY_TEXT, make_engine_and_session_factory, sample_extraction
+from tests.agent_support import (
+    SAMPLE_OPPORTUNITY_TEXT,
+    make_engine_and_session_factory,
+    sample_extraction,
+)
 
 TODAY = dt.date(2026, 10, 5)
 APP_URL = "https://www.daad.de/en/study-and-research-in-germany/scholarships/"

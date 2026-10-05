@@ -4,7 +4,6 @@ deduplication (no similarity-only DUPLICATE decisions)."""
 from __future__ import annotations
 
 import datetime as dt
-import uuid
 
 import pytest
 import pytest_asyncio

@@ -21,8 +21,20 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.agent import AgentOpportunityFacts, PipelineJob, PipelineJobEvent, Publication, SourceMessage
-from app.models.agent_enums import JobOutcome, PipelineJobStatus, PublicationStatus, SourceMessageStatus, VerificationLevel
+from app.models.agent import (
+    AgentOpportunityFacts,
+    PipelineJob,
+    PipelineJobEvent,
+    Publication,
+    SourceMessage,
+)
+from app.models.agent_enums import (
+    JobOutcome,
+    PipelineJobStatus,
+    PublicationStatus,
+    SourceMessageStatus,
+    VerificationLevel,
+)
 
 _REJECTED_OUTCOMES = [
     JobOutcome.NOT_OPPORTUNITY.value,
@@ -70,11 +82,12 @@ async def compute_metrics(db: AsyncSession, *, since: dt.datetime | None = None)
             ),
         ),
     )
-    publications = dict(
-        (await db.execute(
+    publication_rows = (
+        await db.execute(
             select(Publication.status, func.count()).where(Publication.created_at >= since).group_by(Publication.status)
-        )).all()
-    )
+        )
+    ).all()
+    publications: dict[str, int] = {str(row[0]): int(row[1]) for row in publication_rows}
 
     events = (
         await db.execute(
@@ -100,8 +113,13 @@ async def compute_metrics(db: AsyncSession, *, since: dt.datetime | None = None)
             ).limit(MAX_EVENTS_SCANNED)
         )
     ).all()
-    seconds = [(_aware(done) - _aware(created)).total_seconds() for created, done in durations if created and done]
-    by_status = dict((await db.execute(select(PipelineJob.status, func.count()).group_by(PipelineJob.status))).all())
+    seconds = [
+        (done_at - created_at).total_seconds()
+        for created_at, done_at in ((_aware(c), _aware(d)) for c, d in durations)
+        if created_at is not None and done_at is not None
+    ]
+    status_rows = (await db.execute(select(PipelineJob.status, func.count()).group_by(PipelineJob.status))).all()
+    by_status: dict[str, int] = {str(row[0]): int(row[1]) for row in status_rows}
     return {
         "since": since.isoformat(),
         "opportunities_received": received,

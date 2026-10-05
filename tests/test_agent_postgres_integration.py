@@ -38,7 +38,7 @@ from app.agent.pipeline import AgentDependencies, run_due_jobs, semantic_search_
 from app.agent.publishing import MockPublisher
 from app.core.config import settings
 from app.models.agent import AgentPostDraft, PipelineJob, Publication, SourceMessage
-from app.models.agent_enums import PipelineJobStatus as S, PublicationStatus
+from app.models.agent_enums import PublicationStatus
 from app.models.enums import AdminRole, OpportunityType, SourceType
 from app.models.opportunity import Opportunity
 from app.models.user import User

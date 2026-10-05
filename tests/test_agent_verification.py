@@ -26,7 +26,12 @@ from app.models.claim import Claim
 from app.models.enums import OpportunityType
 from app.models.evidence import Evidence
 from app.models.opportunity import Opportunity
-from tests.agent_support import SAMPLE_OPPORTUNITY_TEXT, make_engine_and_session_factory, make_source, sample_extraction
+from tests.agent_support import (
+    SAMPLE_OPPORTUNITY_TEXT,
+    make_engine_and_session_factory,
+    make_source,
+    sample_extraction,
+)
 
 TODAY = dt.date(2026, 10, 5)
 APP_URL = "https://www.daad.de/en/study-and-research-in-germany/scholarships/"

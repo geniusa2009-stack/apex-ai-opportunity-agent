@@ -30,3 +30,11 @@ coverage/
 dist/
 build/
 node_modules/
+
+# APEX AI Opportunity Agent: never commit messaging-session state or keys
+whatsapp_auth/
+.wwebjs_auth/
+auth_info*/
+*.session
+*.pem
+*.key

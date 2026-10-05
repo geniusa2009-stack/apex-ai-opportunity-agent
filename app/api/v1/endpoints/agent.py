@@ -29,8 +29,16 @@ from fastapi.responses import PlainTextResponse
 from sqlalchemy import select
 
 from app.agent import jobs
-from app.agent.approval import ApprovalError, approve_draft, continue_job, discard_job, reject_draft, request_revision
+from app.agent.approval import (
+    ApprovalError,
+    approve_draft,
+    continue_job,
+    discard_job,
+    reject_draft,
+    request_revision,
+)
 from app.agent.connectors.whatsapp import (
+    MAX_BODY_BYTES,
     CloudApiWhatsAppConnector,
     GateDecision,
     PayloadError,
@@ -44,9 +52,22 @@ from app.agent.metrics import compute_metrics
 from app.agent.observability import log_stage
 from app.agent.performance import record_performance
 from app.agent.publishing import confirm_manual_publication
-from app.api.deps import CurrentUser, DbSession, RequireModerationAccess, RequireOwner, RequireSeniorModerationAccess, effective_admin_role
+from app.api.deps import (
+    CurrentUser,
+    DbSession,
+    RequireModerationAccess,
+    RequireOwner,
+    RequireSeniorModerationAccess,
+    effective_admin_role,
+)
 from app.core.config import settings
-from app.models.agent import AgentPostDraft, PipelineJob, PipelineJobEvent, Publication, SourceMessage
+from app.models.agent import (
+    AgentPostDraft,
+    PipelineJob,
+    PipelineJobEvent,
+    Publication,
+    SourceMessage,
+)
 from app.models.agent_enums import DraftStatus, PipelineJobStatus, PublicationStatus
 from app.models.enums import SourceType
 from app.models.opportunity import Opportunity
@@ -102,14 +123,17 @@ async def whatsapp_webhook(request: Request, db: DbSession) -> WebhookResponse:
     connector = build_whatsapp_connector(settings)
     if connector is None:
         raise HTTPException(status_code=404, detail="whatsapp connector disabled")
+    declared = request.headers.get("content-length", "0")
+    if not declared.isdigit() or int(declared) > MAX_BODY_BYTES:
+        raise HTTPException(status_code=413, detail="payload too large")
     body = await request.body()
     try:
         messages = connector.parse_webhook(request.headers, body)
     except SignatureError:
         log_stage("whatsapp_signature_rejected", connector=connector.name)
-        raise HTTPException(status_code=401, detail="invalid signature")
+        raise HTTPException(status_code=401, detail="invalid signature") from None
     except PayloadError as exc:
-        raise HTTPException(status_code=400, detail=exc.message)
+        raise HTTPException(status_code=400, detail=exc.message) from exc
 
     gate = build_gate(settings)
     by_status: dict[str, int] = {}
@@ -214,7 +238,7 @@ async def approve(draft_id: uuid.UUID, payload: ApproveRequest, current_user: Cu
         result = await approve_draft(db, draft, actor_id=current_user.id, actor_role=effective_admin_role(current_user),
                                      notes=payload.notes, edited_body=payload.edited_body)
     except ApprovalError as exc:
-        raise _bad_request(exc)
+        raise _bad_request(exc) from exc
     await db.commit()
     trigger_pipeline()
     job = await db.get(PipelineJob, draft.job_id)
@@ -230,7 +254,7 @@ async def reject(draft_id: uuid.UUID, payload: RejectRequest, current_user: Curr
         await reject_draft(db, draft, actor_id=current_user.id, actor_role=effective_admin_role(current_user),
                            reason=payload.reason, inaccurate_source=payload.inaccurate_source)
     except ApprovalError as exc:
-        raise _bad_request(exc)
+        raise _bad_request(exc) from exc
     await db.commit()
     return DecisionResponse(success=True, draft_status=draft.status, job_status=PipelineJobStatus.COMPLETED.value)
 
@@ -242,7 +266,7 @@ async def revise(draft_id: uuid.UUID, payload: RevisionRequest, current_user: Cu
     try:
         await request_revision(db, draft, actor_id=current_user.id, notes=payload.notes)
     except ApprovalError as exc:
-        raise _bad_request(exc)
+        raise _bad_request(exc) from exc
     await db.commit()
     trigger_pipeline()
     return DecisionResponse(success=True, draft_status=draft.status, job_status=PipelineJobStatus.WRITING.value)
@@ -295,7 +319,7 @@ async def requeue_job(job_id: uuid.UUID, db: DbSession, _: RequireModerationAcce
     try:
         await jobs.requeue(db, job)
     except jobs.InvalidTransitionError as exc:
-        raise _bad_request(exc)
+        raise _bad_request(exc) from exc
     await db.commit()
     trigger_pipeline()
     return DecisionResponse(success=True, job_status=job.status)
@@ -308,7 +332,7 @@ async def continue_after_review(job_id: uuid.UUID, payload: JobDecisionRequest, 
     try:
         await continue_job(db, job, actor_id=current_user.id, notes=payload.notes)
     except (ApprovalError, jobs.InvalidTransitionError) as exc:
-        raise _bad_request(exc)
+        raise _bad_request(exc) from exc
     await db.commit()
     trigger_pipeline()
     return DecisionResponse(success=True, job_status=job.status)
@@ -321,7 +345,7 @@ async def discard(job_id: uuid.UUID, payload: DiscardRequest, current_user: Curr
     try:
         await discard_job(db, job, actor_id=current_user.id, reason=payload.reason)
     except ApprovalError as exc:
-        raise _bad_request(exc)
+        raise _bad_request(exc) from exc
     await db.commit()
     return DecisionResponse(success=True, job_status=job.status)
 
@@ -359,11 +383,12 @@ async def confirm_publication(publication_id: uuid.UUID, payload: ConfirmPublica
         await confirm_manual_publication(db, publication, external_url=payload.external_url,
                                          external_id=payload.external_id)
     except Exception as exc:  # noqa: BLE001
-        raise _bad_request(exc)
+        raise _bad_request(exc) from exc
     others = (await db.execute(select(Publication).where(Publication.draft_id == publication.draft_id))).scalars().all()
     if all(p.status == PublicationStatus.PUBLISHED.value for p in others):
         draft = await db.get(AgentPostDraft, publication.draft_id)
-        draft.status = DraftStatus.PUBLISHED.value
+        if draft is not None:
+            draft.status = DraftStatus.PUBLISHED.value
     await db.commit()
     return PublicationOut.model_validate(publication)
 

@@ -412,7 +412,7 @@ async def pre_extraction_duplicate(
     in the message is already known for it, the message adds nothing new ->
     DUPLICATE. Any new date (e.g. an extended deadline) or any doubt ->
     ``None`` and the message goes through extraction + `decide()`."""
-    probe = DedupFacts(content_hash=content_hash)
+    DedupFacts(content_hash=content_hash)
     url_keys = [k for k in (normalize_url(link) for link in links) if k and is_specific_url(k)]
     pairs = [(FingerprintKind.CONTENT_HASH.value, sha256_hex(content_hash))] if content_hash else []
     for key in url_keys:

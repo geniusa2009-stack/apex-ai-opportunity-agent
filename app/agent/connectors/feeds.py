@@ -16,7 +16,7 @@ from typing import Any
 import defusedxml.ElementTree as SafeET  # XML from the internet: never the stdlib parser
 import httpx
 
-from app.agent.errors import TransientError, category_for_http_status, AgentError
+from app.agent.errors import AgentError, TransientError, category_for_http_status
 from app.agent.ingestion import IngestionEvent
 from app.agent.normalization import normalize_text
 from app.agent.verification import USER_AGENT, html_to_text

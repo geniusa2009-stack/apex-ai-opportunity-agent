@@ -20,7 +20,11 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app.agent.config_checks import collect_config_problems, model_vector_dimension, run_startup_checks
+from app.agent.config_checks import (
+    collect_config_problems,
+    model_vector_dimension,
+    run_startup_checks,
+)
 from app.core.config import Settings
 
 REPO = Path(__file__).resolve().parents[1]

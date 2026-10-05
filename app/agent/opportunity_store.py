@@ -23,11 +23,18 @@ from app.agent.dates import parse_date
 from app.agent.dedup import DedupFacts, is_specific_url, record_fingerprints
 from app.agent.extraction import ExtractedOpportunity
 from app.agent.normalization import normalize_url
-from app.models.agent import AgentOpportunityFacts, OpportunitySourceMessage, SourceMessage
+from app.models.agent import (
+    AgentOpportunityFacts,
+    OpportunitySourceMessage,
+    SourceMessage,
+)
 from app.models.enums import OpportunityReviewStatus, OpportunityType
 from app.models.opportunity import Opportunity
 from app.models.source import Source
-from app.services.change_history_service import normalize_for_comparison, record_change_if_meaningful
+from app.services.change_history_service import (
+    normalize_for_comparison,
+    record_change_if_meaningful,
+)
 from app.services.taxonomy import normalize_country
 
 
@@ -49,7 +56,9 @@ def choose_target_url(extraction: ExtractedOpportunity, message: SourceMessage, 
         key = normalize_url(link)
         if key and is_specific_url(key):
             return link
-    return (message.links or [None])[0] or source.base_url or f"apex://source-message/{message.id}"
+    if message.links:
+        return message.links[0]
+    return source.base_url or f"apex://source-message/{message.id}"
 
 
 def dedup_facts_from(extraction: ExtractedOpportunity, *, content_hash: str | None = None,
@@ -88,7 +97,7 @@ async def create_opportunity(
     target_url = choose_target_url(extraction, message, source)
     country = _country(extraction)
     opportunity = Opportunity(
-        title=extraction.title[:500],
+        title=(extraction.title or "")[:500],
         description=extraction.description,
         target_url=target_url[:2048],
         source_id=source.id,

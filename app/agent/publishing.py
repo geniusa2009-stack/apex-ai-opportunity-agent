@@ -38,10 +38,17 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.errors import AgentError, ConfigurationError, ErrorCategory, TransientError, category_for_http_status
+from app.agent.errors import (
+    AgentError,
+    ConfigurationError,
+    ErrorCategory,
+    TransientError,
+    category_for_http_status,
+)
 from app.agent.normalization import sha256_hex
 from app.agent.observability import log_stage
-from app.core.config import Settings, settings as global_settings
+from app.core.config import Settings
+from app.core.config import settings as global_settings
 from app.models.agent import AgentPostDraft, Publication
 from app.models.agent_enums import PublicationStatus as P
 

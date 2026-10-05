@@ -13,7 +13,8 @@ from __future__ import annotations
 import dataclasses
 import logging
 
-from app.core.config import Settings, settings as global_settings
+from app.core.config import Settings
+from app.core.config import settings as global_settings
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,7 @@ def model_vector_dimension() -> int:
     declare for `opportunities.embedding`."""
     from app.models.opportunity import Opportunity
 
-    return int(Opportunity.__table__.c.embedding.type.dim)
+    return int(Opportunity.__table__.c.embedding.type.dim)  # type: ignore[attr-defined]
 
 
 def collect_config_problems(cfg: Settings) -> list[ConfigProblem]:

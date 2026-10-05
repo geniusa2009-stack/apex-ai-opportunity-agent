@@ -11,8 +11,20 @@ import pytest_asyncio
 from sqlalchemy import func, select
 
 from app.agent import jobs
-from app.agent.errors import AuthenticationError, DataError, RateLimitError, TransientError, ValidationFailedError
-from app.agent.ingestion import AttachmentMeta, IngestionEvent, IngestStatus, ingest_event, source_name_for
+from app.agent.errors import (
+    AuthenticationError,
+    DataError,
+    RateLimitError,
+    TransientError,
+    ValidationFailedError,
+)
+from app.agent.ingestion import (
+    AttachmentMeta,
+    IngestionEvent,
+    IngestStatus,
+    ingest_event,
+    source_name_for,
+)
 from app.agent.reputation import (
     MAX_TRUST,
     MIN_TRUST,
@@ -26,7 +38,11 @@ from app.models.agent import PipelineJob, PipelineJobEvent, SourceMessage
 from app.models.agent_enums import PipelineJobStatus as S
 from app.models.agent_enums import SourceMessageStatus
 from app.models.enums import SourceType
-from tests.agent_support import SAMPLE_OPPORTUNITY_TEXT, make_engine_and_session_factory, make_source
+from tests.agent_support import (
+    SAMPLE_OPPORTUNITY_TEXT,
+    make_engine_and_session_factory,
+    make_source,
+)
 
 
 @pytest_asyncio.fixture

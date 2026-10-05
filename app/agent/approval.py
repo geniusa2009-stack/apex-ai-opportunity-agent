@@ -31,8 +31,14 @@ from app.agent.opportunity_store import apply_update_proposal
 from app.agent.reputation import TrustEvent, updated_trust
 from app.agent.writer import PostFacts, fact_guard
 from app.models.agent import AgentPostDraft, PipelineJob, SourceMessage
-from app.models.agent_enums import DraftStatus, JobOutcome, PipelineJobStatus as S
-from app.models.enums import AdminRole, ModerationAction, ModerationTargetType, OpportunityReviewStatus
+from app.models.agent_enums import DraftStatus, JobOutcome
+from app.models.agent_enums import PipelineJobStatus as S
+from app.models.enums import (
+    AdminRole,
+    ModerationAction,
+    ModerationTargetType,
+    OpportunityReviewStatus,
+)
 from app.models.opportunity import Opportunity
 from app.models.source import Source
 from app.services import moderation_log_service
@@ -54,6 +60,13 @@ async def _source_for(db: AsyncSession, job: PipelineJob) -> Source | None:
         return None
     message = await db.get(SourceMessage, job.source_message_id)
     return await db.get(Source, message.source_id) if message else None
+
+
+async def _opportunity(db: AsyncSession, opportunity_id: uuid.UUID) -> Opportunity:
+    opportunity = await db.get(Opportunity, opportunity_id)
+    if opportunity is None:
+        raise ApprovalError("opportunity not found", code="OPPORTUNITY_NOT_FOUND")
+    return opportunity
 
 
 def _require_waiting(draft: AgentPostDraft) -> None:
@@ -112,7 +125,7 @@ async def approve_draft(
         .values(status=DraftStatus.SUPERSEDED.value)
     )
 
-    opportunity = await db.get(Opportunity, draft.opportunity_id)
+    opportunity = await _opportunity(db, draft.opportunity_id)
     proposal = (job.payload or {}).get("update_proposal")
     changed: list[str] = []
     if proposal:
@@ -156,7 +169,7 @@ async def reject_draft(
     draft.decided_by = actor_id
     draft.decided_at = dt.datetime.now(dt.timezone.utc)
     draft.decision_notes = reason
-    opportunity = await db.get(Opportunity, draft.opportunity_id)
+    opportunity = await _opportunity(db, draft.opportunity_id)
     if not (job.payload or {}).get("update_proposal"):
         # Newly created by the agent -> never shown. An existing live
         # opportunity whose UPDATE was rejected stays exactly as it was.
@@ -197,10 +210,10 @@ async def continue_job(db: AsyncSession, job: PipelineJob, *, actor_id: uuid.UUI
         await jobs.requeue(db, job)
         return
     job.payload = {**(job.payload or {}), "verification_overridden_by": str(actor_id)}
-    target = S.WAITING_APPROVAL if job.draft_id and (await db.get(AgentPostDraft, job.draft_id)) else S.WRITING
-    if target == S.WAITING_APPROVAL:
-        draft = await db.get(AgentPostDraft, job.draft_id)
-        draft.status = DraftStatus.WAITING_APPROVAL.value
+    existing_draft = await db.get(AgentPostDraft, job.draft_id) if job.draft_id else None
+    target = S.WAITING_APPROVAL if existing_draft is not None else S.WRITING
+    if existing_draft is not None:
+        existing_draft.status = DraftStatus.WAITING_APPROVAL.value
     await jobs.transition(db, job, target, stage="human_continued",
                           detail={"actor_id": str(actor_id), "notes": (notes or "")[:300]})
     await db.flush()
