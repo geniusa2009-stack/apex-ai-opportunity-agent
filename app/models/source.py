@@ -1,11 +1,12 @@
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, String
+from sqlalchemy import Boolean, Float, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from app.models.agent_enums import SourceAccessStatus
 from app.models.enums import SourceType
 from app.models.mixins import TimestampMixin
 
@@ -58,6 +59,22 @@ class Source(Base, TimestampMixin):
     # default -- no separate backfill script is needed as a result.
     source_type: Mapped[str] = mapped_column(
         String(20), nullable=False, default=SourceType.WEBSITE.value, server_default=SourceType.WEBSITE.value
+    )
+
+    # --- APEX AI Opportunity Agent: source reputation + access control ---
+    # `trust_score` in [0, 1]. It sets verification PRIORITY and how much
+    # independent evidence is required -- it NEVER lets an opportunity skip
+    # verification or human approval (app/agent/reputation.py). 0.5 =
+    # neutral, the value every pre-existing row gets.
+    trust_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.5, server_default="0.5")
+    # Only APPROVED sources may feed the pipeline (e.g. a WhatsApp group
+    # APEX was invited to). Pre-existing rows are the project's own
+    # configured sources, hence `approved`.
+    access_status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default=SourceAccessStatus.APPROVED.value,
+        server_default=SourceAccessStatus.APPROVED.value,
     )
 
     opportunities: Mapped[list["Opportunity"]] = relationship(

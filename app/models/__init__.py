@@ -51,6 +51,17 @@ from app.models.parent_pitch import ParentPitch
 from app.models.courses import Course, CourseModule, Lesson, LessonProgress, UserEnrollment
 from app.models.social import AchievementCongrats, AchievementPost, StudyDuel, UserConnection
 from app.models.source import Source
+from app.models.agent import (
+    AgentOpportunityFacts,
+    AgentPostDraft,
+    OpportunityFingerprint,
+    OpportunitySourceMessage,
+    PipelineJob,
+    PipelineJobEvent,
+    PostPerformance,
+    Publication,
+    SourceMessage,
+)
 from app.models.student_memory import StudentMemory
 from app.models.student_videos import StudentVideo
 from app.models.user import User
@@ -117,4 +128,13 @@ __all__ = [
     "ModerationEscalation",
     "OnboardingChecklistProgress",
     "ShiftAssignment",
+    "SourceMessage",
+    "OpportunitySourceMessage",
+    "OpportunityFingerprint",
+    "AgentOpportunityFacts",
+    "PipelineJob",
+    "PipelineJobEvent",
+    "AgentPostDraft",
+    "Publication",
+    "PostPerformance",
 ]

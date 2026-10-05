@@ -46,6 +46,7 @@ from app.workers.aggregator_tasks import _build_source_candidates, _poll_source
 _CREATE_SOURCES_TABLE_SQL = """
 CREATE TABLE sources (
     id VARCHAR(36) PRIMARY KEY, name VARCHAR(255) NOT NULL UNIQUE, base_url VARCHAR(2048),
+    trust_score FLOAT NOT NULL DEFAULT 0.5, access_status VARCHAR(20) NOT NULL DEFAULT 'approved',
     source_type VARCHAR(20), active_status BOOLEAN NOT NULL DEFAULT 1,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 )

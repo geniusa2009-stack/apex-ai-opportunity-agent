@@ -455,6 +455,16 @@ class SourceType(str, enum.Enum):
     # additive, non-breaking change.
     MANUAL = "manual"
 
+    # --- APEX AI Opportunity Agent additions (plain String column, no
+    # migration needed). Each value describes WHERE content arrives from;
+    # it says nothing about trust -- that is `Source.trust_score`, and
+    # neither ever bypasses verification. ---
+    WHATSAPP = "whatsapp"  # a WhatsApp group/chat APEX legitimately belongs to
+    VOLUNTEER = "volunteer"  # submitted by an APEX volunteer through the API
+    RSS = "rss"
+    OFFICIAL = "official"  # an organization's own official site/feed
+    OTHER = "other"
+
 
 class LiveSessionStatus(str, enum.Enum):
     """Lifecycle state of a `LiveSession` (real-time WebRTC video call
