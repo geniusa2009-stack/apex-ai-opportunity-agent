@@ -4,8 +4,10 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from starlette.middleware.cors import CORSMiddleware
 
+from app.agent.config_checks import run_startup_checks
 from app.api.v1.router import api_router
 from app.core.config import settings
 from app.services.chat_connection_manager import run_pubsub_listener
@@ -44,6 +46,10 @@ logger = logging.getLogger(__name__)
 # treatment as the other two.
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # Fail fast on fatal misconfiguration (e.g. an embedding model whose
+    # vector size does not match the pgvector column) -- see
+    # app/agent/config_checks.py. Warnings are only logged.
+    run_startup_checks()
     listener_task = asyncio.create_task(run_pubsub_listener())
     notification_listener_task = asyncio.create_task(run_notification_pubsub_listener())
     live_session_listener_task = asyncio.create_task(run_live_session_pubsub_listener())
@@ -111,3 +117,48 @@ async def root() -> dict:
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
+
+
+# Readiness (APEX AI Opportunity Agent hardening). Unlike /health (pure
+# liveness), this touches the real dependencies with short timeouts so a
+# platform only routes traffic to an instance that can actually serve it.
+# It never returns connection strings or secrets -- only check names.
+@app.get("/ready")
+async def ready() -> JSONResponse:
+    from sqlalchemy import text
+
+    from app.agent.config_checks import database_vector_dimension, model_vector_dimension
+    from app.db.session import AsyncSessionLocal
+
+    checks: dict[str, str] = {}
+
+    try:
+        async with AsyncSessionLocal() as session:
+            await asyncio.wait_for(session.execute(text("SELECT 1")), timeout=3)
+            checks["database"] = "ok"
+            db_dim = await asyncio.wait_for(database_vector_dimension(session), timeout=3)
+            if db_dim is not None and db_dim != settings.embedding_dimension:
+                checks["embedding_dimension"] = (
+                    f"mismatch: database vector({db_dim}) vs EMBEDDING_DIMENSION={settings.embedding_dimension}"
+                )
+            elif db_dim is not None and db_dim != model_vector_dimension():
+                checks["embedding_dimension"] = "mismatch: database vs ORM model"
+            else:
+                checks["embedding_dimension"] = "ok"
+    except Exception as exc:  # noqa: BLE001 - readiness must never raise
+        checks["database"] = f"unavailable ({type(exc).__name__})"
+
+    try:
+        from redis import asyncio as aioredis
+
+        client = aioredis.Redis.from_url(settings.redis_url, socket_connect_timeout=2, socket_timeout=2)
+        try:
+            await asyncio.wait_for(client.ping(), timeout=3)
+            checks["redis"] = "ok"
+        finally:
+            await client.aclose()
+    except Exception as exc:  # noqa: BLE001
+        checks["redis"] = f"unavailable ({type(exc).__name__})"
+
+    is_ready = all(value == "ok" for value in checks.values())
+    return JSONResponse(status_code=200 if is_ready else 503, content={"status": "ready" if is_ready else "not_ready", "checks": checks})

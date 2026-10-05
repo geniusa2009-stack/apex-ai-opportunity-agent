@@ -1,0 +1,54 @@
+# Keep secrets, local environments and build junk OUT of the Docker build
+# context. `COPY . .` in the Dockerfile copies everything that is not
+# excluded here, so this file is a security control, not a nicety.
+
+# --- Secrets / environment files (never ship these in an image) ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.crt
+secrets/
+# WhatsApp / bridge session state (if a bridge is ever run next to this repo)
+whatsapp_auth/
+.wwebjs_auth/
+auth_info*/
+*.session
+
+# --- Local Python environments and caches ---
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage/
+htmlcov/
+*.egg-info/
+build/
+dist/
+
+# --- VCS / editor / OS ---
+.git/
+.gitignore
+.vscode/
+.idea/
+.DS_Store
+
+# --- Local scratch, backups and reports not needed at runtime ---
+_to_delete/
+tests/_to_delete/
+_scratch_*
+*.bak
+_delete_test.txt
+_env_check.py
+_verify_*.py
+apex-backend-*-report.md
+postgres_data/
+*.log
+docker-compose*.yml

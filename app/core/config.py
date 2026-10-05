@@ -741,9 +741,121 @@ class Settings(BaseSettings):
     # deployment actually sets it.
     cors_origins: str = ""
 
+    # ------------------------------------------------------------------
+    # Embeddings (shared by Opportunity.embedding and the AI Opportunity
+    # Agent). `embedding_dimension` MUST equal the pgvector column size
+    # created by the migrations (1536 today) AND the vector length the
+    # configured embedding model actually returns. This is checked at
+    # startup (`app/agent/config_checks.py`) and again at runtime on every
+    # embedding call -- a mismatch fails loudly instead of corrupting data.
+    # Changing it requires a new Alembic migration that resizes the column
+    # and re-embeds existing rows.
+    # ------------------------------------------------------------------
+    embedding_dimension: int = 1536
+
+    # ------------------------------------------------------------------
+    # APEX AI Opportunity Agent (app/agent/). Everything is opt-in and
+    # provider-agnostic. No model name is assumed: if a provider is
+    # selected, its model MUST be set explicitly via env vars, otherwise
+    # startup fails with a clear message. Defaults keep the agent inert
+    # (deterministic stages still work; LLM stages report a clear error).
+    # ------------------------------------------------------------------
+    # LLM used for extraction (and optionally writer/reviewer).
+    agent_llm_provider: str = "none"  # gemini | openrouter | none
+    agent_llm_model: str | None = None
+    # Optional second provider tried when the primary fails with a
+    # transient/rate-limit/auth error (never on a validation failure).
+    agent_llm_fallback_provider: str | None = None
+    agent_llm_fallback_model: str | None = None
+    agent_llm_timeout_seconds: float = 60.0
+    agent_llm_temperature: float = 0.1
+    # Bounded self-correction: extra attempts AFTER the first one when the
+    # model output fails Pydantic validation (the errors are sent back).
+    agent_llm_max_validation_retries: int = 2
+
+    # OpenRouter-compatible endpoint (any OpenAI-compatible
+    # /chat/completions server works, e.g. a local Ollama/LM Studio).
+    openrouter_api_key: str | None = None
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_app_title: str = "APEX Opportunity Agent"
+    openrouter_http_referer: str | None = None
+
+    # Embeddings for semantic duplicate CANDIDATES and historical RAG.
+    # "none" disables the semantic layer (dedup stays deterministic, RAG
+    # falls back to lexical similarity).
+    agent_embedding_provider: str = "none"  # openai | gemini | none
+    agent_embedding_model: str | None = None
+
+    # Writer: "template" = deterministic APEX format, zero AI cost.
+    # "llm" = LLM writer with deterministic fact guard + template fallback.
+    agent_writer_mode: str = "template"
+    # Reviewer: deterministic quality gate always runs; the LLM review pass
+    # is an optional extra (one call) on top of it.
+    agent_reviewer_llm_enabled: bool = False
+    agent_max_revision_rounds: int = 2
+
+    # Persistent job runner.
+    agent_job_max_attempts: int = 5
+    agent_job_backoff_base_seconds: int = 30
+    agent_job_backoff_max_seconds: int = 3600
+    agent_job_lease_seconds: int = 300
+    agent_job_batch_size: int = 10
+
+    # Deduplication.
+    agent_semantic_candidate_threshold: float = 0.85
+    agent_semantic_candidate_limit: int = 5
+
+    # Official-source verification: fetch the application/official page
+    # (plain HTTP GET, size/time capped, robots-respecting user agent).
+    agent_official_page_fetch_enabled: bool = True
+    agent_official_page_timeout_seconds: float = 10.0
+    agent_official_page_max_bytes: int = 1_500_000
+
+    # Publishing. Comma-separated publisher names that are ENABLED:
+    # mock | manual | telegram. Real publishers also need their own config.
+    agent_publishers: str = "manual"
+    telegram_bot_token: str | None = None
+    telegram_publish_chat_id: str | None = None
+
+    # WhatsApp ingestion. `whatsapp_connector`: disabled | mock | cloud_api | bridge.
+    whatsapp_connector: str = "disabled"
+    # Comma-separated allowlists. A group message is accepted ONLY if its
+    # group id is listed; a direct (1:1) message ONLY if its sender is listed.
+    allowed_whatsapp_group_ids: str = ""
+    allowed_whatsapp_sender_ids: str = ""
+    # The APEX bot's own WhatsApp id(s) / phone number(s): messages from
+    # these are dropped (bot-loop protection), in addition to `from_me`.
+    whatsapp_bot_ids: str = ""
+    # Generic bridge (any self-hosted connector that POSTs normalized
+    # events): HMAC-SHA256 secret for the X-Apex-Signature header.
+    whatsapp_bridge_hmac_secret: str | None = None
+    # Official Meta WhatsApp Cloud API webhook.
+    whatsapp_cloud_app_secret: str | None = None
+    whatsapp_cloud_verify_token: str | None = None
+
     @property
     def cors_allowed_origins(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @staticmethod
+    def _csv(value: str | None) -> list[str]:
+        return [item.strip() for item in (value or "").split(",") if item.strip()]
+
+    @property
+    def allowed_whatsapp_group_id_set(self) -> frozenset[str]:
+        return frozenset(self._csv(self.allowed_whatsapp_group_ids))
+
+    @property
+    def allowed_whatsapp_sender_id_set(self) -> frozenset[str]:
+        return frozenset(self._csv(self.allowed_whatsapp_sender_ids))
+
+    @property
+    def whatsapp_bot_id_set(self) -> frozenset[str]:
+        return frozenset(self._csv(self.whatsapp_bot_ids))
+
+    @property
+    def agent_publisher_names(self) -> list[str]:
+        return [name.lower() for name in self._csv(self.agent_publishers)]
 
 
 def get_settings() -> Settings:
